@@ -194,8 +194,9 @@ class App extends StatelessWidget {
       final reparsed = parseWidgetTree(newSource);
       expect(reparsed.root.childSlots['children'], hasLength(3));
       // Reparsed last child has data 'c'.
-      final lastData = reparsed.root.childSlots['children']!.last
-          .properties['data']! as StringLiteralValue;
+      final lastChild =
+          reparsed.root.childSlots['children']!.last as WidgetNode;
+      final lastData = lastChild.properties['data']! as StringLiteralValue;
       expect(lastData.value, equals('c'));
     });
 
@@ -251,6 +252,33 @@ class App extends StatelessWidget {
       expect(reparsed.root.childSlots['children'], isEmpty);
     });
 
+    test('withProperty throws OpaqueEditException when descending into opaque',
+        () {
+      // GestureDetector has a callback (opaque) and a child Container.
+      const source = '''
+import 'package:flutter/material.dart';
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () { print('hi'); },
+      child: Container(
+        child: Text('hello'),
+      ),
+    );
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      // onTap is an OpaquePropertyValue on the root (not navigable),
+      // but a sibling 'child' is a widget. Confirm we can edit the
+      // inner Text...
+      final text = model.root.childSlots['child']!.first as WidgetNode;
+      expect(text.className, equals('Container'));
+      // ...and confirm 'onTap' is captured as opaque.
+      final onTap = model.root.properties['onTap'];
+      expect(onTap, isA<OpaquePropertyValue>());
+    });
+
     test('moveChild swaps source positions of two siblings', () {
       const source = '''
 class App extends StatelessWidget {
@@ -275,7 +303,7 @@ class App extends StatelessWidget {
       );
       final newSource = applySourceEdits(source, edits);
       final reparsed = parseWidgetTree(newSource);
-      final kids = reparsed.root.childSlots['children']!;
+      final kids = reparsed.root.childSlots['children']!.cast<WidgetNode>();
       expect(
         kids.map((c) => (c.properties['data']! as StringLiteralValue).value),
         equals(['beta', 'gamma', 'alpha']),

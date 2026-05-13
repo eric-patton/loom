@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M3 — Structural edits
-**Last touched:** 2026-05-13 — M3 acceptance hit. Insert/remove/reorder on list slots with per-list style preservation. Property test runs sequences of 1-10 mixed structural edits (10,000-iter CI mode = ~100,000 individual edits, all round-trip cleanly). 53 tests green, no skips.
+**Active milestone:** M4 — Opaque blocks
+**Last touched:** 2026-05-13 — M4 acceptance hit. Sealed `ModelNode` introduced; `OpaqueNode` + `OpaquePropertyValue` absorb closures, ternaries, `BoxDecoration`/`TextStyle`-style constructors, `.map().toList()`, helper method calls. Real-world fixture `main_mybutton.dart` (GestureDetector + callback + BoxDecoration) round-trips cleanly. Path-descent into opaque throws `OpaqueEditException`. 55 tests green, no skips.
 **Blockers:** none
-**Next action:** **Eric review gate for M3.** After approval, M4 implementation plan (opaque blocks — closures, conditionals, ternaries, `.map().toList()` patterns become `OpaqueNode`).
+**Next action:** **Eric review gate for M4.** After approval, M5 implementation plan (helper-method following — `_buildHeader()` resolves to the in-class method body for editing).
 
 ---
 
@@ -121,15 +121,15 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 
 ### M4 — Opaque blocks
 
-- [ ] `OpaqueNode` type added to model
-- [ ] Closures become opaque nodes
-- [ ] Conditional expressions become opaque nodes
-- [ ] `.map().toList()` patterns become opaque nodes
-- [ ] Ternaries become opaque nodes
-- [ ] Method calls returning Widget become opaque nodes (deferred to M5 for in-class methods)
-- [ ] API throws on attempted mutation of opaque node
-- [ ] Opaque content byte-preserved through any sequence of edits to surrounding nodes
-- [ ] Parses a complex real-world fixture without crashing
+- [x] `OpaqueNode` type added to model (sealed `ModelNode` with `WidgetNode`/`OpaqueNode`)
+- [x] Closures become opaque nodes (`FunctionExpression` -> `OpaquePropertyValue` at property positions, `OpaqueNode` at widget positions)
+- [x] Conditional expressions become opaque nodes
+- [x] `.map().toList()` patterns become opaque nodes
+- [x] Ternaries become opaque nodes
+- [x] Method calls returning Widget become opaque nodes (in-class promotion is M5)
+- [x] API throws on attempted mutation of opaque node (`OpaqueEditException`)
+- [x] Opaque content byte-preserved through any sequence of edits to surrounding nodes (verified by the property tests now that the corpus contains an opaque fixture)
+- [x] Parses a complex real-world fixture without crashing (`real_world_opaque_mybutton.dart`)
 - [ ] **Gate**: reviewed by Eric before M5 begins
 
 ### M5 — Helper method following
@@ -158,6 +158,7 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_layout_starter.dart` | flutter/website @ `e927ec21`, `examples/layout/base/lib/main_starter.dart` | 22 | MaterialApp + Scaffold (appBar + body) + AppBar + Center; canonical "Welcome to Flutter" |
 | `test/fixtures/real_world_widgets_intro_tutorial.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_tutorial.dart` | 39 | Multi-slot Scaffold (appBar + body + floatingActionButton); AppBar with leading + title + actions (list); IconButton + Icon + FloatingActionButton; `onPressed: null` style |
 | `test/fixtures/real_world_cookbook_tabs.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/tabs/lib/main.dart` | 39 | MaterialApp → DefaultTabController → Scaffold → AppBar.bottom = TabBar(tabs: [Tab×3]) + body = TabBarView(children: [Icon×3]); deep list-of-widgets nesting |
+| `test/fixtures/real_world_opaque_mybutton.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_mybutton.dart` | 33 | M4 opaque coverage: closure (`onTap: () {…}`), unmodeled constructors (`BoxDecoration`, `BorderRadius.circular`), `EdgeInsets.symmetric`, indexer (`Colors.lightGreen[500]`), user-defined widget class (`MyButton`) |
 
 ---
 
@@ -174,6 +175,22 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-13] M4 — opaque blocks: real Flutter source parses without crashing
+**Worked on:** Eric approved M3. Opened M4. Introduced opacity at both the model-node level and the property-value level.
+  - `sealed class ModelNode` with `WidgetNode` and `OpaqueNode` subtypes. `WidgetNode.childSlots` now holds `Map<String, List<ModelNode>>` instead of `List<WidgetNode>`. Cascading refactor through visitor, serializer, equivalence, edit planner, node-path, CLI, and every test. Old `opaque_node.dart` stub was deleted — the sealed pair lives in `widget_node.dart` because Dart requires sealed subtypes in the same library.
+  - `OpaquePropertyValue` joins the `PropertyValue` sealed family. Anything outside M1's literal set (closures, unmodeled constructors like `BoxDecoration`/`TextStyle`/`EdgeInsets.symmetric`, index expressions, `Theme.of(context).x` chains) now lands here instead of throwing.
+  - Both opaque types carry `sourceText` in addition to `sourceSpan`, because spans shift across re-parses while content is invariant. `StructuralEquivalence` compares by `sourceText` for opaque nodes.
+  - Visitor restructured: `convertModelNode(expr)` is total (returns `WidgetNode` or `OpaqueNode`); `_convertProperty(expr)` is total (returns one of the literal variants or `OpaquePropertyValue`); only `convertWidget(expr)` (used for the build-method root) can still throw `ParseException`, when the root would be opaque.
+  - Path-descent into opaque content throws `OpaqueEditException`. The slot CONTAINING an opaque entry remains structurally editable — `insertChild`/`removeChild`/`moveChild` can shuffle opaque entries as opaque units.
+  - Added one real-world fixture: `flutter/website` `examples/ui/widgets_intro/lib/main_mybutton.dart` (33 lines, has `GestureDetector` with closure, `BoxDecoration`, `Colors.lightGreen[500]`, `EdgeInsets.symmetric`). Existing round-trip property test suite now exercises ~100,000 edits across a corpus that includes this opaque fixture, and the byte-preservation guarantee for opaque content is implicit in the corpus passing.
+**Learned:**
+  - **`const Prefix.Name(args)` parses very differently from `Prefix.Name(args)`.** Without const, the analyzer gives a `MethodInvocation` with target = `Prefix`, methodName = `Name`. With const, it gives an `InstanceCreationExpression` whose `NamedType` has `importPrefix = Prefix` and `name2 = Name` — i.e., the analyzer treats `Prefix` as a possible *import prefix*, not as the type name. The visitor's `_tryExtractCall` now reads `importPrefix` and re-interprets it as the class name, so `const EdgeInsets.all(8)` lands on `_convertConstructorPropertyValue` the same way the non-const form does. Added to Gotchas.
+  - **Sealed subtypes must live in the same Dart library.** I started with `sealed class ModelNode` in `opaque_node.dart` and `class WidgetNode extends ModelNode` in `widget_node.dart` — that's a compile error (`invalid_use_of_type_outside_library`). Two options: combine into one file, or use `part`/`part of`. Combined. The empty `opaque_node.dart` stub file is gone.
+  - **`prefer_final_locals` flags pattern-matched variables once again.** Now in three places (property-equivalence, widget-serializer, model-equivalence's outer switch). All fixed with `final`.
+  - **`__positional$i` synthetic property keys** — when a positional argument doesn't have a `positionalToProperty` entry in the catalog, the visitor captures it as `OpaquePropertyValue` under a synthetic key like `__positional0`. `WidgetSerializer` skips these synthetic keys when re-emitting (they round-trip via the opaque-byte mechanism, not via named-argument re-emission). Awkward but works.
+**Decided:** Q4 (parse errors) explicitly stays deferred. M4 doesn't depend on it; if a future milestone needs syntactic-error robustness, Q4 gets ratified then.
+**Next:** **Eric review gate for M4.** After approval, M5 — helper-method following. In-class `_buildHeader()` references become `MethodReferenceNode` instead of opaque, with navigation + editing across method boundaries.
 
 ### [2026-05-13] M3 — structural edits, per-list style preserved across 100,000 edits
 **Worked on:** Eric approved M2. Opened M3.
@@ -244,6 +261,8 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
+- **`const Prefix.Name(args)` and `Prefix.Name(args)` produce different analyzer ASTs.** Non-const: `MethodInvocation(target=Prefix, methodName=Name)`. Const: `InstanceCreationExpression` with `NamedType.importPrefix = Prefix` and `NamedType.name2 = Name` (the analyzer treats `Prefix` as a possible import prefix, since without resolution that's a valid reading). The visitor's `_tryExtractCall` reads `importPrefix` and re-interprets it as the class name. Without this, `const EdgeInsets.all(8)` falls through to `OpaquePropertyValue` despite being a fully modelable expression.
+- **Sealed subtypes need to live in the same Dart library** (= same `.dart` file, unless `part`/`part of` is used). I started with `sealed class ModelNode` in `opaque_node.dart` and `WidgetNode extends ModelNode` in `widget_node.dart` — compile error `invalid_use_of_type_outside_library`. Combined into a single `widget_node.dart`. Future spec-shaped file splits will need to consider this if they refactor sealed hierarchies.
 - **When a `WidgetNode` field is added, all the immutable-update paths must forward it.** M3 added `childSlotStyles`. `withProperty` was missed and silently dropped the new field, which only surfaced when M2's property test rebuilt nodes via `withProperty` and compared against the reparsed (style-bearing) model. `_modifySlot` and any future structural-update path needs the same audit.
 - **An empty list comparison needs a style exemption.** A multi-line `[\n  a,\n]` contracts to a single-line `[]` when the only element is removed. The reparsed model honestly reports `isMultiLine=false` while the in-memory pre-edit model still claims `isMultiLine=true`. `model_equivalence` skips style comparison when both sides have an empty slot for that key — preferable to introducing an "empty multi-line" emit shape that no real Dart uses.
 - **Hand-crafted fixtures are insufficient design pressure.** The single-fixture M1 first pass shipped a single-children-slot `WidgetNode` because no fixture demanded otherwise. The first real-world fixture (`Scaffold(body:, appBar:)`) immediately broke that assumption and forced a multi-slot refactor. Future milestones should pull at least one corpus fixture into the design phase before locking the model.

@@ -9,12 +9,15 @@ import '../model/source_span.dart';
 import '../model/style_hints.dart';
 import '../model/widget_node.dart';
 
-/// Thrown when the visitor encounters Dart it doesn't model in M1.
+/// Thrown when the visitor cannot produce a `WidgetNode` at the root of
+/// the parse — typically because the build method returns an expression
+/// the kernel doesn't recognize as a widget constructor (e.g.
+/// `Widget build() => _build();` where `_build` is opaque).
 ///
-/// In future milestones, many of these will be replaced by `OpaqueNode`
-/// fallbacks (see PROJECT_SPEC.md M4). For now, M1 fixtures are hand-crafted
-/// or hand-picked to stay inside the supported subset, so any throw is a
-/// real bug.
+/// Once M4 opacity is in, the visitor no longer throws on internal
+/// unmodelable expressions — it emits `OpaqueNode` or `OpaquePropertyValue`
+/// instead. `ParseException` is reserved for the rare case where the
+/// model's root would itself be opaque.
 class ParseException implements Exception {
   const ParseException(this.message, [this.span]);
 
@@ -30,34 +33,65 @@ class WidgetVisitor {
   WidgetVisitor(this.source);
 
   /// The full source string the model was parsed from. Used at parse time
-  /// to detect list-literal multi-line shape (M3 style capture).
+  /// to detect list-literal multi-line shape and to anchor opaque-node
+  /// source ranges.
   final String source;
 
-  WidgetNode convertWidget(Expression expr) {
+  /// Converts an expression in a child-slot position to a `ModelNode`.
+  /// Returns a `WidgetNode` if the expression is a recognized widget
+  /// constructor with modelable arguments, otherwise an `OpaqueNode`
+  /// pointing at the source range of the original expression. Never
+  /// throws.
+  ModelNode convertModelNode(Expression expr) {
     final call = _tryExtractCall(expr);
     if (call == null) {
-      throw ParseException(
-        'Expected widget constructor call, got ${expr.runtimeType}',
-        _span(expr),
-      );
+      return _opaqueNode(expr);
     }
     if (call.namedConstructor != null) {
-      throw ParseException(
-        'Named constructors not supported for widgets in M1 '
-        '(${call.className}.${call.namedConstructor})',
-        call.span,
-      );
+      return _opaqueNode(expr);
     }
     final spec = WidgetCatalog.specFor(call.className);
     if (spec == null) {
-      throw ParseException(
-        'Unknown widget class: ${call.className}',
-        call.span,
-      );
+      return _opaqueNode(expr);
     }
+    return _buildWidgetNode(call, spec);
+  }
 
+  OpaqueNode _opaqueNode(SyntacticEntity entity) {
+    final span = _span(entity);
+    return OpaqueNode(
+      sourceSpan: span,
+      sourceText: source.substring(span.offset, span.offset + span.length),
+    );
+  }
+
+  OpaquePropertyValue _opaqueProperty(SyntacticEntity entity) {
+    final span = _span(entity);
+    return OpaquePropertyValue(
+      span: span,
+      sourceText: source.substring(span.offset, span.offset + span.length),
+    );
+  }
+
+  /// Converts an expression to a `WidgetNode`, throwing `ParseException`
+  /// if the expression cannot be modeled as a widget at all. Used by the
+  /// parser for the root of the build method's return expression — the
+  /// root can't be opaque if the kernel is to do anything useful with the
+  /// model.
+  WidgetNode convertWidget(Expression expr) {
+    final node = convertModelNode(expr);
+    if (node is WidgetNode) {
+      return node;
+    }
+    throw ParseException(
+      'Root expression is opaque; the model has no editable widget tree.',
+      node.sourceSpan,
+    );
+  }
+
+  WidgetNode _buildWidgetNode(_CallInfo call, WidgetSpec spec) {
     final properties = <String, PropertyValue>{};
-    final childSlots = <String, List<WidgetNode>>{};
+    final childSlots = <String, List<ModelNode>>{};
     final childSlotStyles = <String, ListSlotStyle>{};
 
     final args = call.argumentList.arguments;
@@ -78,12 +112,13 @@ class WidgetVisitor {
       } else {
         final propName = spec.positionalToProperty[i];
         if (propName == null) {
-          throw ParseException(
-            'Positional argument $i not modeled for ${call.className}',
-            _span(arg),
-          );
+          // Unmodeled positional argument: capture as an unnamed opaque
+          // property under a generated key. Out of scope for M4; treat as
+          // opaque under the key '__positional$i' so it round-trips.
+          properties['__positional$i'] = _opaqueProperty(arg);
+        } else {
+          properties[propName] = _convertProperty(arg);
         }
-        properties[propName] = _convertProperty(arg);
       }
     }
 
@@ -97,30 +132,38 @@ class WidgetVisitor {
     );
   }
 
-  ({List<WidgetNode> children, ListSlotStyle? style}) _collectChildSlot(
+  ({List<ModelNode> children, ListSlotStyle? style}) _collectChildSlot(
     Expression slotExpr,
     ChildSlotShape shape,
   ) {
     if (shape == ChildSlotShape.list) {
       if (slotExpr is! ListLiteral) {
-        throw ParseException(
-          'Expected list literal for list-shaped child slot',
-          _span(slotExpr),
+        // Non-list expression in a list-shaped slot (e.g. a spread or
+        // a method call returning List<Widget>). Wrap the whole thing
+        // as a single opaque entry and synthesize a degenerate style.
+        return (
+          children: <ModelNode>[_opaqueNode(slotExpr)],
+          style: ListSlotStyle(
+            bracketsSpan: _span(slotExpr),
+            hasTrailingComma: false,
+            isMultiLine: source
+                .substring(slotExpr.offset, slotExpr.offset + slotExpr.length)
+                .contains('\n'),
+          ),
         );
       }
-      final children = <WidgetNode>[];
+      final children = <ModelNode>[];
       for (final element in slotExpr.elements) {
-        if (element is! Expression) {
-          throw ParseException(
-            'Non-expression collection element (${element.runtimeType})',
-            _span(element),
-          );
+        if (element is Expression) {
+          children.add(convertModelNode(element));
+        } else {
+          // Spread or if/for collection element: opaque.
+          children.add(_opaqueNode(element));
         }
-        children.add(convertWidget(element));
       }
       return (children: children, style: _listStyle(slotExpr));
     }
-    return (children: <WidgetNode>[convertWidget(slotExpr)], style: null);
+    return (children: <ModelNode>[convertModelNode(slotExpr)], style: null);
   }
 
   ListSlotStyle _listStyle(ListLiteral list) {
@@ -133,7 +176,6 @@ class WidgetVisitor {
     final tokenBeforeRight = right.previous;
     final hasTrailingComma =
         tokenBeforeRight != null && tokenBeforeRight.lexeme == ',';
-    // The interior is the substring strictly between [ and ].
     final interior = source.substring(left.offset + left.length, right.offset);
     final isMultiLine = interior.contains('\n');
     return ListSlotStyle(
@@ -143,23 +185,22 @@ class WidgetVisitor {
     );
   }
 
+  /// Converts an expression at a property position to a `PropertyValue`.
+  /// Anything outside the supported M1 literal set becomes an
+  /// `OpaquePropertyValue` (M4). Total: never throws.
   PropertyValue _convertProperty(Expression expr) {
     if (expr is SimpleStringLiteral) {
       return StringLiteralValue(value: expr.value, span: _span(expr));
     }
     if (expr is IntegerLiteral) {
       final value = expr.value;
-      if (value == null) {
-        throw ParseException(
-          'Integer literal out of range or unparseable',
-          _span(expr),
+      if (value != null) {
+        return NumLiteralValue(
+          value: value,
+          isDouble: false,
+          span: _span(expr),
         );
       }
-      return NumLiteralValue(
-        value: value,
-        isDouble: false,
-        span: _span(expr),
-      );
     }
     if (expr is DoubleLiteral) {
       return NumLiteralValue(
@@ -183,45 +224,35 @@ class WidgetVisitor {
     }
     final call = _tryExtractCall(expr);
     if (call != null) {
-      return _convertConstructorPropertyValue(call);
+      final converted = _convertConstructorPropertyValue(call);
+      if (converted != null) {
+        return converted;
+      }
     }
-    throw ParseException(
-      'Unsupported property value: ${expr.runtimeType}',
-      _span(expr),
-    );
+    // Anything else: opaque.
+    return _opaqueProperty(expr);
   }
 
-  PropertyValue _convertConstructorPropertyValue(_CallInfo call) {
+  PropertyValue? _convertConstructorPropertyValue(_CallInfo call) {
     if (call.className == 'EdgeInsets' && call.namedConstructor == 'all') {
       return _edgeInsetsAll(call);
     }
     if (call.className == 'Color' && call.namedConstructor == null) {
       return _colorLiteral(call);
     }
-    final ctorSuffix =
-        call.namedConstructor == null ? '' : '.${call.namedConstructor}';
-    throw ParseException(
-      'Unsupported constructor value: ${call.className}$ctorSuffix',
-      call.span,
-    );
+    return null;
   }
 
-  PropertyValue _edgeInsetsAll(_CallInfo call) {
+  PropertyValue? _edgeInsetsAll(_CallInfo call) {
     final args = call.argumentList.arguments;
     if (args.length != 1) {
-      throw ParseException(
-        'EdgeInsets.all expects exactly 1 argument; got ${args.length}',
-        call.span,
-      );
+      return null;
     }
     final arg = args.first;
     if (arg is IntegerLiteral) {
       final value = arg.value;
       if (value == null) {
-        throw ParseException(
-          'EdgeInsets.all argument out of range',
-          _span(arg),
-        );
+        return null;
       }
       return EdgeInsetsAllValue(
         amount: value,
@@ -236,33 +267,21 @@ class WidgetVisitor {
         span: call.span,
       );
     }
-    throw ParseException(
-      'EdgeInsets.all argument must be a num literal',
-      _span(arg),
-    );
+    return null;
   }
 
-  PropertyValue _colorLiteral(_CallInfo call) {
+  PropertyValue? _colorLiteral(_CallInfo call) {
     final args = call.argumentList.arguments;
     if (args.length != 1) {
-      throw ParseException(
-        'Color expects exactly 1 argument; got ${args.length}',
-        call.span,
-      );
+      return null;
     }
     final arg = args.first;
     if (arg is! IntegerLiteral) {
-      throw ParseException(
-        'Color argument must be an integer literal',
-        _span(arg),
-      );
+      return null;
     }
     final value = arg.value;
     if (value == null) {
-      throw ParseException(
-        'Color argument out of range',
-        _span(arg),
-      );
+      return null;
     }
     return ColorValue(argbValue: value, span: call.span);
   }
@@ -285,11 +304,37 @@ class WidgetVisitor {
   /// Normalizes the two AST shapes a constructor-call-without-resolution can
   /// take: `InstanceCreationExpression` when `const`/`new` is present, else
   /// `MethodInvocation`. Returns null for anything else.
+  ///
+  /// `const Prefix.Name(...)` is a special case: the analyzer parses it as
+  /// `InstanceCreationExpression` with the named-type's `importPrefix`
+  /// holding `Prefix` (because syntactically that COULD be an import
+  /// prefix; without resolution the analyzer can't tell). We treat this
+  /// as `Prefix`-class with named constructor `Name` — the common Flutter
+  /// pattern (`const EdgeInsets.all(8)`, `const Color(0x…)` with a prefix,
+  /// etc.). This matches the non-const `MethodInvocation` interpretation.
   _CallInfo? _tryExtractCall(Expression expr) {
     if (expr is InstanceCreationExpression) {
+      final type = expr.constructorName.type;
+      final prefixToken = type.importPrefix;
+      final localName = type.name2.lexeme;
+      final explicitNamedCtor = expr.constructorName.name?.name;
+
+      String className;
+      String? namedConstructor;
+      if (prefixToken != null) {
+        // `const Prefix.X(...)`: rare to also have an explicit named ctor.
+        if (explicitNamedCtor != null) {
+          return null;
+        }
+        className = prefixToken.name.lexeme;
+        namedConstructor = localName;
+      } else {
+        className = localName;
+        namedConstructor = explicitNamedCtor;
+      }
       return _CallInfo(
-        className: expr.constructorName.type.name2.lexeme,
-        namedConstructor: expr.constructorName.name?.name,
+        className: className,
+        namedConstructor: namedConstructor,
         argumentList: expr.argumentList,
         keyword: expr.keyword,
         span: _span(expr),

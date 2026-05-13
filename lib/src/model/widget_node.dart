@@ -3,17 +3,69 @@ import 'property_value.dart';
 import 'source_span.dart';
 import 'style_hints.dart';
 
-/// A node in the visual model. One per constructor call in the source.
+/// A node in the visual model.
+///
+/// Sealed: every node is either a `WidgetNode` (modeled constructor call,
+/// editable via the kernel API) or an `OpaqueNode` (verbatim source range
+/// the kernel does not model — closures, ternaries, helper-method calls
+/// returning Widget, comprehensions, etc.). M4 introduced the split.
+///
+/// All `ModelNode`s carry a `sourceSpan`. The two subtypes diverge in
+/// what else they carry and in whether the kernel exposes mutation on
+/// them: `WidgetNode`'s properties and child slots are editable;
+/// `OpaqueNode`'s content is byte-preserved and any path that descends
+/// into one throws at edit time.
+sealed class ModelNode {
+  const ModelNode();
+  SourceSpan get sourceSpan;
+}
+
+/// A region of source the kernel does not model. Edits cannot touch its
+/// content; structural edits to the slot CONTAINING an `OpaqueNode` can
+/// still move or remove the node as an opaque unit.
+///
+/// Carries `sourceText` (the verbatim bytes) in addition to `sourceSpan`,
+/// because equivalence comparison after a round-trip needs a stable
+/// identity for the opaque content — spans shift in re-parsed source
+/// while content is invariant.
+class OpaqueNode extends ModelNode {
+  const OpaqueNode({required this.sourceSpan, required this.sourceText});
+
+  @override
+  final SourceSpan sourceSpan;
+
+  /// Verbatim source bytes for this opaque region.
+  final String sourceText;
+
+  @override
+  bool operator ==(Object other) =>
+      other is OpaqueNode && other.sourceText == sourceText;
+
+  @override
+  int get hashCode => sourceText.hashCode;
+
+  @override
+  String toString() {
+    final preview = sourceText.length > 30
+        ? '${sourceText.substring(0, 30)}...'
+        : sourceText;
+    final escaped = preview.replaceAll('\n', '\\n');
+    return 'OpaqueNode(@${sourceSpan.offset}+${sourceSpan.length}, "$escaped")';
+  }
+}
+
+/// A modeled constructor call. One `WidgetNode` per Flutter widget the
+/// kernel recognizes.
 ///
 /// Stores enough information to render an indented tree (M1), to emit
 /// minimal-diff `SourceEdit`s for property/child changes (M2/M3), and to
 /// compare against a re-parsed model under the M2 round-trip property test
 /// (Settled Decisions Q3, DEVLOG.md).
-class WidgetNode {
+class WidgetNode extends ModelNode {
   WidgetNode({
     required this.className,
     required Map<String, PropertyValue> properties,
-    required Map<String, List<WidgetNode>> childSlots,
+    required Map<String, List<ModelNode>> childSlots,
     required this.sourceSpan,
     required this.styleHints,
     Map<String, ListSlotStyle> childSlotStyles =
@@ -21,7 +73,7 @@ class WidgetNode {
   })  : properties = Map.unmodifiable(properties),
         childSlots = Map.unmodifiable({
           for (final entry in childSlots.entries)
-            entry.key: List<WidgetNode>.unmodifiable(entry.value),
+            entry.key: List<ModelNode>.unmodifiable(entry.value),
         }),
         childSlotStyles = Map.unmodifiable(childSlotStyles);
 
@@ -35,9 +87,11 @@ class WidgetNode {
   /// Widget-valued named arguments grouped by their slot name. A
   /// list-shaped slot (e.g. `Column.children`) holds the elements in source
   /// order; a single-shaped slot (e.g. `Padding.child`) holds a one-element
-  /// list. The catalog declares which slots a widget has and which shape
-  /// each takes — see `lib/src/catalog/widget_catalog.dart`.
-  final Map<String, List<WidgetNode>> childSlots;
+  /// list. Each entry may be either a `WidgetNode` (modeled child) or an
+  /// `OpaqueNode` (unmodelable expression preserved verbatim). The catalog
+  /// declares which slots a widget has and which shape each takes — see
+  /// `lib/src/catalog/widget_catalog.dart`.
+  final Map<String, List<ModelNode>> childSlots;
 
   /// Per-list-slot style hints captured at parse time. Only list-shaped
   /// slots (those with bracketed `[...]` source) have entries; single-
@@ -48,6 +102,7 @@ class WidgetNode {
 
   /// Byte range of the constructor call (including any leading
   /// `const`/`new` keyword and the trailing `)`).
+  @override
   final SourceSpan sourceSpan;
 
   final StyleHints styleHints;

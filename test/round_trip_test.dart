@@ -42,6 +42,8 @@ const _m1Fixtures = <String>[
   'real_world_layout_starter.dart',
   'real_world_widgets_intro_tutorial.dart',
   'real_world_cookbook_tabs.dart',
+  // M4: exercises opaque handling (closure, BoxDecoration, EdgeInsets.symmetric).
+  'real_world_opaque_mybutton.dart',
 ];
 
 class _CachedFixture {
@@ -91,15 +93,30 @@ void main() {
         final fixture = fixtures[rng.nextInt(fixtures.length)];
         final targets = fixture.model
             .walk()
-            .where((entry) => entry.node.properties.isNotEmpty)
+            .where((entry) => entry.node is WidgetNode)
+            .map(
+              (entry) => (path: entry.path, node: entry.node as WidgetNode),
+            )
+            .where(
+              (entry) => entry.node.properties.values.any(
+                (v) => v is! OpaquePropertyValue,
+              ),
+            )
             .toList();
         if (targets.isEmpty) {
           continue;
         }
 
         final target = targets[rng.nextInt(targets.length)];
-        final propNames = target.node.properties.keys.toList();
-        final propName = propNames[rng.nextInt(propNames.length)];
+        // Exclude opaque properties from random selection.
+        final editableNames = target.node.properties.entries
+            .where((e) => e.value is! OpaquePropertyValue)
+            .map((e) => e.key)
+            .toList();
+        if (editableNames.isEmpty) {
+          continue;
+        }
+        final propName = editableNames[rng.nextInt(editableNames.length)];
         final oldValue = target.node.properties[propName]!;
         final newValue = _generateValue(rng);
 
@@ -185,9 +202,9 @@ void main() {
             break;
           }
           final target = targets[rng.nextInt(targets.length)];
-          final parent = currentModel.nodeAt(target.parentPath)!;
+          final parent = currentModel.nodeAt(target.parentPath)! as WidgetNode;
           final children =
-              parent.childSlots[target.slot] ?? const <WidgetNode>[];
+              parent.childSlots[target.slot] ?? const <ModelNode>[];
 
           final ops = <String>[
             'insert',
@@ -298,7 +315,11 @@ List<({NodePath parentPath, String slot})> _listSlotTargets(
 ) {
   final out = <({NodePath parentPath, String slot})>[];
   for (final entry in model.walk()) {
-    for (final slot in entry.node.childSlotStyles.keys) {
+    final node = entry.node;
+    if (node is! WidgetNode) {
+      continue;
+    }
+    for (final slot in node.childSlotStyles.keys) {
       out.add((parentPath: entry.path, slot: slot));
     }
   }

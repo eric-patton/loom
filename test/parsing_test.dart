@@ -14,7 +14,9 @@ void main() {
 
   group('parseWidgetTree on simple_widget.dart', () {
     List<WidgetNode> children(WidgetNode node) =>
-        node.childSlots['children'] ?? const <WidgetNode>[];
+        (node.childSlots['children'] ?? const <ModelNode>[])
+            .whereType<WidgetNode>()
+            .toList();
 
     test('root is Column', () {
       expect(model.root.className, equals('Column'));
@@ -53,7 +55,8 @@ void main() {
 
       final childSlot = padding.childSlots['child'];
       expect(childSlot, hasLength(1));
-      expect(childSlot!.first.className, equals('Text'));
+      final innerText = childSlot!.first as WidgetNode;
+      expect(innerText.className, equals('Text'));
     });
 
     test('third child uses an integer literal in EdgeInsets.all', () {
@@ -82,7 +85,7 @@ void main() {
 
     test('inner Text inside const Padding has no explicit const', () {
       final padding = children(model.root)[1];
-      final innerText = padding.childSlots['child']!.first;
+      final innerText = padding.childSlots['child']!.first as WidgetNode;
       expect(innerText.className, equals('Text'));
       expect(innerText.styleHints.hasConst, isFalse);
     });
@@ -98,7 +101,9 @@ void main() {
         allNodes.add(node);
         for (final slot in node.childSlots.values) {
           for (final child in slot) {
-            collect(child);
+            if (child is WidgetNode) {
+              collect(child);
+            }
           }
         }
       }

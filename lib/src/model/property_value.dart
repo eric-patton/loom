@@ -135,6 +135,31 @@ class ColorValue extends PropertyValue {
       'ColorValue(0x${argbValue.toRadixString(16).padLeft(8, '0').toUpperCase()})';
 }
 
+/// An unmodelable property value, captured verbatim. Introduced in M4.
+/// Carries `sourceText` so equivalence comparison after re-parse (which
+/// shifts spans) still has a stable identity. Emission re-uses these
+/// bytes; the kernel API offers no mutation on this variant.
+class OpaquePropertyValue extends PropertyValue {
+  const OpaquePropertyValue({required super.span, required this.sourceText});
+
+  final String sourceText;
+
+  @override
+  bool operator ==(Object other) =>
+      other is OpaquePropertyValue && other.sourceText == sourceText;
+
+  @override
+  int get hashCode => sourceText.hashCode;
+
+  @override
+  String toString() {
+    final preview = sourceText.length > 30
+        ? '${sourceText.substring(0, 30)}...'
+        : sourceText;
+    return 'OpaquePropertyValue("${preview.replaceAll('\n', '\\n')}")';
+  }
+}
+
 /// A `Prefix.member` reference — captures both true enum references
 /// (`MainAxisAlignment.center`) and static-field references that share
 /// the same syntactic shape (`Colors.blue`, `Icons.menu`,

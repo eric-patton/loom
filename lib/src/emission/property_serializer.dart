@@ -28,6 +28,7 @@ class PropertySerializer {
         ColorValue(argbValue: final v) =>
           'Color(0x${v.toRadixString(16).padLeft(8, '0').toUpperCase()})',
         EnumReferenceValue(typeName: final t, memberName: final m) => '$t.$m',
+        OpaquePropertyValue(sourceText: final t) => t,
       };
 
   static String _escapeString(String s) =>

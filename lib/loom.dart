@@ -15,6 +15,7 @@ export 'src/model/node_path.dart';
 export 'src/model/property_value.dart';
 export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';
+// widget_node.dart re-exports ModelNode, WidgetNode, OpaqueNode, WidgetTreeModel.
 export 'src/model/widget_node.dart';
 export 'src/parsing/widget_tree_parser.dart';
 export 'src/parsing/widget_visitor.dart' show ParseException;

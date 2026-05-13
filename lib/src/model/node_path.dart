@@ -9,14 +9,28 @@ typedef NodePathSegment = ({String slot, int index});
 /// sequence of (slot, index) descents. The empty list points at the root.
 typedef NodePath = List<NodePathSegment>;
 
+/// Thrown when a model edit tries to descend into or mutate an
+/// `OpaqueNode`. Opaque content is byte-preserved by contract.
+class OpaqueEditException implements Exception {
+  const OpaqueEditException(this.message);
+  final String message;
+  @override
+  String toString() => 'OpaqueEditException: $message';
+}
+
 extension NodeNavigation on WidgetTreeModel {
   /// Returns the node reached by following `path`, or `null` if the path
-  /// is invalid (unknown slot or out-of-range index).
-  WidgetNode? nodeAt(NodePath path) => _nodeAt(root, path);
+  /// is invalid (unknown slot or out-of-range index). The result may be
+  /// either a `WidgetNode` or an `OpaqueNode`.
+  ModelNode? nodeAt(NodePath path) => _nodeAt(root, path);
 
   /// Returns a new model with the property at `path / propName` replaced
   /// by `value`. Other parts of the tree are structurally unchanged
   /// (and physically reused where possible since `WidgetNode` is immutable).
+  ///
+  /// Throws `OpaqueEditException` if `path` descends into an `OpaqueNode`,
+  /// or `ArgumentError` if `path` ends on a node that doesn't have a
+  /// property with the given name.
   WidgetTreeModel withProperty(
     NodePath path,
     String propName,
@@ -27,11 +41,13 @@ extension NodeNavigation on WidgetTreeModel {
   /// Returns a new model with `newChild` inserted at `parentPath / slot`
   /// at the given `index`. The slot must exist and be list-shaped.
   /// Indices in `[0, slot.length]` are valid; `slot.length` appends.
+  /// Throws `OpaqueEditException` if `parentPath` descends into an
+  /// `OpaqueNode`.
   WidgetTreeModel insertChild(
     NodePath parentPath,
     String slot,
     int index,
-    WidgetNode newChild,
+    ModelNode newChild,
   ) =>
       WidgetTreeModel(
         root: _modifySlot(root, parentPath, slot, (current) {
@@ -40,7 +56,7 @@ extension NodeNavigation on WidgetTreeModel {
               'Insert index $index out of range [0, ${current.length}]',
             );
           }
-          return <WidgetNode>[
+          return <ModelNode>[
             ...current.sublist(0, index),
             newChild,
             ...current.sublist(index),
@@ -49,7 +65,8 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Returns a new model with the child at `parentPath / slot[index]`
-  /// removed.
+  /// removed. The removed entry may be a `WidgetNode` or `OpaqueNode` —
+  /// removal moves it as a unit either way.
   WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) =>
       WidgetTreeModel(
         root: _modifySlot(root, parentPath, slot, (current) {
@@ -58,7 +75,7 @@ extension NodeNavigation on WidgetTreeModel {
               'Remove index $index out of range [0, ${current.length})',
             );
           }
-          return <WidgetNode>[
+          return <ModelNode>[
             ...current.sublist(0, index),
             ...current.sublist(index + 1),
           ];
@@ -66,8 +83,7 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Returns a new model with the child at `parentPath / slot[from]`
-  /// moved to position `to` in the same slot. Indices are interpreted
-  /// against the pre-move list.
+  /// moved to position `to`. Works on either widget or opaque entries.
   WidgetTreeModel moveChild(
     NodePath parentPath,
     String slot,
@@ -89,7 +105,7 @@ extension NodeNavigation on WidgetTreeModel {
           if (from == to) {
             return current;
           }
-          final mutable = <WidgetNode>[...current];
+          final mutable = <ModelNode>[...current];
           final moved = mutable.removeAt(from);
           mutable.insert(to, moved);
           return mutable;
@@ -97,19 +113,22 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Walks the tree in pre-order and yields one entry per node, paired
-  /// with the path that reaches it. The first entry is always the root
-  /// with an empty path. Used by the round-trip property test to
-  /// enumerate edit targets.
-  List<({NodePath path, WidgetNode node})> walk() {
-    final out = <({NodePath path, WidgetNode node})>[];
+  /// with the path that reaches it. Includes both `WidgetNode`s and
+  /// `OpaqueNode`s. The first entry is always the root with an empty path.
+  List<({NodePath path, ModelNode node})> walk() {
+    final out = <({NodePath path, ModelNode node})>[];
     _walk(root, const <NodePathSegment>[], out);
     return out;
   }
 }
 
-WidgetNode? _nodeAt(WidgetNode start, NodePath path) {
-  var current = start;
+ModelNode? _nodeAt(ModelNode start, NodePath path) {
+  ModelNode current = start;
   for (final segment in path) {
+    if (current is! WidgetNode) {
+      // Can't descend into opaque (no childSlots).
+      return null;
+    }
     final slot = current.childSlots[segment.slot];
     if (slot == null || segment.index < 0 || segment.index >= slot.length) {
       return null;
@@ -157,18 +176,19 @@ WidgetNode _withProperty(
       'Index ${segment.index} out of range for ${node.className}.${segment.slot} (length ${slot.length})',
     );
   }
-  final updatedChild = _withProperty(
-    slot[segment.index],
-    rest,
-    propName,
-    value,
-  );
-  final updatedSlot = <WidgetNode>[
+  final descendingInto = slot[segment.index];
+  if (descendingInto is! WidgetNode) {
+    throw const OpaqueEditException(
+      'path descends into an OpaqueNode; opaque content is not editable',
+    );
+  }
+  final updatedChild = _withProperty(descendingInto, rest, propName, value);
+  final updatedSlot = <ModelNode>[
     ...slot.sublist(0, segment.index),
     updatedChild,
     ...slot.sublist(segment.index + 1),
   ];
-  final newSlots = <String, List<WidgetNode>>{
+  final newSlots = <String, List<ModelNode>>{
     ...node.childSlots,
     segment.slot: updatedSlot,
   };
@@ -186,7 +206,7 @@ WidgetNode _modifySlot(
   WidgetNode node,
   NodePath path,
   String slotName,
-  List<WidgetNode> Function(List<WidgetNode> current) transform,
+  List<ModelNode> Function(List<ModelNode> current) transform,
 ) {
   if (path.isEmpty) {
     final current = node.childSlots[slotName];
@@ -196,7 +216,7 @@ WidgetNode _modifySlot(
       );
     }
     final updated = transform(current);
-    final newSlots = <String, List<WidgetNode>>{
+    final newSlots = <String, List<ModelNode>>{
       ...node.childSlots,
       slotName: updated,
     };
@@ -222,18 +242,19 @@ WidgetNode _modifySlot(
       'Index ${segment.index} out of range for ${node.className}.${segment.slot}',
     );
   }
-  final updatedChild = _modifySlot(
-    descend[segment.index],
-    rest,
-    slotName,
-    transform,
-  );
-  final updatedSlot = <WidgetNode>[
+  final descendingInto = descend[segment.index];
+  if (descendingInto is! WidgetNode) {
+    throw const OpaqueEditException(
+      'path descends into an OpaqueNode; opaque content is not editable',
+    );
+  }
+  final updatedChild = _modifySlot(descendingInto, rest, slotName, transform);
+  final updatedSlot = <ModelNode>[
     ...descend.sublist(0, segment.index),
     updatedChild,
     ...descend.sublist(segment.index + 1),
   ];
-  final newSlots = <String, List<WidgetNode>>{
+  final newSlots = <String, List<ModelNode>>{
     ...node.childSlots,
     segment.slot: updatedSlot,
   };
@@ -248,15 +269,17 @@ WidgetNode _modifySlot(
 }
 
 void _walk(
-  WidgetNode node,
+  ModelNode node,
   NodePath pathSoFar,
-  List<({NodePath path, WidgetNode node})> out,
+  List<({NodePath path, ModelNode node})> out,
 ) {
   out.add((path: pathSoFar, node: node));
-  for (final slotEntry in node.childSlots.entries) {
-    for (var i = 0; i < slotEntry.value.length; i++) {
-      final segment = (slot: slotEntry.key, index: i);
-      _walk(slotEntry.value[i], [...pathSoFar, segment], out);
+  if (node is WidgetNode) {
+    for (final slotEntry in node.childSlots.entries) {
+      for (var i = 0; i < slotEntry.value.length; i++) {
+        final segment = (slot: slotEntry.key, index: i);
+        _walk(slotEntry.value[i], [...pathSoFar, segment], out);
+      }
     }
   }
 }

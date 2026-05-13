@@ -213,7 +213,7 @@ class EditPlanner {
 
   static String _interElementSep(
     String source,
-    List<WidgetNode> children,
+    List<ModelNode> children,
     ListSlotStyle style,
   ) {
     if (children.length >= 2) {

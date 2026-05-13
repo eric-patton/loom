@@ -51,6 +51,18 @@ class WidgetCatalog {
     'Expanded': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
     ),
+    'GestureDetector': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'InkWell': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Material': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'SafeArea': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
 
     // App scaffolding.
     'MaterialApp': WidgetSpec(

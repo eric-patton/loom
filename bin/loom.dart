@@ -59,7 +59,21 @@ void _printTree(WidgetTreeModel model, IOSink sink) {
   _printNode(model.root, sink, '  ');
 }
 
-void _printNode(WidgetNode node, IOSink sink, String indent) {
+void _printNode(ModelNode node, IOSink sink, String indent) {
+  switch (node) {
+    case final WidgetNode w:
+      _printWidget(w, sink, indent);
+    case final OpaqueNode o:
+      final preview = o.sourceText.length > 40
+          ? '${o.sourceText.substring(0, 40).replaceAll('\n', '\\n')}...'
+          : o.sourceText.replaceAll('\n', '\\n');
+      sink.writeln(
+        '$indent<opaque @${o.sourceSpan.offset}+${o.sourceSpan.length}> "$preview"',
+      );
+  }
+}
+
+void _printWidget(WidgetNode node, IOSink sink, String indent) {
   final flags = <String>[
     '@${node.sourceSpan.offset}+${node.sourceSpan.length}',
     if (node.styleHints.hasConst) 'const',
@@ -87,4 +101,6 @@ String _formatValue(PropertyValue value) => switch (value) {
       ColorValue(argbValue: final v) =>
         'Color(0x${v.toRadixString(16).padLeft(8, '0').toUpperCase()})',
       EnumReferenceValue(typeName: final t, memberName: final m) => '$t.$m',
+      OpaquePropertyValue(sourceText: final t) =>
+        '<opaque "${t.length > 30 ? '${t.substring(0, 30)}...' : t}">',
     };

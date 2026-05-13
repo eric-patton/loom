@@ -2,16 +2,11 @@ import '../catalog/widget_catalog.dart';
 import '../model/widget_node.dart';
 import 'property_serializer.dart';
 
-/// Recursively converts a `WidgetNode` to Dart source. Mirrors
-/// `PropertySerializer` but for widget constructor calls.
+/// Recursively converts a `ModelNode` to Dart source.
 ///
-/// Used by M3 structural edits when inserting a new child — the inserted
-/// widget needs a source representation that re-parses to the same node.
-///
-/// Argument-order convention: positional first (by catalog index), then
-/// named arguments alphabetically. The exact order isn't observable
-/// through the model (properties + child slots are maps), but a fixed
-/// order keeps emitted source deterministic.
+/// For `WidgetNode`s, regenerates the constructor call: positional args
+/// first (by catalog index), then named arguments alphabetically. For
+/// `OpaqueNode`s, returns the captured verbatim source text.
 ///
 /// `const`/`new` keywords and the constructor's own trailing-comma state
 /// come from `StyleHints`. Multi-line formatting is not emitted by this
@@ -20,7 +15,12 @@ import 'property_serializer.dart';
 class WidgetSerializer {
   WidgetSerializer._();
 
-  static String serialize(WidgetNode node) {
+  static String serialize(ModelNode node) => switch (node) {
+        final WidgetNode w => _serializeWidget(w),
+        final OpaqueNode o => o.sourceText,
+      };
+
+  static String _serializeWidget(WidgetNode node) {
     final spec = WidgetCatalog.specFor(node.className);
     if (spec == null) {
       throw ArgumentError(
@@ -57,6 +57,12 @@ class WidgetSerializer {
     final namedParts = <String, String>{};
     for (final entry in node.properties.entries) {
       if (reverseLookup.containsKey(entry.key)) {
+        continue;
+      }
+      // Skip synthetic positional-opaque keys (visitor generates names
+      // like `__positional0` for unmodeled positionals — those round
+      // trip via PropertySerializer for opaque types).
+      if (entry.key.startsWith('__positional')) {
         continue;
       }
       namedParts[entry.key] =
