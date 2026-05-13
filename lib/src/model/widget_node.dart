@@ -1,3 +1,4 @@
+import 'list_slot_style.dart';
 import 'property_value.dart';
 import 'source_span.dart';
 import 'style_hints.dart';
@@ -15,11 +16,14 @@ class WidgetNode {
     required Map<String, List<WidgetNode>> childSlots,
     required this.sourceSpan,
     required this.styleHints,
+    Map<String, ListSlotStyle> childSlotStyles =
+        const <String, ListSlotStyle>{},
   })  : properties = Map.unmodifiable(properties),
         childSlots = Map.unmodifiable({
           for (final entry in childSlots.entries)
             entry.key: List<WidgetNode>.unmodifiable(entry.value),
-        });
+        }),
+        childSlotStyles = Map.unmodifiable(childSlotStyles);
 
   /// Class name of the constructor invoked — e.g. `'Column'`.
   final String className;
@@ -34,6 +38,13 @@ class WidgetNode {
   /// list. The catalog declares which slots a widget has and which shape
   /// each takes — see `lib/src/catalog/widget_catalog.dart`.
   final Map<String, List<WidgetNode>> childSlots;
+
+  /// Per-list-slot style hints captured at parse time. Only list-shaped
+  /// slots (those with bracketed `[...]` source) have entries; single-
+  /// shaped slots don't. Used by M3 structural edits to preserve the
+  /// list's trailing-comma and single-/multi-line shape across
+  /// insertions, removals, and reorderings.
+  final Map<String, ListSlotStyle> childSlotStyles;
 
   /// Byte range of the constructor call (including any leading
   /// `const`/`new` keyword and the trailing `)`).

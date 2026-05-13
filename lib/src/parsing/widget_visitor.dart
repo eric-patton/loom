@@ -3,6 +3,7 @@ import 'package:analyzer/dart/ast/syntactic_entity.dart';
 import 'package:analyzer/dart/ast/token.dart';
 
 import '../catalog/widget_catalog.dart';
+import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
 import '../model/source_span.dart';
 import '../model/style_hints.dart';
@@ -26,6 +27,12 @@ class ParseException implements Exception {
 }
 
 class WidgetVisitor {
+  WidgetVisitor(this.source);
+
+  /// The full source string the model was parsed from. Used at parse time
+  /// to detect list-literal multi-line shape (M3 style capture).
+  final String source;
+
   WidgetNode convertWidget(Expression expr) {
     final call = _tryExtractCall(expr);
     if (call == null) {
@@ -44,11 +51,14 @@ class WidgetVisitor {
     final spec = WidgetCatalog.specFor(call.className);
     if (spec == null) {
       throw ParseException(
-          'Unknown widget class: ${call.className}', call.span);
+        'Unknown widget class: ${call.className}',
+        call.span,
+      );
     }
 
     final properties = <String, PropertyValue>{};
     final childSlots = <String, List<WidgetNode>>{};
+    final childSlotStyles = <String, ListSlotStyle>{};
 
     final args = call.argumentList.arguments;
     for (var i = 0; i < args.length; i++) {
@@ -57,7 +67,11 @@ class WidgetVisitor {
         final name = arg.name.label.name;
         final slotShape = spec.childSlots[name];
         if (slotShape != null) {
-          childSlots[name] = _collectChildren(arg.expression, slotShape);
+          final slot = _collectChildSlot(arg.expression, slotShape);
+          childSlots[name] = slot.children;
+          if (slot.style != null) {
+            childSlotStyles[name] = slot.style!;
+          }
         } else {
           properties[name] = _convertProperty(arg.expression);
         }
@@ -77,12 +91,13 @@ class WidgetVisitor {
       className: call.className,
       properties: properties,
       childSlots: childSlots,
+      childSlotStyles: childSlotStyles,
       sourceSpan: call.span,
       styleHints: _hintsFromCall(call),
     );
   }
 
-  List<WidgetNode> _collectChildren(
+  ({List<WidgetNode> children, ListSlotStyle? style}) _collectChildSlot(
     Expression slotExpr,
     ChildSlotShape shape,
   ) {
@@ -93,7 +108,7 @@ class WidgetVisitor {
           _span(slotExpr),
         );
       }
-      final out = <WidgetNode>[];
+      final children = <WidgetNode>[];
       for (final element in slotExpr.elements) {
         if (element is! Expression) {
           throw ParseException(
@@ -101,11 +116,31 @@ class WidgetVisitor {
             _span(element),
           );
         }
-        out.add(convertWidget(element));
+        children.add(convertWidget(element));
       }
-      return out;
+      return (children: children, style: _listStyle(slotExpr));
     }
-    return <WidgetNode>[convertWidget(slotExpr)];
+    return (children: <WidgetNode>[convertWidget(slotExpr)], style: null);
+  }
+
+  ListSlotStyle _listStyle(ListLiteral list) {
+    final left = list.leftBracket;
+    final right = list.rightBracket;
+    final span = SourceSpan(
+      offset: left.offset,
+      length: right.offset + right.length - left.offset,
+    );
+    final tokenBeforeRight = right.previous;
+    final hasTrailingComma =
+        tokenBeforeRight != null && tokenBeforeRight.lexeme == ',';
+    // The interior is the substring strictly between [ and ].
+    final interior = source.substring(left.offset + left.length, right.offset);
+    final isMultiLine = interior.contains('\n');
+    return ListSlotStyle(
+      bracketsSpan: span,
+      hasTrailingComma: hasTrailingComma,
+      isMultiLine: isMultiLine,
+    );
   }
 
   PropertyValue _convertProperty(Expression expr) {

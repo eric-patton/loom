@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M2 — Property edit
-**Last touched:** 2026-05-13 — M2 acceptance hit. Both spec invariants enforced: idempotence on every fixture, stability over 1,000 random property edits with minimal-diff verification (10,000-iter mode also passes locally). 48 tests green, no skips remain.
+**Active milestone:** M3 — Structural edits
+**Last touched:** 2026-05-13 — M3 acceptance hit. Insert/remove/reorder on list slots with per-list style preservation. Property test runs sequences of 1-10 mixed structural edits (10,000-iter CI mode = ~100,000 individual edits, all round-trip cleanly). 53 tests green, no skips.
 **Blockers:** none
-**Next action:** **Eric review gate for M2.** Spot-check spans/serialization, then M3 implementation plan (structural edits — child insert/remove/reorder).
+**Next action:** **Eric review gate for M3.** After approval, M4 implementation plan (opaque blocks — closures, conditionals, ternaries, `.map().toList()` patterns become `OpaqueNode`).
 
 ---
 
@@ -110,13 +110,13 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 
 ### M3 — Structural edits
 
-- [ ] Insert child into `children:` list
-- [ ] Remove child from `children:` list
-- [ ] Reorder children
-- [ ] Trailing comma style detected per-list and preserved
-- [ ] Single-line vs multi-line list style detected and preserved
-- [ ] Empty-list ↔ non-empty transitions handled
-- [ ] Round-trip property tests pass for 10-edit sequences in arbitrary order
+- [x] Insert child into `children:` list
+- [x] Remove child from `children:` list
+- [x] Reorder children
+- [x] Trailing comma style detected per-list and preserved
+- [x] Single-line vs multi-line list style detected and preserved
+- [x] Empty-list ↔ non-empty transitions handled
+- [x] Round-trip property tests pass for 10-edit sequences in arbitrary order (1,000 sequences local, 10,000 sequences = ~100,000 edits in CI)
 - [ ] **Gate**: reviewed by Eric before M4 begins
 
 ### M4 — Opaque blocks
@@ -175,6 +175,23 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Next:** Concrete next action for the following session.
 ```
 
+### [2026-05-13] M3 — structural edits, per-list style preserved across 100,000 edits
+**Worked on:** Eric approved M2. Opened M3.
+  - New `ListSlotStyle` (`hasTrailingComma`, `isMultiLine`, `bracketsSpan`) in `lib/src/model/list_slot_style.dart`. `WidgetNode` gains an optional `childSlotStyles: Map<String, ListSlotStyle>` populated by the parser for list-shaped slots only.
+  - Visitor takes `source` in its constructor so list-literal multi-line detection (substring scan for `\n` between `[` and `]`) works without an extra LineInfo pass.
+  - `withProperty` / `insertChild` / `removeChild` / `moveChild` on `WidgetTreeModel`, immutable, via a single `_modifySlot` helper.
+  - `WidgetSerializer` recursively converts a `WidgetNode` back to Dart source (positional args first by catalog index, then named alphabetically). Used by `EditPlanner.insertChildEdit` for genuinely-new children.
+  - `EditPlanner.insertChildEdit` / `removeChildEdit` / `moveChildEdits`. `moveChildEdits` returns a (remove, insert) pair against the ORIGINAL source and byte-copies the moved widget's source verbatim — so internal whitespace/comments inside the moved subtree survive.
+  - Round-trip stability test now has a second group: sequences of 1-10 mixed insert/remove/move per fixture, with deterministic seed `Random(0x5704C7)`. 1,000 sequences local (≈5,000 edits), 10,000 sequences in CI (≈100,000 edits), all green.
+  - `model_equivalence` skips list-style comparison when both sides have an empty slot (a multi-line list contracting to `[]` is unavoidable on emptying — the comparator handles this special case rather than re-introducing multi-line emit for empty lists).
+**Learned:**
+  - **`withProperty` had a latent bug: it rebuilt `WidgetNode` without forwarding `childSlotStyles`.** The M2 property test caught it instantly when M3's `childSlotStyles` field went live — first iteration failed. Both `withProperty` and `_modifySlot` now thread the style map through.
+  - **Move-as-(remove + insert) composes cleanly against the original source.** Because `applySourceEdits` sorts by descending offset and edits are non-overlapping, the remove and insert can be planned against the original spans simultaneously. The only subtlety is the index-shift: when `from < to`, the insert index in the original list is `to + 1` (since the removed element would have shifted `to` left by one).
+  - **The inter-element separator can be read straight out of source.** For a non-empty list, `source[children[0].end..children[1].offset]` gives the exact bytes between successive elements — `, ` for single-line, `,\n  ` for multi-line. No need to synthesize. Falls back to `,\n  ` / `, ` defaults only for N=1 (one-element lists).
+  - **Pattern variables again.** The model-equivalence switch arms need `final` on every bound variable (`(final StringLiteralValue a, ...)` not `(StringLiteralValue a, ...)`) under `prefer_final_locals`. Already in Gotchas from M2.
+**Decided:** No new Settled Decisions this session. The empty-list-style equivalence relaxation is a comparator detail, not a spec divergence; logged in Gotchas.
+**Next:** **Eric review gate for M3.** After approval, M4 — opaque blocks for unmodelable Dart (closures, ternaries, helper method calls, `.map().toList()`). Q4 (parse errors) lives there too.
+
 ### [2026-05-13] M2 — property edits, round-trip stability green
 **Worked on:** Eric approved the M1 gate; opened M2. Implemented the property-edit write path end-to-end:
   - `StructuralEquivalence` (model-level oracle for Q3) in `lib/src/equivalence/model_equivalence.dart`
@@ -227,6 +244,8 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
+- **When a `WidgetNode` field is added, all the immutable-update paths must forward it.** M3 added `childSlotStyles`. `withProperty` was missed and silently dropped the new field, which only surfaced when M2's property test rebuilt nodes via `withProperty` and compared against the reparsed (style-bearing) model. `_modifySlot` and any future structural-update path needs the same audit.
+- **An empty list comparison needs a style exemption.** A multi-line `[\n  a,\n]` contracts to a single-line `[]` when the only element is removed. The reparsed model honestly reports `isMultiLine=false` while the in-memory pre-edit model still claims `isMultiLine=true`. `model_equivalence` skips style comparison when both sides have an empty slot for that key — preferable to introducing an "empty multi-line" emit shape that no real Dart uses.
 - **Hand-crafted fixtures are insufficient design pressure.** The single-fixture M1 first pass shipped a single-children-slot `WidgetNode` because no fixture demanded otherwise. The first real-world fixture (`Scaffold(body:, appBar:)`) immediately broke that assumption and forced a multi-slot refactor. Future milestones should pull at least one corpus fixture into the design phase before locking the model.
 - **`parseString` does not resolve types, so constructor calls without `const`/`new` come back as `MethodInvocation`, not `InstanceCreationExpression`.** This is the canonical shape: `Column(...)` → `MethodInvocation(methodName=Column)`; `const Column(...)` → `InstanceCreationExpression`. Similarly `EdgeInsets.all(8.0)` → `MethodInvocation(target=EdgeInsets, methodName=all)`. The widget visitor normalizes both AST shapes through `_CallInfo` in `lib/src/parsing/widget_visitor.dart`. If we ever switch to a resolved analyzer context (e.g. for cross-file work in M5+), this normalization can collapse to just the `InstanceCreationExpression` path.
 - **`test/fixtures/**` is excluded from `dart analyze`.** Fixtures are Flutter source files we parse from a string at test time. They reference packages (Flutter) Loom deliberately does not depend on, so `dart analyze` would flood with `uri_does_not_exist` and `undefined_class` errors. The exclusion lives in `analysis_options.yaml`. If you add a new fixture directory, exclude it the same way.

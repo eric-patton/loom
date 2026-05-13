@@ -31,7 +31,7 @@ WidgetTreeModel parseWidgetTree(String source) {
           'build() found but has no return expression',
         );
       }
-      final visitor = WidgetVisitor();
+      final visitor = WidgetVisitor(source);
       return WidgetTreeModel(root: visitor.convertWidget(root));
     }
   }

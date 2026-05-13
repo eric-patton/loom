@@ -24,6 +24,78 @@ extension NodeNavigation on WidgetTreeModel {
   ) =>
       WidgetTreeModel(root: _withProperty(root, path, propName, value));
 
+  /// Returns a new model with `newChild` inserted at `parentPath / slot`
+  /// at the given `index`. The slot must exist and be list-shaped.
+  /// Indices in `[0, slot.length]` are valid; `slot.length` appends.
+  WidgetTreeModel insertChild(
+    NodePath parentPath,
+    String slot,
+    int index,
+    WidgetNode newChild,
+  ) =>
+      WidgetTreeModel(
+        root: _modifySlot(root, parentPath, slot, (current) {
+          if (index < 0 || index > current.length) {
+            throw ArgumentError(
+              'Insert index $index out of range [0, ${current.length}]',
+            );
+          }
+          return <WidgetNode>[
+            ...current.sublist(0, index),
+            newChild,
+            ...current.sublist(index),
+          ];
+        }),
+      );
+
+  /// Returns a new model with the child at `parentPath / slot[index]`
+  /// removed.
+  WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) =>
+      WidgetTreeModel(
+        root: _modifySlot(root, parentPath, slot, (current) {
+          if (index < 0 || index >= current.length) {
+            throw ArgumentError(
+              'Remove index $index out of range [0, ${current.length})',
+            );
+          }
+          return <WidgetNode>[
+            ...current.sublist(0, index),
+            ...current.sublist(index + 1),
+          ];
+        }),
+      );
+
+  /// Returns a new model with the child at `parentPath / slot[from]`
+  /// moved to position `to` in the same slot. Indices are interpreted
+  /// against the pre-move list.
+  WidgetTreeModel moveChild(
+    NodePath parentPath,
+    String slot,
+    int from,
+    int to,
+  ) =>
+      WidgetTreeModel(
+        root: _modifySlot(root, parentPath, slot, (current) {
+          if (from < 0 || from >= current.length) {
+            throw ArgumentError(
+              'Move source $from out of range [0, ${current.length})',
+            );
+          }
+          if (to < 0 || to >= current.length) {
+            throw ArgumentError(
+              'Move destination $to out of range [0, ${current.length})',
+            );
+          }
+          if (from == to) {
+            return current;
+          }
+          final mutable = <WidgetNode>[...current];
+          final moved = mutable.removeAt(from);
+          mutable.insert(to, moved);
+          return mutable;
+        }),
+      );
+
   /// Walks the tree in pre-order and yields one entry per node, paired
   /// with the path that reaches it. The first entry is always the root
   /// with an empty path. Used by the round-trip property test to
@@ -67,6 +139,7 @@ WidgetNode _withProperty(
       className: node.className,
       properties: newProps,
       childSlots: node.childSlots,
+      childSlotStyles: node.childSlotStyles,
       sourceSpan: node.sourceSpan,
       styleHints: node.styleHints,
     );
@@ -103,6 +176,72 @@ WidgetNode _withProperty(
     className: node.className,
     properties: node.properties,
     childSlots: newSlots,
+    childSlotStyles: node.childSlotStyles,
+    sourceSpan: node.sourceSpan,
+    styleHints: node.styleHints,
+  );
+}
+
+WidgetNode _modifySlot(
+  WidgetNode node,
+  NodePath path,
+  String slotName,
+  List<WidgetNode> Function(List<WidgetNode> current) transform,
+) {
+  if (path.isEmpty) {
+    final current = node.childSlots[slotName];
+    if (current == null) {
+      throw ArgumentError(
+        '${node.className} has no slot "$slotName"',
+      );
+    }
+    final updated = transform(current);
+    final newSlots = <String, List<WidgetNode>>{
+      ...node.childSlots,
+      slotName: updated,
+    };
+    return WidgetNode(
+      className: node.className,
+      properties: node.properties,
+      childSlots: newSlots,
+      childSlotStyles: node.childSlotStyles,
+      sourceSpan: node.sourceSpan,
+      styleHints: node.styleHints,
+    );
+  }
+  final segment = path.first;
+  final rest = path.sublist(1);
+  final descend = node.childSlots[segment.slot];
+  if (descend == null) {
+    throw ArgumentError(
+      '${node.className} has no slot "${segment.slot}"',
+    );
+  }
+  if (segment.index < 0 || segment.index >= descend.length) {
+    throw ArgumentError(
+      'Index ${segment.index} out of range for ${node.className}.${segment.slot}',
+    );
+  }
+  final updatedChild = _modifySlot(
+    descend[segment.index],
+    rest,
+    slotName,
+    transform,
+  );
+  final updatedSlot = <WidgetNode>[
+    ...descend.sublist(0, segment.index),
+    updatedChild,
+    ...descend.sublist(segment.index + 1),
+  ];
+  final newSlots = <String, List<WidgetNode>>{
+    ...node.childSlots,
+    segment.slot: updatedSlot,
+  };
+  return WidgetNode(
+    className: node.className,
+    properties: node.properties,
+    childSlots: newSlots,
+    childSlotStyles: node.childSlotStyles,
     sourceSpan: node.sourceSpan,
     styleHints: node.styleHints,
   );

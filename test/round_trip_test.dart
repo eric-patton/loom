@@ -151,6 +151,174 @@ void main() {
       );
     }, timeout: const Timeout(Duration(minutes: 5)));
   });
+
+  group('invariant 1 - round-trip stability under structural edits', () {
+    late final List<_CachedFixture> fixtures;
+
+    setUpAll(() {
+      fixtures = [
+        for (final name in _m1Fixtures)
+          () {
+            final source = _loadFixture(name);
+            return _CachedFixture(name, source, parseWidgetTree(source));
+          }(),
+      ];
+    });
+
+    test('1-10 mixed insert/remove/move sequences round-trip', () {
+      final rng = Random(0x5704C7);
+      final iterations = _propertyIterations;
+      var totalSequences = 0;
+      var totalEditsPerformed = 0;
+
+      for (var i = 0; i < iterations; i++) {
+        final fixture = fixtures[rng.nextInt(fixtures.length)];
+        var currentSource = fixture.source;
+        var currentModel = fixture.model;
+
+        final sequenceLength = 1 + rng.nextInt(10);
+        var stepsRun = 0;
+
+        for (var step = 0; step < sequenceLength; step++) {
+          final targets = _listSlotTargets(currentModel);
+          if (targets.isEmpty) {
+            break;
+          }
+          final target = targets[rng.nextInt(targets.length)];
+          final parent = currentModel.nodeAt(target.parentPath)!;
+          final children =
+              parent.childSlots[target.slot] ?? const <WidgetNode>[];
+
+          final ops = <String>[
+            'insert',
+            if (children.isNotEmpty) 'remove',
+            if (children.length >= 2) 'move',
+          ];
+          final op = ops[rng.nextInt(ops.length)];
+
+          final reason = 'iter $i step $step: fixture=${fixture.name} '
+              'path=${target.parentPath} slot=${target.slot} op=$op '
+              '(children.length=${children.length})';
+
+          WidgetTreeModel expected;
+          List<SourceEdit> edits;
+
+          switch (op) {
+            case 'insert':
+              final index = rng.nextInt(children.length + 1);
+              final newChild = _generateChild(rng);
+              expected = currentModel.insertChild(
+                target.parentPath,
+                target.slot,
+                index,
+                newChild,
+              );
+              edits = <SourceEdit>[
+                EditPlanner.insertChildEdit(
+                  parent: parent,
+                  slotName: target.slot,
+                  index: index,
+                  newChild: newChild,
+                  source: currentSource,
+                ),
+              ];
+            case 'remove':
+              final index = rng.nextInt(children.length);
+              expected = currentModel.removeChild(
+                target.parentPath,
+                target.slot,
+                index,
+              );
+              edits = <SourceEdit>[
+                EditPlanner.removeChildEdit(
+                  parent: parent,
+                  slotName: target.slot,
+                  index: index,
+                  source: currentSource,
+                ),
+              ];
+            case 'move':
+              final from = rng.nextInt(children.length);
+              var to = rng.nextInt(children.length);
+              if (from == to) {
+                to = (to + 1) % children.length;
+              }
+              expected = currentModel.moveChild(
+                target.parentPath,
+                target.slot,
+                from,
+                to,
+              );
+              edits = EditPlanner.moveChildEdits(
+                parent: parent,
+                slotName: target.slot,
+                from: from,
+                to: to,
+                source: currentSource,
+              );
+            default:
+              throw StateError('unknown op');
+          }
+
+          final newSource = applySourceEdits(currentSource, edits);
+          final reparsed = parseWidgetTree(newSource);
+          expect(
+            StructuralEquivalence.equal(reparsed, expected),
+            isTrue,
+            reason: reason,
+          );
+
+          currentSource = newSource;
+          currentModel = reparsed;
+          stepsRun++;
+          totalEditsPerformed++;
+        }
+
+        if (stepsRun > 0) {
+          totalSequences++;
+        }
+      }
+
+      expect(
+        totalSequences,
+        greaterThan(0),
+        reason: 'no structural edits ran across the corpus',
+      );
+      expect(
+        totalEditsPerformed,
+        greaterThan(iterations ~/ 2),
+        reason: 'most iterations produced 0 edits; check fixture coverage',
+      );
+    }, timeout: const Timeout(Duration(minutes: 5)));
+  });
+}
+
+List<({NodePath parentPath, String slot})> _listSlotTargets(
+  WidgetTreeModel model,
+) {
+  final out = <({NodePath parentPath, String slot})>[];
+  for (final entry in model.walk()) {
+    for (final slot in entry.node.childSlotStyles.keys) {
+      out.add((parentPath: entry.path, slot: slot));
+    }
+  }
+  return out;
+}
+
+WidgetNode _generateChild(Random rng) {
+  const span = SourceSpan(offset: 0, length: 0);
+  return WidgetNode(
+    className: 'Text',
+    properties: {
+      'data': StringLiteralValue(
+        value: 'gen_${rng.nextInt(1000000)}',
+        span: span,
+      ),
+    },
+    childSlots: const {},
+    sourceSpan: span,
+    styleHints: const StyleHints(),
+  );
 }
 
 const _generatorSpan = SourceSpan(offset: 0, length: 0);

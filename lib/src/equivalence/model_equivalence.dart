@@ -1,3 +1,4 @@
+import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
 import '../model/widget_node.dart';
 
@@ -58,8 +59,38 @@ class StructuralEquivalence {
         }
       }
     }
+    if (a.childSlotStyles.length != b.childSlotStyles.length) {
+      return false;
+    }
+    for (final entry in a.childSlotStyles.entries) {
+      final otherStyle = b.childSlotStyles[entry.key];
+      if (otherStyle == null) {
+        return false;
+      }
+      // Empty lists may differ in isMultiLine/hasTrailingComma after
+      // emptying (e.g., a multi-line `[\n  a,\n]` contracts to `[]` when
+      // the only element is removed). Skip style comparison when the
+      // corresponding slot is empty on both sides.
+      final aSlotEmpty =
+          (a.childSlots[entry.key] ?? const <WidgetNode>[]).isEmpty;
+      final bSlotEmpty =
+          (b.childSlots[entry.key] ?? const <WidgetNode>[]).isEmpty;
+      if (aSlotEmpty && bSlotEmpty) {
+        continue;
+      }
+      if (!listSlotStylesEqual(entry.value, otherStyle)) {
+        return false;
+      }
+    }
     return true;
   }
+
+  /// Compares two `ListSlotStyle`s by their structural shape only —
+  /// `hasTrailingComma` and `isMultiLine`. `bracketsSpan` is ignored
+  /// because spans shift across re-parses of edited source.
+  static bool listSlotStylesEqual(ListSlotStyle a, ListSlotStyle b) =>
+      a.hasTrailingComma == b.hasTrailingComma &&
+      a.isMultiLine == b.isMultiLine;
 
   /// Compares two `PropertyValue`s semantically (value-level), ignoring
   /// source spans.
