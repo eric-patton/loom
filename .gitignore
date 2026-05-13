@@ -1,0 +1,14 @@
+# Dart build / tool state
+.dart_tool/
+build/
+
+# Test / coverage artifacts
+coverage/
+
+# Generated docs
+doc/api/
+
+# Editor-local state
+.vscode/
+.idea/
+*.iml
