@@ -31,17 +31,35 @@ int get _propertyIterations {
 String _loadFixture(String name) =>
     File('test/fixtures/$name').readAsStringSync();
 
+/// The M1 fixture corpus. The no-op idempotence invariant runs once per
+/// entry. Adding a fixture here is the only step needed to extend coverage.
+const _m1Fixtures = <String>[
+  // Hand-crafted.
+  'simple_widget.dart',
+  'nested_widget.dart',
+  'no_trailing_commas.dart',
+  'mixed_const.dart',
+  'enum_and_bool.dart',
+  // Real-world (flutter/website @ e927ec21, see DEVLOG fixture-corpus table).
+  'real_world_layout_starter.dart',
+  'real_world_widgets_intro_tutorial.dart',
+  'real_world_cookbook_tabs.dart',
+];
+
 void main() {
   group('invariant 2 - no-op idempotence', () {
-    test('apply([], source) == source byte-for-byte', () {
-      final source = _loadFixture('simple_widget.dart');
-      final model = parseWidgetTree(source);
-      final result = applySourceEdits(source, const <SourceEdit>[]);
-      expect(result, equals(source));
-      // Guard against silently-empty parser: the round-trip is trivial
-      // when the model is empty, so verify the parser actually built something.
-      expect(model.root.className, equals('Column'));
-    });
+    for (final fixture in _m1Fixtures) {
+      test('apply([], source) == source on $fixture', () {
+        final source = _loadFixture(fixture);
+        final model = parseWidgetTree(source);
+        final result = applySourceEdits(source, const <SourceEdit>[]);
+        expect(result, equals(source));
+        // Guard against silently-empty parser: a no-op round-trip is
+        // trivially true if the parser returned nothing, so verify the
+        // parser actually built a model.
+        expect(model.root.className, isNotEmpty);
+      });
+    }
   });
 
   group('invariant 1 - round-trip stability', () {

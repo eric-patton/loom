@@ -13,16 +13,19 @@ void main() {
   });
 
   group('parseWidgetTree on simple_widget.dart', () {
+    List<WidgetNode> children(WidgetNode node) =>
+        node.childSlots['children'] ?? const <WidgetNode>[];
+
     test('root is Column', () {
       expect(model.root.className, equals('Column'));
     });
 
     test('Column has four children', () {
-      expect(model.root.children, hasLength(4));
+      expect(children(model.root), hasLength(4));
     });
 
     test('first child is const Text with the greeting', () {
-      final first = model.root.children[0];
+      final first = children(model.root)[0];
       expect(first.className, equals('Text'));
       expect(first.styleHints.hasConst, isTrue);
 
@@ -34,7 +37,7 @@ void main() {
     });
 
     test('second child is const Padding with EdgeInsets.all(8.0)', () {
-      final padding = model.root.children[1];
+      final padding = children(model.root)[1];
       expect(padding.className, equals('Padding'));
       expect(padding.styleHints.hasConst, isTrue);
       expect(padding.styleHints.hasTrailingComma, isTrue);
@@ -48,12 +51,13 @@ void main() {
       expect(pad.amount, equals(8.0));
       expect(pad.amountIsDouble, isTrue);
 
-      expect(padding.children, hasLength(1));
-      expect(padding.children[0].className, equals('Text'));
+      final childSlot = padding.childSlots['child'];
+      expect(childSlot, hasLength(1));
+      expect(childSlot!.first.className, equals('Text'));
     });
 
     test('third child uses an integer literal in EdgeInsets.all', () {
-      final padding = model.root.children[2];
+      final padding = children(model.root)[2];
       expect(padding.className, equals('Padding'));
 
       final pad = padding.properties['padding'];
@@ -65,7 +69,7 @@ void main() {
     });
 
     test('last child Text has no const keyword', () {
-      final last = model.root.children.last;
+      final last = children(model.root).last;
       expect(last.className, equals('Text'));
       expect(last.styleHints.hasConst, isFalse);
 
@@ -77,23 +81,25 @@ void main() {
     });
 
     test('inner Text inside const Padding has no explicit const', () {
-      final padding = model.root.children[1];
-      final innerText = padding.children[0];
+      final padding = children(model.root)[1];
+      final innerText = padding.childSlots['child']!.first;
       expect(innerText.className, equals('Text'));
       expect(innerText.styleHints.hasConst, isFalse);
     });
 
     test('Column has a trailing comma; single-arg Text does not', () {
       expect(model.root.styleHints.hasTrailingComma, isTrue);
-      expect(model.root.children[0].styleHints.hasTrailingComma, isFalse);
+      expect(children(model.root)[0].styleHints.hasTrailingComma, isFalse);
     });
 
     test('every node has a valid SourceSpan', () {
       final allNodes = <WidgetNode>[];
       void collect(WidgetNode node) {
         allNodes.add(node);
-        for (final child in node.children) {
-          collect(child);
+        for (final slot in node.childSlots.values) {
+          for (final child in slot) {
+            collect(child);
+          }
         }
       }
 

@@ -70,9 +70,9 @@ void _printNode(WidgetNode node, IOSink sink, String indent) {
   for (final entry in node.properties.entries) {
     sink.writeln('$indent    ${entry.key}: ${_formatValue(entry.value)}');
   }
-  if (node.children.isNotEmpty) {
-    sink.writeln('$indent    children:');
-    for (final child in node.children) {
+  for (final slotEntry in node.childSlots.entries) {
+    sink.writeln('$indent    ${slotEntry.key}:');
+    for (final child in slotEntry.value) {
       _printNode(child, sink, '$indent      ');
     }
   }
@@ -81,5 +81,10 @@ void _printNode(WidgetNode node, IOSink sink, String indent) {
 String _formatValue(PropertyValue value) => switch (value) {
       StringLiteralValue(value: final v) => "'$v'",
       NumLiteralValue(value: final v) => '$v',
+      BoolLiteralValue(value: final v) => '$v',
+      NullLiteralValue() => 'null',
       EdgeInsetsAllValue(amount: final a) => 'EdgeInsets.all($a)',
+      ColorValue(argbValue: final v) =>
+        'Color(0x${v.toRadixString(16).padLeft(8, '0').toUpperCase()})',
+      EnumReferenceValue(typeName: final t, memberName: final m) => '$t.$m',
     };

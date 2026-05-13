@@ -2,10 +2,12 @@ import 'source_span.dart';
 
 /// A literal property value attached to a `WidgetNode`'s named argument.
 ///
-/// The variants below cover what the M1 fixture needs. New fixtures (and
-/// the corpus-expansion follow-up plan) will grow this set — Color,
-/// EnumReference, EdgeInsets shapes beyond `.all`, etc. Anything outside the
-/// supported set is outside M1's modeling scope.
+/// The variants below cover the M1 surface listed in PROJECT_SPEC.md:
+/// strings, numbers, booleans, null, `EdgeInsets.all(N)`, simple
+/// `Color(0x...)` constructors, and basic prefixed identifiers like
+/// `MainAxisAlignment.center` / `Colors.blue` / `Icons.menu`. Anything
+/// outside this set is outside M1's modeling scope and will throw at
+/// parse time until M4's opaque fallback lands.
 sealed class PropertyValue {
   const PropertyValue({required this.span});
 
@@ -59,6 +61,36 @@ class NumLiteralValue extends PropertyValue {
       'NumLiteralValue($value${isDouble ? ' (double)' : ' (int)'})';
 }
 
+class BoolLiteralValue extends PropertyValue {
+  const BoolLiteralValue({required this.value, required super.span});
+
+  final bool value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BoolLiteralValue && other.value == value && other.span == span;
+
+  @override
+  int get hashCode => Object.hash(value, span);
+
+  @override
+  String toString() => 'BoolLiteralValue($value)';
+}
+
+class NullLiteralValue extends PropertyValue {
+  const NullLiteralValue({required super.span});
+
+  @override
+  bool operator ==(Object other) =>
+      other is NullLiteralValue && other.span == span;
+
+  @override
+  int get hashCode => span.hashCode;
+
+  @override
+  String toString() => 'NullLiteralValue';
+}
+
 class EdgeInsetsAllValue extends PropertyValue {
   const EdgeInsetsAllValue({
     required this.amount,
@@ -81,4 +113,53 @@ class EdgeInsetsAllValue extends PropertyValue {
 
   @override
   String toString() => 'EdgeInsetsAllValue($amount)';
+}
+
+class ColorValue extends PropertyValue {
+  const ColorValue({required this.argbValue, required super.span});
+
+  /// The integer argument to `Color(...)`, typically a 32-bit ARGB hex
+  /// literal (e.g. `0xFF000000`). We don't normalize to a Color object —
+  /// we preserve the user's integer for byte-faithful re-emission.
+  final int argbValue;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ColorValue && other.argbValue == argbValue && other.span == span;
+
+  @override
+  int get hashCode => Object.hash(argbValue, span);
+
+  @override
+  String toString() =>
+      'ColorValue(0x${argbValue.toRadixString(16).padLeft(8, '0').toUpperCase()})';
+}
+
+/// A `Prefix.member` reference — captures both true enum references
+/// (`MainAxisAlignment.center`) and static-field references that share
+/// the same syntactic shape (`Colors.blue`, `Icons.menu`,
+/// `TextDirection.ltr`). M1 makes no semantic distinction; both round-trip
+/// identically as `Prefix.member`.
+class EnumReferenceValue extends PropertyValue {
+  const EnumReferenceValue({
+    required this.typeName,
+    required this.memberName,
+    required super.span,
+  });
+
+  final String typeName;
+  final String memberName;
+
+  @override
+  bool operator ==(Object other) =>
+      other is EnumReferenceValue &&
+      other.typeName == typeName &&
+      other.memberName == memberName &&
+      other.span == span;
+
+  @override
+  int get hashCode => Object.hash(typeName, memberName, span);
+
+  @override
+  String toString() => 'EnumReferenceValue($typeName.$memberName)';
 }

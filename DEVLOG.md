@@ -9,9 +9,9 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 ## Current State
 
 **Active milestone:** M1 — Parse only
-**Last touched:** 2026-05-13 — M1 first pass against single-fixture (parser, model, CLI, no-op idempotence test green)
+**Last touched:** 2026-05-13 — M1 corpus expansion complete (5/5 hand-crafted, 3/3 real-world; multi-slot WidgetNode refactor; full M1 PropertyValue surface)
 **Blockers:** none
-**Next action:** Open M1 corpus-expansion plan — pick 4 more hand-crafted fixtures + 3 real-world Flutter files, grow PropertyValue / catalog as those fixtures demand, decide proto-opaque vs hold-the-line. M1 gate (Eric review) follows that plan.
+**Next action:** **Eric review gate.** All M1 acceptance items pass except the gate itself. After approval, open the M2 implementation plan (property edits → `SourceEdit` emission → flip the round-trip stability skip on).
 
 ---
 
@@ -80,9 +80,9 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 - [x] Dependencies installed: `analyzer`, `dart_style`, `test`, `checks`, `glados`, `path`
 - [x] CI workflow runs all three test tiers
 - [x] Round-trip property test harness stood up in `test/round_trip_test.dart`
-- [~] `loom parse <file>` CLI command implemented — works on the single M1 fixture; pending corpus expansion before this ticks fully
-- [~] Passes on 5 hand-crafted fixtures — 1 of 5 done (`test/fixtures/simple_widget.dart`)
-- [ ] Passes on 3 real-world Flutter files (record which ones)
+- [x] `loom parse <file>` CLI command implemented
+- [x] Passes on 5 hand-crafted fixtures (`simple_widget`, `nested_widget`, `no_trailing_commas`, `mixed_const`, `enum_and_bool`)
+- [x] Passes on 3 real-world Flutter files (see fixture corpus table)
 - [x] Every leaf node has valid `SourceSpan`
 - [x] Style hints captured: trailing comma presence, `const` keyword presence
 - [ ] **Gate**: reviewed by Eric before M2 begins
@@ -139,6 +139,13 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | File | Source | Lines | Exercises |
 |---|---|---|---|
 | `test/fixtures/simple_widget.dart` | hand-crafted | 23 | Column-of-Text-and-Padding, mixed `const`/non-`const`, EdgeInsets.all with both int and double literals, single-child vs list-children |
+| `test/fixtures/nested_widget.dart` | hand-crafted | 20 | 5-level Padding nesting; spans must remain valid through deep recursion |
+| `test/fixtures/no_trailing_commas.dart` | hand-crafted | 14 | No trailing commas anywhere; `hasTrailingComma` must be `false` on every node |
+| `test/fixtures/mixed_const.dart` | hand-crafted | 23 | Siblings with varying `const` presence; explicit `const` on inner widgets inside non-`const` outer; inherited `const` not promoted to inner `hasConst` |
+| `test/fixtures/enum_and_bool.dart` | hand-crafted | 36 | `BoolLiteralValue` (`debugShowCheckedModeBanner: false`), `NullLiteralValue` (`onPressed: null`), `ColorValue` (`Color(0xFF112233)`), `EnumReferenceValue` (`MainAxisAlignment.center`, `TextDirection.ltr`, `Icons.menu`); MaterialApp/Column/IconButton/FloatingActionButton |
+| `test/fixtures/real_world_layout_starter.dart` | flutter/website @ `e927ec21`, `examples/layout/base/lib/main_starter.dart` | 22 | MaterialApp + Scaffold (appBar + body) + AppBar + Center; canonical "Welcome to Flutter" |
+| `test/fixtures/real_world_widgets_intro_tutorial.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_tutorial.dart` | 39 | Multi-slot Scaffold (appBar + body + floatingActionButton); AppBar with leading + title + actions (list); IconButton + Icon + FloatingActionButton; `onPressed: null` style |
+| `test/fixtures/real_world_cookbook_tabs.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/tabs/lib/main.dart` | 39 | MaterialApp → DefaultTabController → Scaffold → AppBar.bottom = TabBar(tabs: [Tab×3]) + body = TabBarView(children: [Icon×3]); deep list-of-widgets nesting |
 
 ---
 
@@ -155,6 +162,16 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-13] M1 corpus expansion — 5+3 fixtures, multi-slot refactor, full PropertyValue surface
+**Worked on:** Closed out M1 acceptance (modulo Eric review). Refactored `WidgetNode` from a single `children: List<WidgetNode>` to `childSlots: Map<String, List<WidgetNode>>` so Scaffold/AppBar/MaterialApp's multiple widget slots can be modeled. Expanded `PropertyValue` with `BoolLiteralValue`, `NullLiteralValue`, `ColorValue`, `EnumReferenceValue` — completes the M1 surface from PROJECT_SPEC.md. Expanded `WidgetCatalog` to 17 widgets covering everything the new fixtures need. Added 4 hand-crafted edge-case fixtures (nested, no-trailing-commas, mixed-const, enum-and-bool) and 3 real-world fixtures cherry-picked from `flutter/website @ e927ec21`. The round-trip no-op idempotence test now iterates the entire 8-fixture corpus: 9 unit + 8 idempotence assertions all green, M2 stability test still skipped.
+**Learned:**
+  - **Cherry-picking M1-compatible real-world Flutter code is hard.** The vast majority of files in `flutter/samples` and `flutter/website/examples` use callbacks (`onPressed:`, `onTap:`), helper methods (`_buildSomething()`), conditional rendering (`?:`, `Theme.of(context).x.y`), or constructor calls (`BoxDecoration`, `TextStyle`) not in M1's modeling. Survey found three usable files: a "Welcome to Flutter" starter, the widgets-intro tutorial (Scaffold with multi-slot AppBar), and the cookbook tabs demo. All three pinned at SHA `e927ec21e7ed6c185ade4c0e7341c4bcaff20434` so future re-fetches reproduce.
+  - **`Scaffold(body:, appBar:)` and `AppBar(title:, leading:, actions:)` forced the multi-slot refactor.** The original single-children-slot WidgetNode model was a YAGNI choice that broke under the first real-world fixture. Lesson for future milestones: hand-crafted fixtures are insufficient validation; the corpus has to drive design pressure.
+  - **`PrefixedIdentifier` covers more than just enum references.** `Icons.menu`, `Colors.blue`, `MainAxisAlignment.center`, and `TextDirection.ltr` are all syntactically identical (`Prefix.member`) but semantically span true enums and static fields. `EnumReferenceValue` treats them uniformly; M1 makes no distinction. M2's emission and M3's AST equivalence will need to be aware of the distinction only if a future bug demands it.
+  - **`dart format` does not add or remove trailing commas.** It does reflow lines, which means a "no-trailing-commas" fixture remains no-trailing-commas after format (verified on `no_trailing_commas.dart` — format reflowed one line but didn't insert any commas).
+**Decided:** No new Settled Decisions this session. The "hold the line, don't pull M4 forward" call I made when picking real-world fixture sources is implicit in the spec milestone ordering and didn't warrant a separate ratification.
+**Next:** **Eric review gate.** When ready, open M2 implementation plan: property-edit emission, `SourceEdit` for a single literal property change, glados-driven round-trip stability test flipped on. That plan should also propose decisions for Open Question Q2 (trailing-comma detection scope — likely settled implicitly by the current per-list `hasTrailingComma` capture).
 
 ### [2026-05-13] M1 first pass — single-fixture parser + CLI + idempotence test green
 **Worked on:** M1 implementation against the single 30-line `MyHomePage` fixture per PROJECT_SPEC.md First Task. Implemented `SourceSpan`, `StyleHints`, `PropertyValue` (3 variants), `WidgetNode`, `WidgetTreeModel`, `WidgetCatalog` (Column/Text/Padding), `WidgetVisitor`, `parseWidgetTree`, `SourceEdit` + `applySourceEdits`. Wired up `lib/loom.dart` exports. Implemented `loom parse <file>`. Created the fixture. Added 9 parsing unit tests + flipped the no-op idempotence round-trip skip off. All 10 tests green, `dart analyze` clean.
@@ -181,6 +198,7 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
+- **Hand-crafted fixtures are insufficient design pressure.** The single-fixture M1 first pass shipped a single-children-slot `WidgetNode` because no fixture demanded otherwise. The first real-world fixture (`Scaffold(body:, appBar:)`) immediately broke that assumption and forced a multi-slot refactor. Future milestones should pull at least one corpus fixture into the design phase before locking the model.
 - **`parseString` does not resolve types, so constructor calls without `const`/`new` come back as `MethodInvocation`, not `InstanceCreationExpression`.** This is the canonical shape: `Column(...)` → `MethodInvocation(methodName=Column)`; `const Column(...)` → `InstanceCreationExpression`. Similarly `EdgeInsets.all(8.0)` → `MethodInvocation(target=EdgeInsets, methodName=all)`. The widget visitor normalizes both AST shapes through `_CallInfo` in `lib/src/parsing/widget_visitor.dart`. If we ever switch to a resolved analyzer context (e.g. for cross-file work in M5+), this normalization can collapse to just the `InstanceCreationExpression` path.
 - **`test/fixtures/**` is excluded from `dart analyze`.** Fixtures are Flutter source files we parse from a string at test time. They reference packages (Flutter) Loom deliberately does not depend on, so `dart analyze` would flood with `uri_does_not_exist` and `undefined_class` errors. The exclusion lives in `analysis_options.yaml`. If you add a new fixture directory, exclude it the same way.
 - **analyzer 6.5.0–7.2.x are broken on current Dart SDKs.** They pull in `package:macros` which depends on `_macros` from the SDK, which the SDK no longer ships. Use `analyzer: ^7.3.0` (and `dart_style: ^3.0.0` so it picks a compatible analyzer). If you see a `version solving failed` error mentioning `_macros 0.x.y from sdk`, this is what you're looking at.
