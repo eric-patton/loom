@@ -5,7 +5,11 @@
 /// edits back. See PROJECT_SPEC.md for the contract and invariants.
 library;
 
+export 'src/emission/edit_planner.dart';
+export 'src/emission/property_serializer.dart';
 export 'src/emission/source_edit.dart';
+export 'src/equivalence/model_equivalence.dart';
+export 'src/model/node_path.dart';
 export 'src/model/property_value.dart';
 export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';

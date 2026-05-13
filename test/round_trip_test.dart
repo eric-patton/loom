@@ -2,37 +2,35 @@
 ///
 /// Two invariants from PROJECT_SPEC.md North Star:
 ///   1. Round-trip stability: parse(apply(emit(edits), source)) is
-///      AST-equivalent to the model after those edits.
+///      structurally equivalent (Q3) to the model after those edits.
 ///   2. No-op idempotence: apply([], source) == source byte-for-byte.
 ///
-/// Both invariants are encoded as test groups below. Tests are skipped until
-/// the kernel components they require land (M1 = parser, M2 = emission).
-/// Flipping a skip on is a milestone deliverable — see the M1/M2 checklists
-/// in DEVLOG.md.
+/// Both invariants are encoded as test groups below.
 library;
 
 import 'dart:io';
+import 'dart:math';
 
 import 'package:loom/loom.dart';
 import 'package:test/test.dart';
 
-/// How many randomized property-test iterations to run.
+/// How many randomized property-edit iterations to run for invariant 1.
 ///
-/// Local default: 100 (fast feedback). CI sets LOOM_PROPERTY_ITERATIONS=10000
-/// to satisfy the global gate (PROJECT_SPEC.md Testing Strategy).
+/// Local default: 1,000 (M2 acceptance threshold). CI sets
+/// LOOM_PROPERTY_ITERATIONS=10000 to satisfy the global gate
+/// (PROJECT_SPEC.md Testing Strategy).
 int get _propertyIterations {
   final raw = Platform.environment['LOOM_PROPERTY_ITERATIONS'];
   if (raw == null) {
-    return 100;
+    return 1000;
   }
-  return int.tryParse(raw) ?? 100;
+  return int.tryParse(raw) ?? 1000;
 }
 
 String _loadFixture(String name) =>
     File('test/fixtures/$name').readAsStringSync();
 
-/// The M1 fixture corpus. The no-op idempotence invariant runs once per
-/// entry. Adding a fixture here is the only step needed to extend coverage.
+/// The M1 fixture corpus.
 const _m1Fixtures = <String>[
   // Hand-crafted.
   'simple_widget.dart',
@@ -45,6 +43,14 @@ const _m1Fixtures = <String>[
   'real_world_widgets_intro_tutorial.dart',
   'real_world_cookbook_tabs.dart',
 ];
+
+class _CachedFixture {
+  _CachedFixture(this.name, this.source, this.model);
+
+  final String name;
+  final String source;
+  final WidgetTreeModel model;
+}
 
 void main() {
   group('invariant 2 - no-op idempotence', () {
@@ -62,23 +68,144 @@ void main() {
     }
   });
 
-  group('invariant 1 - round-trip stability', () {
-    test(
-      'parse(apply(emit(M, edits), source)) is AST-equivalent to M edited',
-      () {
-        final iters = _propertyIterations;
-        expect(iters, greaterThan(0));
-        // TODO(M2): replace stub with glados property test:
-        //   Glados<EditSequence>().test('round trip', (edits) {
-        //     final model = WidgetTreeParser.parse(source);
-        //     final edited = applyToModel(model, edits);
-        //     final newSource = applyEdits(source, EditPlanner.plan(model, edited));
-        //     final reparsed = WidgetTreeParser.parse(newSource);
-        //     expect(AstEquivalence.compare(reparsed, edited), isTrue);
-        //   });
-        fail('M2 not yet implemented');
-      },
-      skip: 'enable in M2: requires emission + AST equivalence',
-    );
+  group('invariant 1 - round-trip stability under property edits', () {
+    late final List<_CachedFixture> fixtures;
+
+    setUpAll(() {
+      fixtures = [
+        for (final name in _m1Fixtures)
+          () {
+            final source = _loadFixture(name);
+            return _CachedFixture(name, source, parseWidgetTree(source));
+          }(),
+      ];
+    });
+
+    test('random property edits round-trip to equivalent models', () {
+      // Deterministic seed so CI failures reproduce locally.
+      final rng = Random(0x10AD);
+      final iterations = _propertyIterations;
+      var totalEdits = 0;
+
+      for (var i = 0; i < iterations; i++) {
+        final fixture = fixtures[rng.nextInt(fixtures.length)];
+        final targets = fixture.model
+            .walk()
+            .where((entry) => entry.node.properties.isNotEmpty)
+            .toList();
+        if (targets.isEmpty) {
+          continue;
+        }
+
+        final target = targets[rng.nextInt(targets.length)];
+        final propNames = target.node.properties.keys.toList();
+        final propName = propNames[rng.nextInt(propNames.length)];
+        final oldValue = target.node.properties[propName]!;
+        final newValue = _generateValue(rng);
+
+        final expected = fixture.model.withProperty(
+          target.path,
+          propName,
+          newValue,
+        );
+
+        final edit = EditPlanner.propertyEdit(
+          oldValue: oldValue,
+          newValue: newValue,
+        );
+        final newSource = applySourceEdits(fixture.source, [edit]);
+
+        final reparsed = parseWidgetTree(newSource);
+
+        final reason = 'iteration $i: fixture=${fixture.name} '
+            'path=${target.path} prop=$propName '
+            'old=$oldValue new=$newValue';
+
+        // Q3 invariant: structurally equivalent.
+        expect(
+          StructuralEquivalence.equal(reparsed, expected),
+          isTrue,
+          reason: reason,
+        );
+
+        // Minimal-diff invariant: prefix and suffix unchanged.
+        final prefixOld = fixture.source.substring(0, oldValue.span.offset);
+        final prefixNew = newSource.substring(0, oldValue.span.offset);
+        expect(prefixNew, equals(prefixOld), reason: 'prefix; $reason');
+
+        final suffixOld = fixture.source.substring(
+          oldValue.span.offset + oldValue.span.length,
+        );
+        final suffixNew = newSource.substring(
+          oldValue.span.offset + edit.replacement.length,
+        );
+        expect(suffixNew, equals(suffixOld), reason: 'suffix; $reason');
+
+        totalEdits++;
+      }
+
+      expect(
+        totalEdits,
+        greaterThan(0),
+        reason: 'no editable property was found across the entire corpus',
+      );
+    }, timeout: const Timeout(Duration(minutes: 5)));
   });
+}
+
+const _generatorSpan = SourceSpan(offset: 0, length: 0);
+const _stringChars = 'abcdefghijklmnopqrstuvwxyz0123456789 ';
+
+PropertyValue _generateValue(Random rng) {
+  final variant = rng.nextInt(8);
+  switch (variant) {
+    case 0:
+      return StringLiteralValue(
+        value: _randomString(rng),
+        span: _generatorSpan,
+      );
+    case 1:
+      return NumLiteralValue(
+        value: rng.nextInt(1000),
+        isDouble: false,
+        span: _generatorSpan,
+      );
+    case 2:
+      return NumLiteralValue(
+        value: rng.nextDouble() * 100,
+        isDouble: true,
+        span: _generatorSpan,
+      );
+    case 3:
+      return BoolLiteralValue(value: rng.nextBool(), span: _generatorSpan);
+    case 4:
+      return const NullLiteralValue(span: _generatorSpan);
+    case 5:
+      return EdgeInsetsAllValue(
+        amount: rng.nextInt(50),
+        amountIsDouble: rng.nextBool(),
+        span: _generatorSpan,
+      );
+    case 6:
+      return ColorValue(
+        argbValue: 0xFF000000 | rng.nextInt(0x1000000),
+        span: _generatorSpan,
+      );
+    default:
+      return EnumReferenceValue(
+        typeName: 'GenType${rng.nextInt(10)}',
+        memberName: 'member${rng.nextInt(10)}',
+        span: _generatorSpan,
+      );
+  }
+}
+
+String _randomString(Random rng) {
+  final length = rng.nextInt(20);
+  return String.fromCharCodes(
+    List<int>.generate(
+      length,
+      (_) => _stringChars.codeUnitAt(rng.nextInt(_stringChars.length)),
+    ),
+  );
 }

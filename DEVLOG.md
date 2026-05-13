@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M1 — Parse only
-**Last touched:** 2026-05-13 — M1 corpus expansion complete (5/5 hand-crafted, 3/3 real-world; multi-slot WidgetNode refactor; full M1 PropertyValue surface)
+**Active milestone:** M2 — Property edit
+**Last touched:** 2026-05-13 — M2 acceptance hit. Both spec invariants enforced: idempotence on every fixture, stability over 1,000 random property edits with minimal-diff verification (10,000-iter mode also passes locally). 48 tests green, no skips remain.
 **Blockers:** none
-**Next action:** **Eric review gate.** All M1 acceptance items pass except the gate itself. After approval, open the M2 implementation plan (property edits → `SourceEdit` emission → flip the round-trip stability skip on).
+**Next action:** **Eric review gate for M2.** Spot-check spans/serialization, then M3 implementation plan (structural edits — child insert/remove/reorder).
 
 ---
 
@@ -28,6 +28,18 @@ Decisions that have been made and should not be re-opened without explicit cause
 **Rationale:** Why this over alternatives. Cite the trade-off explicitly.
 **Revisit if:** Conditions under which this should be re-opened.
 ```
+
+### [2026-05-13] Q2 — Trailing-comma detection scope is per-list
+**Question:** PROJECT_SPEC.md Open Question 2 — should trailing-comma detection happen per-list, per-file, or per-line?
+**Decision:** Per-list. Each `WidgetNode.styleHints.hasTrailingComma` reflects the trailing-comma state of that specific constructor call's argument list, captured at parse time from the token immediately preceding the `rightParenthesis`.
+**Rationale:** Spec default. Implicit since M1 first-pass landed — the visitor's `_hintsFromCall` already reads the per-list state. Per-list naturally preserves heterogeneous style across a file: M3's structural edits can grow a list while honoring its own established trailing-comma style without disturbing siblings that disagree.
+**Revisit if:** A future Flutter style consensus shifts toward project-wide enforcement and our per-list memory becomes load-bearing in a way that resists style migrations.
+
+### [2026-05-13] Q3 — Equivalence oracle implemented at the model level
+**Question:** PROJECT_SPEC.md Open Question 3 was ratified earlier at "structural, trivia-blind, const-aware" and pointed to `lib/src/equivalence/ast_equivalence.dart`. Implement at the analyzer `CompilationUnit` level or at the `WidgetTreeModel` level?
+**Decision:** Model level. Implement `StructuralEquivalence.equal(WidgetTreeModel, WidgetTreeModel)` in `lib/src/equivalence/model_equivalence.dart` and leave `ast_equivalence.dart` deleted / unused. The model already excludes trivia by construction (no whitespace, no comments) and captures `const`/`new` keywords in `StyleHints`, so the spec's described equivalence is exactly what recursive field-comparison gives.
+**Rationale:** Less code, faster, sufficient for the M2 round-trip property test's oracle role. Going through the analyzer AST would mean re-implementing trivia-skipping and structural normalization that our model already inherently provides. The spec's file path `ast_equivalence.dart` reflected the spec author's mental model of the comparison sitting at the analyzer layer; in practice that layer doesn't earn its keep.
+**Revisit if:** Some future invariant needs to distinguish two ASTs that produce the same model (e.g. semantically-equivalent restructurings that the model collapses).
 
 ### [2026-05-13] Q1 — Preserve `const` and `new` keywords on the node
 **Question:** Should the model carry `const`/`new` keywords as node-level metadata, or recompute them on emit?
@@ -60,8 +72,8 @@ Decisions that have been made and should not be re-opened without explicit cause
 Mirrors the spec's Open Questions section. Update the status field as each resolves.
 
 1. **`const` and `new` keyword handling** — **Settled** [2026-05-13]: preserve on the node via `StyleHints`. See Settled Decisions.
-2. **Trailing comma detection scope** — _Unresolved (spec default: per-list)_ — deferred to M3
-3. **AST equivalence definition** — **Settled** [2026-05-13]: structural, trivia-blind, const-aware. See Settled Decisions.
+2. **Trailing comma detection scope** — **Settled** [2026-05-13]: per-list (captured per-`WidgetNode` in `StyleHints.hasTrailingComma`). See Settled Decisions.
+3. **AST equivalence definition** — **Settled** [2026-05-13]: structural, trivia-blind, const-aware, implemented at the model level. See Settled Decisions.
 4. **Parse errors in the source** — _Unresolved (spec default: partial model + unparseable flag)_ — deferred to M4
 5. **Imports and top-level declarations** — **Settled** [2026-05-13]: not modeled; preserved by non-touching. See Settled Decisions.
 
@@ -85,15 +97,15 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 - [x] Passes on 3 real-world Flutter files (see fixture corpus table)
 - [x] Every leaf node has valid `SourceSpan`
 - [x] Style hints captured: trailing comma presence, `const` keyword presence
-- [ ] **Gate**: reviewed by Eric before M2 begins
+- [x] **Gate**: reviewed by Eric before M2 begins — approved 2026-05-13
 
 ### M2 — Property edit
 
-- [ ] Single literal property change emits valid `SourceEdit`
-- [ ] Round-trip property test passes 1,000 random property edits on M1 fixtures
-- [ ] `git diff` after any single edit shows exactly one changed line / contiguous range
-- [ ] No whitespace, comment, or blank-line changes outside the edited token
-- [ ] `apply([], source) == source` byte-equal, always
+- [x] Single literal property change emits valid `SourceEdit`
+- [x] Round-trip property test passes 1,000 random property edits on M1 fixtures (also passes at 10,000 locally)
+- [x] `git diff` after any single edit shows exactly one changed line / contiguous range (verified per-iteration via prefix+suffix byte-equality)
+- [x] No whitespace, comment, or blank-line changes outside the edited token
+- [x] `apply([], source) == source` byte-equal, always
 - [ ] **Gate**: reviewed by Eric before M3 begins
 
 ### M3 — Structural edits
@@ -162,6 +174,23 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-13] M2 — property edits, round-trip stability green
+**Worked on:** Eric approved the M1 gate; opened M2. Implemented the property-edit write path end-to-end:
+  - `StructuralEquivalence` (model-level oracle for Q3) in `lib/src/equivalence/model_equivalence.dart`
+  - `NodePath` / `nodeAt` / `withProperty` / `walk` extensions in `lib/src/model/node_path.dart`
+  - `PropertySerializer.serialize(PropertyValue)` in `lib/src/emission/property_serializer.dart`
+  - `EditPlanner.propertyEdit(oldValue, newValue) -> SourceEdit` in `lib/src/emission/edit_planner.dart`
+  - `lib/loom.dart` exports updated
+  - Full unit tests in `test/equivalence_test.dart` (13 cases) and `test/emission_test.dart` (17 cases)
+  - The round-trip stability test in `test/round_trip_test.dart` is now off-skip: deterministic `Random(0x10AD)` drives 1,000 random property edits across the 8-fixture corpus, verifying both Q3 equivalence and the minimal-diff invariant (prefix and suffix byte-equality) per iteration. Local default raised to 1,000 from 100. CI's `LOOM_PROPERTY_ITERATIONS=10000` also passes locally in well under a second.
+**Learned:**
+  - **Glados wasn't the right hammer.** It's designed for type-driven generators where the input type doesn't depend on the fixture. Random property edits are fundamentally fixture-bound (you pick a node IN a fixture, then a property OF that node), so a hand-rolled loop with a deterministic seed is simpler and gives better failure reproduction. Kept the `glados` dep for the day a M3+ test fits the type-driven pattern (e.g., generated `EditSequence`s).
+  - **`prefer_final_locals` flags pattern variables in switch-expression arms.** `(StringLiteralValue a, StringLiteralValue b) => ...` triggers the lint; `(final StringLiteralValue a, final StringLiteralValue b) => ...` is required. The Dart team's guidance is that pattern-bound names are locals like any other.
+  - **The minimal-diff invariant is best checked at byte level, not line level.** The spec says "git diff shows one changed line"; in practice asserting `source[0..editOffset] == newSource[0..editOffset]` and the analogous suffix is strictly stronger and catches issues a line-level check would miss (e.g., whitespace creeping in just past the edit boundary).
+  - **Cross-variant property replacement parses cleanly.** A randomly-generated `NullLiteralValue` replacing an `EdgeInsetsAllValue` produces a Dart file that still parses — the analyzer's `parseString` doesn't type-check, so `padding: null` is syntactically valid even if semantically a type error. The property test exercises every variant against every modeled property, and round-trip stability holds throughout.
+**Decided:** Q2 — trailing-comma per-list (already implicit, now logged). Q3 — equivalence at the model level in `model_equivalence.dart`, with `ast_equivalence.dart` left vestigial (could be deleted). Both as Settled Decisions.
+**Next:** **Eric review gate for M2.** After approval, open M3 implementation plan: structural edits (insert/remove/reorder children), trailing-comma style preservation per Q2's resolution, list-style detection (single-line vs multi-line — new territory).
 
 ### [2026-05-13] M1 corpus expansion — 5+3 fixtures, multi-slot refactor, full PropertyValue surface
 **Worked on:** Closed out M1 acceptance (modulo Eric review). Refactored `WidgetNode` from a single `children: List<WidgetNode>` to `childSlots: Map<String, List<WidgetNode>>` so Scaffold/AppBar/MaterialApp's multiple widget slots can be modeled. Expanded `PropertyValue` with `BoolLiteralValue`, `NullLiteralValue`, `ColorValue`, `EnumReferenceValue` — completes the M1 surface from PROJECT_SPEC.md. Expanded `WidgetCatalog` to 17 widgets covering everything the new fixtures need. Added 4 hand-crafted edge-case fixtures (nested, no-trailing-commas, mixed-const, enum-and-bool) and 3 real-world fixtures cherry-picked from `flutter/website @ e927ec21`. The round-trip no-op idempotence test now iterates the entire 8-fixture corpus: 9 unit + 8 idempotence assertions all green, M2 stability test still skipped.
