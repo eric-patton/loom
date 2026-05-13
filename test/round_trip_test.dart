@@ -13,9 +13,8 @@ library;
 
 import 'dart:io';
 
+import 'package:loom/loom.dart';
 import 'package:test/test.dart';
-
-// TODO(M1): import 'package:loom/loom.dart';
 
 /// How many randomized property-test iterations to run.
 ///
@@ -34,19 +33,15 @@ String _loadFixture(String name) =>
 
 void main() {
   group('invariant 2 - no-op idempotence', () {
-    test(
-      'apply([], source) == source byte-for-byte',
-      () {
-        final source = _loadFixture('simple_widget.dart');
-        expect(source, isNotEmpty);
-        // TODO(M1): replace stub with:
-        //   final model = WidgetTreeParser.parse(source);
-        //   final edits = EditPlanner.plan(model, model);  // identity edit
-        //   expect(applyEdits(source, edits), equals(source));
-        fail('M1 not yet implemented');
-      },
-      skip: 'enable in M1: requires parser + identity emit',
-    );
+    test('apply([], source) == source byte-for-byte', () {
+      final source = _loadFixture('simple_widget.dart');
+      final model = parseWidgetTree(source);
+      final result = applySourceEdits(source, const <SourceEdit>[]);
+      expect(result, equals(source));
+      // Guard against silently-empty parser: the round-trip is trivial
+      // when the model is empty, so verify the parser actually built something.
+      expect(model.root.className, equals('Column'));
+    });
   });
 
   group('invariant 1 - round-trip stability', () {

@@ -1,15 +1,85 @@
 import 'dart:io';
 
+import 'package:loom/loom.dart';
+
 void main(List<String> args) {
   if (args.isEmpty || args.first == '--help' || args.first == '-h') {
-    stdout
-      ..writeln('loom - two-way Flutter widget kernel')
-      ..writeln('')
-      ..writeln('Usage:')
-      ..writeln(
-          '  loom parse <file>   (not yet implemented; see PROJECT_SPEC.md M1)');
+    _printUsage(stdout);
     return;
   }
-  stderr.writeln('loom: command not yet implemented (M1 in progress).');
+
+  final command = args.first;
+  final rest = args.sublist(1);
+
+  if (command == 'parse') {
+    exitCode = _runParse(rest);
+    return;
+  }
+
+  stderr.writeln('loom: unknown command "$command"');
+  _printUsage(stderr);
   exitCode = 1;
 }
+
+void _printUsage(IOSink sink) {
+  sink
+    ..writeln('loom - two-way Flutter widget kernel')
+    ..writeln('')
+    ..writeln('Usage:')
+    ..writeln(
+      '  loom parse <file>   read a Dart source file and print its widget tree',
+    );
+}
+
+int _runParse(List<String> args) {
+  if (args.isEmpty) {
+    stderr.writeln('loom parse: missing <file> argument');
+    _printUsage(stderr);
+    return 1;
+  }
+  final path = args.first;
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln('loom parse: file not found: $path');
+    return 1;
+  }
+  final source = file.readAsStringSync();
+  try {
+    final model = parseWidgetTree(source);
+    _printTree(model, stdout);
+    return 0;
+  } on ParseException catch (e) {
+    stderr.writeln('loom parse: ${e.message}');
+    return 1;
+  }
+}
+
+void _printTree(WidgetTreeModel model, IOSink sink) {
+  sink.writeln('WidgetTreeModel(rootClass=${model.root.className})');
+  _printNode(model.root, sink, '  ');
+}
+
+void _printNode(WidgetNode node, IOSink sink, String indent) {
+  final flags = <String>[
+    '@${node.sourceSpan.offset}+${node.sourceSpan.length}',
+    if (node.styleHints.hasConst) 'const',
+    if (node.styleHints.hasNew) 'new',
+    if (node.styleHints.hasTrailingComma) 'trailingComma',
+  ];
+  sink.writeln('$indent${node.className}  [${flags.join(', ')}]');
+  for (final entry in node.properties.entries) {
+    sink.writeln('$indent    ${entry.key}: ${_formatValue(entry.value)}');
+  }
+  if (node.children.isNotEmpty) {
+    sink.writeln('$indent    children:');
+    for (final child in node.children) {
+      _printNode(child, sink, '$indent      ');
+    }
+  }
+}
+
+String _formatValue(PropertyValue value) => switch (value) {
+      StringLiteralValue(value: final v) => "'$v'",
+      NumLiteralValue(value: final v) => '$v',
+      EdgeInsetsAllValue(amount: final a) => 'EdgeInsets.all($a)',
+    };

@@ -1,6 +1,11 @@
 include: package:lints/recommended.yaml
 
 analyzer:
+  # Fixtures are Flutter source files we parse FROM A STRING at test time.
+  # They're not part of the kernel's compile target and reference packages
+  # (Flutter) we deliberately don't depend on. Exclude them from analysis.
+  exclude:
+    - test/fixtures/**
   language:
     strict-casts: true
     strict-inference: true

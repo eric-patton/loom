@@ -5,10 +5,10 @@
 /// edits back. See PROJECT_SPEC.md for the contract and invariants.
 library;
 
-// TODO(M1): export 'src/parsing/widget_tree_parser.dart';
-// TODO(M1): export 'src/model/widget_node.dart';
-// TODO(M1): export 'src/model/property_value.dart';
-// TODO(M1): export 'src/model/source_span.dart';
-// TODO(M1): export 'src/model/style_hints.dart';
-// TODO(M2): export 'src/emission/source_edit.dart';
-// TODO(M4): export 'src/model/opaque_node.dart';
+export 'src/emission/source_edit.dart';
+export 'src/model/property_value.dart';
+export 'src/model/source_span.dart';
+export 'src/model/style_hints.dart';
+export 'src/model/widget_node.dart';
+export 'src/parsing/widget_tree_parser.dart';
+export 'src/parsing/widget_visitor.dart' show ParseException;
