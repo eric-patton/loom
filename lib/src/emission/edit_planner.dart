@@ -80,48 +80,49 @@ class EditPlanner {
       );
     }
     if (index == 0) {
-      // First: target + the separator to children[1]. If a comment lives
-      // in that separator, trim the deletion to stop at the comment so
-      // the comment is preserved (Global Acceptance #4).
+      // First: target + the separator to children[1]. Always delete the
+      // full element; trim only the SEPARATOR zone (after the element)
+      // if it contains a comment, so the comment is preserved.
       final next = children[1];
-      final end = _trimEndBeforeComment(
-        target.sourceSpan.offset,
+      final separatorEnd = _trimEndBeforeComment(
+        target.sourceSpan.end,
         next.sourceSpan.offset,
         source,
       );
       return SourceEdit(
         offset: target.sourceSpan.offset,
-        length: end - target.sourceSpan.offset,
+        length: separatorEnd - target.sourceSpan.offset,
         replacement: '',
       );
     }
     if (index == children.length - 1) {
-      // Last: preceding separator + target. Any list trailing-comma stays.
-      // Trailing comments on the previous element are preserved by
-      // starting the deletion *after* any comment in the separator.
+      // Last: preceding separator + target. Trim only the separator
+      // zone (before the element) — element source bytes are not
+      // scanned for comments, so `//` or `/*` inside a string literal
+      // inside the element doesn't confuse the trim.
       final prev = children[index - 1];
-      final start = _trimStartAfterComment(
+      final separatorStart = _trimStartAfterComment(
         prev.sourceSpan.end,
-        target.sourceSpan.end,
+        target.sourceSpan.offset,
         source,
       );
       return SourceEdit(
-        offset: start,
-        length: target.sourceSpan.end - start,
+        offset: separatorStart,
+        length: target.sourceSpan.end - separatorStart,
         replacement: '',
       );
     }
     // Middle: target + the separator to the following element. Same
-    // comment-preservation trim as the first-element case.
+    // separator-only trim as the first-element case.
     final next = children[index + 1];
-    final end = _trimEndBeforeComment(
-      target.sourceSpan.offset,
+    final separatorEnd = _trimEndBeforeComment(
+      target.sourceSpan.end,
       next.sourceSpan.offset,
       source,
     );
     return SourceEdit(
       offset: target.sourceSpan.offset,
-      length: end - target.sourceSpan.offset,
+      length: separatorEnd - target.sourceSpan.offset,
       replacement: '',
     );
   }

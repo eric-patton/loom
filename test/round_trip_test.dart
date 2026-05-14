@@ -14,17 +14,19 @@ import 'dart:math';
 import 'package:loom/loom.dart';
 import 'package:test/test.dart';
 
-/// How many randomized property-edit iterations to run for invariant 1.
+/// How many randomized iterations to run *per fixture* for the invariant-1
+/// property and structural tests.
 ///
-/// Local default: 1,000 (M2 acceptance threshold). CI sets
-/// LOOM_PROPERTY_ITERATIONS=10000 to satisfy the global gate
-/// (PROJECT_SPEC.md Testing Strategy).
+/// Local default: 100 per fixture (~1,000 total across the corpus). CI
+/// sets `LOOM_PROPERTY_ITERATIONS=10000`, matching the spec's
+/// "10,000 iterations per fixture per run" gate (PROJECT_SPEC.md
+/// "Testing Strategy" / Global Acceptance #2).
 int get _propertyIterations {
   final raw = Platform.environment['LOOM_PROPERTY_ITERATIONS'];
   if (raw == null) {
-    return 1000;
+    return 100;
   }
-  return int.tryParse(raw) ?? 1000;
+  return int.tryParse(raw) ?? 100;
 }
 
 String _loadFixture(String name) =>
@@ -91,8 +93,9 @@ void main() {
       final iterations = _propertyIterations;
       var totalEdits = 0;
 
-      for (var i = 0; i < iterations; i++) {
-        final fixture = fixtures[rng.nextInt(fixtures.length)];
+      // Iterate PER FIXTURE so every file gets `iterations` random edits.
+      // (Spec: "10,000 iterations per fixture per run".)
+      for (final fixture in fixtures) {
         final targets = fixture.model
             .walk()
             .where((entry) => entry.node is WidgetNode)
@@ -109,58 +112,60 @@ void main() {
           continue;
         }
 
-        final target = targets[rng.nextInt(targets.length)];
-        // Exclude opaque properties from random selection.
-        final editableNames = target.node.properties.entries
-            .where((e) => e.value is! OpaquePropertyValue)
-            .map((e) => e.key)
-            .toList();
-        if (editableNames.isEmpty) {
-          continue;
+        for (var i = 0; i < iterations; i++) {
+          final target = targets[rng.nextInt(targets.length)];
+          // Exclude opaque properties from random selection.
+          final editableNames = target.node.properties.entries
+              .where((e) => e.value is! OpaquePropertyValue)
+              .map((e) => e.key)
+              .toList();
+          if (editableNames.isEmpty) {
+            continue;
+          }
+          final propName = editableNames[rng.nextInt(editableNames.length)];
+          final oldValue = target.node.properties[propName]!;
+          final newValue = _generateValue(rng);
+
+          final expected = fixture.model.withProperty(
+            target.path,
+            propName,
+            newValue,
+          );
+
+          final edit = EditPlanner.propertyEdit(
+            oldValue: oldValue,
+            newValue: newValue,
+          );
+          final newSource = applySourceEdits(fixture.source, [edit]);
+
+          final reparsed = parseWidgetTree(newSource);
+
+          final reason = 'iteration $i: fixture=${fixture.name} '
+              'path=${target.path} prop=$propName '
+              'old=$oldValue new=$newValue';
+
+          // Q3 invariant: structurally equivalent.
+          expect(
+            StructuralEquivalence.equal(reparsed, expected),
+            isTrue,
+            reason: reason,
+          );
+
+          // Minimal-diff invariant: prefix and suffix unchanged.
+          final prefixOld = fixture.source.substring(0, oldValue.span.offset);
+          final prefixNew = newSource.substring(0, oldValue.span.offset);
+          expect(prefixNew, equals(prefixOld), reason: 'prefix; $reason');
+
+          final suffixOld = fixture.source.substring(
+            oldValue.span.offset + oldValue.span.length,
+          );
+          final suffixNew = newSource.substring(
+            oldValue.span.offset + edit.replacement.length,
+          );
+          expect(suffixNew, equals(suffixOld), reason: 'suffix; $reason');
+
+          totalEdits++;
         }
-        final propName = editableNames[rng.nextInt(editableNames.length)];
-        final oldValue = target.node.properties[propName]!;
-        final newValue = _generateValue(rng);
-
-        final expected = fixture.model.withProperty(
-          target.path,
-          propName,
-          newValue,
-        );
-
-        final edit = EditPlanner.propertyEdit(
-          oldValue: oldValue,
-          newValue: newValue,
-        );
-        final newSource = applySourceEdits(fixture.source, [edit]);
-
-        final reparsed = parseWidgetTree(newSource);
-
-        final reason = 'iteration $i: fixture=${fixture.name} '
-            'path=${target.path} prop=$propName '
-            'old=$oldValue new=$newValue';
-
-        // Q3 invariant: structurally equivalent.
-        expect(
-          StructuralEquivalence.equal(reparsed, expected),
-          isTrue,
-          reason: reason,
-        );
-
-        // Minimal-diff invariant: prefix and suffix unchanged.
-        final prefixOld = fixture.source.substring(0, oldValue.span.offset);
-        final prefixNew = newSource.substring(0, oldValue.span.offset);
-        expect(prefixNew, equals(prefixOld), reason: 'prefix; $reason');
-
-        final suffixOld = fixture.source.substring(
-          oldValue.span.offset + oldValue.span.length,
-        );
-        final suffixNew = newSource.substring(
-          oldValue.span.offset + edit.replacement.length,
-        );
-        expect(suffixNew, equals(suffixOld), reason: 'suffix; $reason');
-
-        totalEdits++;
       }
 
       expect(
@@ -168,7 +173,7 @@ void main() {
         greaterThan(0),
         reason: 'no editable property was found across the entire corpus',
       );
-    }, timeout: const Timeout(Duration(minutes: 5)));
+    }, timeout: const Timeout(Duration(minutes: 10)));
   });
 
   group('invariant 1 - round-trip stability under structural edits', () {
@@ -190,111 +195,116 @@ void main() {
       var totalSequences = 0;
       var totalEditsPerformed = 0;
 
-      for (var i = 0; i < iterations; i++) {
-        final fixture = fixtures[rng.nextInt(fixtures.length)];
-        var currentSource = fixture.source;
-        var currentModel = fixture.model;
+      // Iterate PER FIXTURE so every file gets `iterations` random
+      // edit sequences (each up to 10 mixed structural edits).
+      for (final initialFixture in fixtures) {
+        for (var i = 0; i < iterations; i++) {
+          final fixture = initialFixture;
+          var currentSource = fixture.source;
+          var currentModel = fixture.model;
 
-        final sequenceLength = 1 + rng.nextInt(10);
-        var stepsRun = 0;
+          final sequenceLength = 1 + rng.nextInt(10);
+          var stepsRun = 0;
 
-        for (var step = 0; step < sequenceLength; step++) {
-          final targets = _listSlotTargets(currentModel);
-          if (targets.isEmpty) {
-            break;
-          }
-          final target = targets[rng.nextInt(targets.length)];
-          final parent = currentModel.nodeAt(target.parentPath)! as WidgetNode;
-          final children =
-              parent.childSlots[target.slot] ?? const <ModelNode>[];
+          for (var step = 0; step < sequenceLength; step++) {
+            final targets = _listSlotTargets(currentModel);
+            if (targets.isEmpty) {
+              break;
+            }
+            final target = targets[rng.nextInt(targets.length)];
+            final parent =
+                currentModel.nodeAt(target.parentPath)! as WidgetNode;
+            final children =
+                parent.childSlots[target.slot] ?? const <ModelNode>[];
 
-          final ops = <String>[
-            'insert',
-            if (children.isNotEmpty) 'remove',
-            if (children.length >= 2) 'move',
-          ];
-          final op = ops[rng.nextInt(ops.length)];
+            final ops = <String>[
+              'insert',
+              if (children.isNotEmpty) 'remove',
+              if (children.length >= 2) 'move',
+            ];
+            final op = ops[rng.nextInt(ops.length)];
 
-          final reason = 'iter $i step $step: fixture=${fixture.name} '
-              'path=${target.parentPath} slot=${target.slot} op=$op '
-              '(children.length=${children.length})';
+            final reason = 'iter $i step $step: fixture=${fixture.name} '
+                'path=${target.parentPath} slot=${target.slot} op=$op '
+                '(children.length=${children.length})';
 
-          WidgetTreeModel expected;
-          List<SourceEdit> edits;
+            WidgetTreeModel expected;
+            List<SourceEdit> edits;
 
-          switch (op) {
-            case 'insert':
-              final index = rng.nextInt(children.length + 1);
-              final newChild = _generateChild(rng);
-              expected = currentModel.insertChild(
-                target.parentPath,
-                target.slot,
-                index,
-                newChild,
-              );
-              edits = <SourceEdit>[
-                EditPlanner.insertChildEdit(
+            switch (op) {
+              case 'insert':
+                final index = rng.nextInt(children.length + 1);
+                final newChild = _generateChild(rng);
+                expected = currentModel.insertChild(
+                  target.parentPath,
+                  target.slot,
+                  index,
+                  newChild,
+                );
+                edits = <SourceEdit>[
+                  EditPlanner.insertChildEdit(
+                    parent: parent,
+                    slotName: target.slot,
+                    index: index,
+                    newChild: newChild,
+                    source: currentSource,
+                  ),
+                ];
+              case 'remove':
+                final index = rng.nextInt(children.length);
+                expected = currentModel.removeChild(
+                  target.parentPath,
+                  target.slot,
+                  index,
+                );
+                edits = <SourceEdit>[
+                  EditPlanner.removeChildEdit(
+                    parent: parent,
+                    slotName: target.slot,
+                    index: index,
+                    source: currentSource,
+                  ),
+                ];
+              case 'move':
+                final from = rng.nextInt(children.length);
+                var to = rng.nextInt(children.length);
+                if (from == to) {
+                  to = (to + 1) % children.length;
+                }
+                expected = currentModel.moveChild(
+                  target.parentPath,
+                  target.slot,
+                  from,
+                  to,
+                );
+                edits = EditPlanner.moveChildEdits(
                   parent: parent,
                   slotName: target.slot,
-                  index: index,
-                  newChild: newChild,
+                  from: from,
+                  to: to,
                   source: currentSource,
-                ),
-              ];
-            case 'remove':
-              final index = rng.nextInt(children.length);
-              expected = currentModel.removeChild(
-                target.parentPath,
-                target.slot,
-                index,
-              );
-              edits = <SourceEdit>[
-                EditPlanner.removeChildEdit(
-                  parent: parent,
-                  slotName: target.slot,
-                  index: index,
-                  source: currentSource,
-                ),
-              ];
-            case 'move':
-              final from = rng.nextInt(children.length);
-              var to = rng.nextInt(children.length);
-              if (from == to) {
-                to = (to + 1) % children.length;
-              }
-              expected = currentModel.moveChild(
-                target.parentPath,
-                target.slot,
-                from,
-                to,
-              );
-              edits = EditPlanner.moveChildEdits(
-                parent: parent,
-                slotName: target.slot,
-                from: from,
-                to: to,
-                source: currentSource,
-              );
-            default:
-              throw StateError('unknown op');
+                );
+              default:
+                throw StateError('unknown op');
+            }
+
+            final newSource = applySourceEdits(currentSource, edits);
+            final reparsed = parseWidgetTree(newSource);
+            expect(
+              StructuralEquivalence.equal(reparsed, expected),
+              isTrue,
+              reason: reason,
+            );
+
+            currentSource = newSource;
+            currentModel = reparsed;
+            stepsRun++;
+            totalEditsPerformed++;
           }
 
-          final newSource = applySourceEdits(currentSource, edits);
-          final reparsed = parseWidgetTree(newSource);
-          expect(
-            StructuralEquivalence.equal(reparsed, expected),
-            isTrue,
-            reason: reason,
-          );
-
-          currentSource = newSource;
-          currentModel = reparsed;
-          stepsRun++;
-          totalEditsPerformed++;
-        }
-
-        if (stepsRun > 0) {
-          totalSequences++;
+          if (stepsRun > 0) {
+            totalSequences++;
+          }
         }
       }
 
@@ -308,7 +318,7 @@ void main() {
         greaterThan(iterations ~/ 2),
         reason: 'most iterations produced 0 edits; check fixture coverage',
       );
-    }, timeout: const Timeout(Duration(minutes: 5)));
+    }, timeout: const Timeout(Duration(minutes: 10)));
   });
 }
 
@@ -329,12 +339,61 @@ List<({NodePath parentPath, String slot})> _listSlotTargets(
 }
 
 WidgetNode _generateChild(Random rng) {
+  // 1/3 chance of a single Text; 1/3 chance of a Padding wrapping one
+  // Text; 1/3 chance of a Column with two Text children. Exercises both
+  // single- and list-shaped child slots in inserted widgets.
+  const span = SourceSpan(offset: 0, length: 0);
+  final shape = rng.nextInt(3);
+  switch (shape) {
+    case 0:
+      return _genText(rng);
+    case 1:
+      return WidgetNode(
+        className: 'Padding',
+        properties: {
+          'padding': EdgeInsetsAllValue(
+            amount: rng.nextInt(20),
+            amountIsDouble: rng.nextBool(),
+            span: span,
+          ),
+        },
+        childSlots: {
+          'child': [_genText(rng)],
+        },
+        sourceSpan: span,
+        styleHints: const StyleHints(),
+      );
+    default:
+      return WidgetNode(
+        className: 'Column',
+        properties: const {},
+        childSlots: {
+          'children': [_genText(rng), _genText(rng)],
+        },
+        // Must match the WidgetSerializer output's resulting style on
+        // reparse: a serialized Column emits `Column(children: [a, b])`
+        // which reparses as single-line, no trailing comma.
+        childSlotStyles: const {
+          'children': ListSlotStyle(
+            bracketsSpan: SourceSpan(offset: 0, length: 0),
+            hasTrailingComma: false,
+            isMultiLine: false,
+          ),
+        },
+        sourceSpan: span,
+        styleHints: const StyleHints(),
+      );
+  }
+}
+
+WidgetNode _genText(Random rng) {
   const span = SourceSpan(offset: 0, length: 0);
   return WidgetNode(
     className: 'Text',
     properties: {
       'data': StringLiteralValue(
-        value: 'gen_${rng.nextInt(1000000)}',
+        value: _randomString(rng),
+        usesDoubleQuotes: rng.nextBool(),
         span: span,
       ),
     },
@@ -345,7 +404,11 @@ WidgetNode _generateChild(Random rng) {
 }
 
 const _generatorSpan = SourceSpan(offset: 0, length: 0);
-const _stringChars = 'abcdefghijklmnopqrstuvwxyz0123456789 ';
+// Includes Dart metacharacters that exercise the serializer's escape
+// paths: backslash, single quote, double quote, dollar, newline, tab,
+// and forward-slash (which doesn't need escaping but tests separator
+// detection logic).
+const _stringChars = "abcdefghijklmnopqrstuvwxyz0123456789 \$\\'\"\n\t/";
 
 PropertyValue _generateValue(Random rng) {
   final variant = rng.nextInt(8);
@@ -353,6 +416,7 @@ PropertyValue _generateValue(Random rng) {
     case 0:
       return StringLiteralValue(
         value: _randomString(rng),
+        usesDoubleQuotes: rng.nextBool(),
         span: _generatorSpan,
       );
     case 1:

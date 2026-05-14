@@ -415,32 +415,47 @@ class App extends StatelessWidget {
       expect(reparsed.root.childSlots['children'], isEmpty);
     });
 
-    test('withProperty throws OpaqueEditException when descending into opaque',
-        () {
-      // GestureDetector has a callback (opaque) and a child Container.
-      const source = '''
-import 'package:flutter/material.dart';
+    test(
+      'withProperty throws OpaqueEditException when path descends into '
+      'an OpaqueNode',
+      () {
+        // Theme.of(...) is not a widget constructor; the visitor lands
+        // it as OpaqueNode inside the children list.
+        const source = '''
 class App extends StatelessWidget {
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () { print('hi'); },
-      child: Container(
-        child: Text('hello'),
-      ),
+    return Column(
+      children: [
+        Theme.of(context).platform,
+      ],
     );
   }
 }
 ''';
-      final model = parseWidgetTree(source);
-      // onTap is an OpaquePropertyValue on the root (not navigable),
-      // but a sibling 'child' is a widget. Confirm we can edit the
-      // inner Text...
-      final text = model.root.childSlots['child']!.first as WidgetNode;
-      expect(text.className, equals('Container'));
-      // ...and confirm 'onTap' is captured as opaque.
-      final onTap = model.root.properties['onTap'];
-      expect(onTap, isA<OpaquePropertyValue>());
-    });
+        final model = parseWidgetTree(source);
+        expect(
+          model.root.childSlots['children']!.first,
+          isA<OpaqueNode>(),
+          reason: 'precondition: the entry must be opaque',
+        );
+
+        // Descending INTO the opaque entry throws.
+        expect(
+          () => model.withProperty(
+            const [
+              (slot: 'children', index: 0),
+              (slot: 'whatever', index: 0),
+            ],
+            'data',
+            const StringLiteralValue(
+              value: 'x',
+              span: SourceSpan(offset: 0, length: 0),
+            ),
+          ),
+          throwsA(isA<OpaqueEditException>()),
+        );
+      },
+    );
 
     test(
         'removeChild preserves trailing line comment after deleted first element',
@@ -581,6 +596,87 @@ class App extends StatelessWidget {
         kids.map((c) => (c.properties['data']! as StringLiteralValue).value),
         equals(['beta', 'gamma', 'alpha']),
       );
+    });
+  });
+
+  group('WidgetSerializer', () {
+    test('serializes a plain Text', () {
+      final w = WidgetNode(
+        className: 'Text',
+        properties: {
+          'data': StringLiteralValue(value: 'hi', span: _span),
+        },
+        childSlots: const {},
+        sourceSpan: _span,
+        styleHints: const StyleHints(),
+      );
+      expect(WidgetSerializer.serialize(w), equals("Text('hi')"));
+    });
+
+    test('serializes a const Text with trailing comma', () {
+      final w = WidgetNode(
+        className: 'Text',
+        properties: {
+          'data': StringLiteralValue(value: 'hi', span: _span),
+        },
+        childSlots: const {},
+        sourceSpan: _span,
+        styleHints: const StyleHints(hasConst: true, hasTrailingComma: true),
+      );
+      expect(WidgetSerializer.serialize(w), equals("const Text('hi',)"));
+    });
+
+    test('serializes Padding with EdgeInsets.all and child Text', () {
+      final w = WidgetNode(
+        className: 'Padding',
+        properties: {
+          'padding': EdgeInsetsAllValue(
+            amount: 8,
+            amountIsDouble: true,
+            span: _span,
+          ),
+        },
+        childSlots: {
+          'child': [
+            WidgetNode(
+              className: 'Text',
+              properties: {
+                'data': StringLiteralValue(value: 'x', span: _span),
+              },
+              childSlots: const {},
+              sourceSpan: _span,
+              styleHints: const StyleHints(),
+            ),
+          ],
+        },
+        sourceSpan: _span,
+        styleHints: const StyleHints(),
+      );
+      // child is single-shaped; child slot rendered as `child: <widget>`.
+      expect(
+        WidgetSerializer.serialize(w),
+        equals("Padding(child: Text('x'), padding: EdgeInsets.all(8.0))"),
+      );
+    });
+
+    test('serializes an OpaqueNode as its sourceText', () {
+      const o = OpaqueNode(
+        sourceSpan: SourceSpan(offset: 0, length: 12),
+        sourceText: '_helper()',
+      );
+      expect(WidgetSerializer.serialize(o), equals('_helper()'));
+    });
+
+    test('serializes a MethodReferenceNode as methodName()', () {
+      const m = MethodReferenceNode(
+        methodName: '_buildHeader',
+        callSourceSpan: SourceSpan(offset: 0, length: 0),
+        body: OpaqueNode(
+          sourceSpan: SourceSpan(offset: 0, length: 0),
+          sourceText: '',
+        ),
+      );
+      expect(WidgetSerializer.serialize(m), equals('_buildHeader()'));
     });
   });
 }

@@ -285,6 +285,49 @@ class Cycle extends StatelessWidget {
       },
     );
 
+    test('indirect-cycle helpers (a -> b -> a) all become opaque', () {
+      // _a is called from build() AND from _b's body → multi-reference.
+      // _b is called only from _a's body → single reference. But _a's
+      // multi-reference makes ALL references to _a opaque, so _a's
+      // body is never resolved, so _b is effectively unreferenced from
+      // the modeled tree (still defined in source, just not modeled).
+      const source = '''
+import 'package:flutter/material.dart';
+
+class IndirectCycle extends StatelessWidget {
+  const IndirectCycle({super.key});
+
+  Widget _a() {
+    return _b();
+  }
+
+  Widget _b() {
+    return _a();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _a(),
+      ],
+    );
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final rootChildren = model.root.childSlots['children']!;
+      expect(rootChildren, hasLength(1));
+      expect(
+        rootChildren[0],
+        isA<OpaqueNode>(),
+        reason:
+            'indirect-cycle: _a is called more than once (build + _b body), '
+            'so the multi-reference defense kicks in for _a at every call '
+            'site, never resolving _a or following into _b',
+      );
+    });
+
     test('multi-referenced helper opaque at every call site', () {
       const source = '''
 import 'package:flutter/material.dart';
