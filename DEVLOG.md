@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5.3 — close all remaining open items
-**Last touched:** 2026-05-14 — closed every remaining deferred item from M5.1/M5.2. Widened `WidgetTreeModel.root` from `WidgetNode` to `ModelNode` so bare-helper-root `build() => _h()` now resolves (skip removed). Ratified Q4 (parse errors): partial model + diagnostics list surfaced on `WidgetTreeModel.diagnostics`. Rewrote `applySourceEdits` as a single-pass O(N) StringBuffer walk (was O(N·M)). Removed `==` overrides from `OpaqueNode` and `MethodReferenceNode` for uniform identity-only model nodes (StructuralEquivalence is the sole oracle). Added a top-of-spec disclaimer pointing at this DEVLOG for current state. Grew the corpus from 10 to 20 real-world fixtures (10 new files from flutter/website @ `e927ec21`). **114 tests green, 0 skips**; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` across 20 fixtures finishes in ~25s (400k total edits).
+**Active milestone:** M5.4 — scout pass + Dart 3.x experimental-feature opt-in
+**Last touched:** 2026-05-14 — Eric-requested scout against flutter/codelabs (1068 .dart files): **0 crashes, 0 idempotence failures**, 392 clean parses, 676 expected `ParseException` (no `build()`), and 2 files with diagnostics that turned out to be a real issue: our pinned `analyzer ^7.3.0` is older than the SDK-bundled one and doesn't enable recent experimental flags by default. Fixed by passing an explicit `featureSet` to `parseString` enabling `dot-shorthands`, `digit-separators`, `null-aware-elements`, `wildcard-variables`. Re-scout: **392 clean / 0 diagnostics / 0 crashes / 0 idempotence failures**. Also landed `tool/scout.dart` as a reusable utility for future broad real-world testing.
 **Blockers:** none
-**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3.** Every Open Question from the spec is now ratified or explicitly settled. There are no remaining deliberately-deferred items. After approval the kernel is feature-complete, hardened across two review rounds, with all spec gates closed.
+**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3 + M5.4.** Every spec Open Question is settled; the kernel has been validated against 1000+ real Flutter files in addition to the 20-fixture pinned corpus. Long-term TODO (deliberately deferred, not blocking review): bump `analyzer` past 13.0.0 once the visitor adapts to its renamed AST API (`NamedExpression` → `Argument`, `members` getter rename, etc.). The experimental-flags list is a band-aid that grows as future scouts find more features; the proper fix is matching the SDK-bundled analyzer.
 
 ---
 
@@ -192,6 +192,37 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M5.4 — scout against flutter/codelabs + Dart 3.x feature-flag fix
+**Worked on:** Eric asked for a "real-world scout" — point the kernel at every `.dart` file in a popular modern Flutter repo and see what breaks. Picked flutter/codelabs (1068 .dart files; modern Dart 3.x, actively maintained).
+
+**Scout result (first pass):**
+- 1068 total files
+- 0 crashes
+- 0 no-op idempotence failures (the spec's invariant 2 held on every parsed file)
+- 392 parsed clean (real widget trees, no diagnostics)
+- 676 `ParseException` (no `build()` method — data classes, tests, generated code; all expected)
+- 2 parsed-with-diagnostics
+
+The 2 diagnostic files (`google-maps-in-flutter/step_3/lib/main.dart` and `webview_flutter/step_03/lib/main.dart`) both use Dart's dot-shorthand syntax (`colorScheme: .fromSeed(...)`, `mainAxisAlignment: .center`). Our parser surfaced "this requires the 'dot-shorthands' language feature to be enabled" diagnostics on both.
+
+**Root cause:** the kernel pins `analyzer: ^7.3.0` (the `_macros` SDK-conflict workaround that landed during M1 scaffolding). The SDK-bundled analyzer (on Dart 3.11.5) is much newer — likely analyzer 13.0.0 — and has dot-shorthand stable by default. Our pinned 7.7.1 still treats it as experimental.
+
+**Tried bumping `analyzer: ^13.0.0`:** pub solved cleanly, but the kernel's visitor doesn't compile against the new AST. Breaking changes in analyzer 8+: `ClassDeclaration.members` getter renamed, `NamedExpression` renamed to `Argument`, `NamedType.name2` renamed. Adapting the visitor is non-trivial and would be its own milestone.
+
+**Pragmatic fix:** pass an explicit `FeatureSet` to `parseString` that enables the experimental flags our pinned analyzer knows about but doesn't enable by default. List currently includes `dot-shorthands`, `digit-separators`, `null-aware-elements`, `wildcard-variables`. New `_enabledExperimentalFlags` constant in `widget_tree_parser.dart` documents the why; future scouts that find more missing features add to it.
+
+**Re-scout after the fix:** 1068 files / **0 crashes / 0 idempotence failures / 0 diagnostics / 392 clean parses**. The dot-shorthand files now parse clean. The visitor's "any AST shape we don't model becomes opaque" design did the rest — `.fromSeed(...)` and `.center` round-trip as `OpaquePropertyValue`s.
+
+**New tool: `tool/scout.dart`** — point at any directory, get a summary of total / clean / diagnostics / crashes / idempotence failures, plus the file paths of any failures or diagnostic-bearing files. ~100 LOC. Reusable for future broad real-world testing against arbitrary Flutter codebases.
+
+**Learned:**
+- **The kernel's graceful-degradation design works in the wild.** Across 1068 real Flutter files spanning beginner codelabs to production-quality samples, zero AST shapes crashed the visitor. Everything we don't model lands as `OpaqueNode` / `OpaquePropertyValue` exactly as designed.
+- **Pinned analyzer dep is a real-world ceiling on language-feature support.** Anything that became stable AFTER our pinned analyzer's release still needs an experimental flag. The flag-list workaround is fragile (we'd need to keep adding flags as Dart evolves) and the proper fix is matching the SDK-bundled analyzer. Documented as a Gotcha.
+
+**Headline numbers:** 114 tests + scout against 1068 real-world files, all green. The kernel is now validated well beyond the 20-fixture spec corpus.
+
+**Next:** Eric reviews and ratifies M5 + M5.1 + M5.2 + M5.3 + M5.4. The kernel is ready to ship. Long-term: bump analyzer past 13.0.0 once the visitor adapts to its renamed AST API — that's UI-integration-time work, not pre-review work.
 
 ### [2026-05-14] M5.3 — close all deferred items: root widen, Q4, applySourceEdits perf, corpus 10→20
 **Worked on:** Closed every item that was deliberately deferred from M5.1 / M5.2.
@@ -434,6 +465,7 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
+- **The kernel's pinned `analyzer ^7.3.0` lags the SDK-bundled analyzer.** The Dart SDK (3.11.5 as of writing) ships analyzer 13.0.0 internally, which has many recent language features stable by default (e.g., dot-shorthand `.fromSeed(...)`). Our package's pinned analyzer (resolves to 7.7.1) still treats those as experimental flags. Symptom: real-world files surface false-positive "this requires the X language feature" diagnostics even though the SDK's own analyzer parses them clean. Workaround in `widget_tree_parser.dart`: `_enabledExperimentalFlags` constant lists known-needed flags and gets passed via `FeatureSet` to `parseString`. Long-term fix: bump analyzer to the same major version the SDK ships, which requires adapting the visitor to renamed AST APIs (`NamedExpression` → `Argument`, `ClassDeclaration.members` renamed, `NamedType.name2` renamed) — non-trivial but ultimately the right call.
 - **Multi-reference helpers aren't supported by the property tests** as a soft constraint. If the same helper is called from two places, two in-memory `MethodReferenceNode`s point at structurally-equivalent but distinct `body` trees. The expected model from `withProperty(path_through_one_ref, …)` only updates that path's body; the reparsed model picks up the helper-source change in BOTH call sites. The two models would diverge, and the property test would fail. M5's `helper_methods.dart` fixture has each helper called exactly once; adding multi-reference fixtures requires either propagating the in-memory edit to all references with the same name, or weakening the equivalence comparator. Out of scope for M5.
 - **`MethodReferenceNode` requires path navigation through a *virtual* slot named `body`.** It's not a real `childSlots` entry — `MethodReferenceNode` doesn't have `childSlots` — but `nodeAt`, `walk`, `_withProperty`, and `_modifySlot` all special-case it. New ModelNode subtypes need this same audit.
 - **`const Prefix.Name(args)` and `Prefix.Name(args)` produce different analyzer ASTs.** Non-const: `MethodInvocation(target=Prefix, methodName=Name)`. Const: `InstanceCreationExpression` with `NamedType.importPrefix = Prefix` and `NamedType.name2 = Name` (the analyzer treats `Prefix` as a possible import prefix, since without resolution that's a valid reading). The visitor's `_tryExtractCall` reads `importPrefix` and re-interprets it as the class name. Without this, `const EdgeInsets.all(8)` falls through to `OpaquePropertyValue` despite being a fully modelable expression.
