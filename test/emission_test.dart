@@ -540,7 +540,7 @@ class App extends StatelessWidget {
         final newChild = WidgetNode(
           className: 'Text',
           properties: {
-            'data': StringLiteralValue(value: 'c', span: _span),
+            'data': const StringLiteralValue(value: 'c', span: _span),
           },
           childSlots: const {},
           sourceSpan: _span,
@@ -604,7 +604,7 @@ class App extends StatelessWidget {
       final w = WidgetNode(
         className: 'Text',
         properties: {
-          'data': StringLiteralValue(value: 'hi', span: _span),
+          'data': const StringLiteralValue(value: 'hi', span: _span),
         },
         childSlots: const {},
         sourceSpan: _span,
@@ -617,7 +617,7 @@ class App extends StatelessWidget {
       final w = WidgetNode(
         className: 'Text',
         properties: {
-          'data': StringLiteralValue(value: 'hi', span: _span),
+          'data': const StringLiteralValue(value: 'hi', span: _span),
         },
         childSlots: const {},
         sourceSpan: _span,
@@ -630,7 +630,7 @@ class App extends StatelessWidget {
       final w = WidgetNode(
         className: 'Padding',
         properties: {
-          'padding': EdgeInsetsAllValue(
+          'padding': const EdgeInsetsAllValue(
             amount: 8,
             amountIsDouble: true,
             span: _span,
@@ -641,7 +641,7 @@ class App extends StatelessWidget {
             WidgetNode(
               className: 'Text',
               properties: {
-                'data': StringLiteralValue(value: 'x', span: _span),
+                'data': const StringLiteralValue(value: 'x', span: _span),
               },
               childSlots: const {},
               sourceSpan: _span,

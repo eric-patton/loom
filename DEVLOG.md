@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5 — Helper method following
-**Last touched:** 2026-05-13 — M5 acceptance hit. In-class helper-method calls (`_buildHeader()`, no args) resolve to `MethodReferenceNode` whose body holds the helper's parsed widget tree. Edits to nodes inside the body produce `SourceEdit`s targeted at the helper's source location, not the call site. Cyclic references degrade to `OpaqueNode` at the inner reference (cycle terminates). Cross-file refs and helpers-with-args stay opaque. 59 tests green, 1 documented skip.
+**Active milestone:** M5.1 — post-review hardening pass
+**Last touched:** 2026-05-13 — closed the substantive findings from the four-agent peer review of the M5-complete kernel. Real bugs (string-escape coverage, applySourceEdits validation gaps, `__positional` round-trip mismatch, bogus `ListSlotStyle` on non-list slot expressions, NaN/Color guards), comment preservation in structural edits, multi-reference helper defense at parse time, per-fixture iteration semantics, performance benchmark, dead-file cleanup, and additional lint coverage. 90 tests green, 1 documented skip; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` (now 10k *per fixture*) finishes in ~80s.
 **Blockers:** none
-**Next action:** **Eric review gate for M5.** This is the kernel-ships gate — after approval, the kernel is ready for the UI layer to consume as a library.
+**Next action:** **Eric review gate for M5 + M5.1.** Two findings deliberately left unfixed (out of scope for hardening, documented in Gotchas): widening `WidgetTreeModel.root` to `ModelNode` so `build() => _helper()` works, and adding 10 more real-world fixtures to satisfy the spec's "20 hand-picked real-world Flutter files" exactly.
 
 ---
 
@@ -176,6 +176,54 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-13] M5.1 — post-review hardening: close substantive findings from the multi-agent peer review
+**Worked on:** Four review subagents combed the M5-complete kernel for invariant gaps, code-quality concerns, adversarial inputs, and spec compliance divergences. This pass closes the substantive findings across seven sub-commits (`M5.1.1` … `M5.1.7`).
+
+**Real bugs fixed (`M5.1.1` + `M5.1.2`):**
+  - `PropertySerializer._escapeString` now covers `$`, `\n`, `\r`, `\t`, `\b`, and code units below U+0020 (as `\xHH`). Previously a property edit on a `Text` containing any of these produced invalid Dart.
+  - `StringLiteralValue` gains `usesDoubleQuotes`; visitor captures it from `SimpleStringLiteral.isSingleQuoted`. Round-trip now preserves user quote style instead of unconditionally flipping `"…"` to `'…'`.
+  - Raw (`r'...'`) and triple-quoted strings route to `OpaquePropertyValue` rather than `StringLiteralValue` (which doesn't model those surface forms).
+  - `applySourceEdits` validates inputs: negative/oversized offsets, overlapping edits, and two pure inserts at the same offset all throw `ArgumentError` with a descriptive message instead of silently producing garbage.
+  - `NumLiteralValue` rejects NaN/Infinity; `ColorValue` rejects negative or >32-bit values.
+  - Synthetic `__positional$i` keys now share a public constant (`kPositionalOpaqueKeyPrefix`) and `WidgetSerializer` re-emits them in numeric-suffix order, interleaved with catalog-modeled positionals (not grouped or dropped). `Text('foo', 'bar')` round-trips correctly.
+  - `EditPlanner.insertChildEdit` widens its `newChild` parameter from `WidgetNode` to `ModelNode` to match the model-level API.
+  - Non-list expression in a list-shaped slot (`children: spread()`, `.map().toList()`) no longer synthesizes a degenerate `ListSlotStyle` pointing at arbitrary expression source. The slot is excluded from structural-edit targets.
+
+**Comment + indent preservation (`M5.1.3`):**
+  - `removeChildEdit` trims its deletion range to preserve trailing or leading comments adjacent to the removed element. Two helpers (`_trimEndBeforeComment`, `_trimStartAfterComment`) scan ONLY the separator zone between elements — never the element bytes themselves — so `//` or `/*` inside a string literal inside the element doesn't confuse the trim.
+  - `_interElementSep` falls back to a default separator when the natural separator contains a comment marker, preventing duplicate comments on every inserted element.
+  - Empty-multi-line-list insertion infers indent from the line containing `[` rather than hardcoding two spaces.
+
+**Multi-reference helper defense at parse time (`M5.1.4`):**
+  - The parser pre-scans the build body and each helper body for argumentless no-target invocations of in-class methods. Methods invoked more than once (including self-recursive ones) are dropped from the visitor's `classMethods` map and emit `OpaqueNode` at every call site. This closes the multi-reference soft constraint by enforcing it in code, not docs.
+  - The visitor's old `_resolvingMethods` cycle defense remains as defense-in-depth (now unreachable for the self-recursive case the pre-scan catches first).
+  - The cyclic-helper test was updated to expect `OpaqueNode` at the outer reference (matching the new, stricter behavior).
+
+**Stronger tests + per-fixture iterations (`M5.1.5`):**
+  - The property and structural round-trip tests now loop `iterations` times *per fixture* (was: total across the corpus). The local default is 100 per fixture (~1k total); CI's `LOOM_PROPERTY_ITERATIONS=10000` now means 10k per fixture, matching the spec's "10,000 iterations per fixture per run" gate.
+  - `_randomString` includes metacharacters: `$`, `\`, `'`, `"`, `\n`, `\t`, `/`. `_generateChild` now produces nested widgets (Padding, Column with two Texts) alongside plain Text. Generated Column carries a matching `childSlotStyles` entry so the in-memory model agrees with the reparsed model on list shape.
+  - `OpaqueEditException` is now actually exercised by a test that calls `withProperty` on a path descending into an opaque entry. Direct `WidgetSerializer` tests cover plain Text, const-with-trailing-comma Text, Padding+EdgeInsets+child, `OpaqueNode`, and `MethodReferenceNode`. Indirect cycle (`a → b → a`) test confirms both helpers degrade to opaque via the multi-reference defense.
+
+**Performance benchmark (`M5.1.6`):**
+  - New `test/performance_test.dart` synthesizes a >1,000-line Column-of-Text source and asserts parse <100ms / single-property-edit emission <10ms (best of 5 runs after warmup). Measured ~3–5 ms parse, sub-ms emit on the dev machine. Closes Global Acceptance #5.
+
+**Cleanup (`M5.1.7`):**
+  - Deleted `lib/src/emission/formatter.dart` and `lib/src/equivalence/ast_equivalence.dart` (TODO stubs that the Settled Decisions already obsoleted; their concerns moved to `model_equivalence.dart` and were left unimplemented in `formatter.dart`).
+  - Dropped `dart_style` from `pubspec.yaml` (only ever there to power the never-implemented formatter).
+  - Centralized `extractMethodReturnExpression` (was duplicated `_extractRootExpression` in `widget_tree_parser.dart` and `_extractReturnExpression` in `widget_visitor.dart`).
+  - Added lint rules: `prefer_const_constructors`, `prefer_const_literals_to_create_immutables`, `comment_references`. Five `prefer_const_constructors` findings on inner `StringLiteralValue`/`EdgeInsetsAllValue` constructions in tests; fixed.
+
+**Deliberately left unfixed (out of M5.1 scope):**
+  - Widening `WidgetTreeModel.root` from `WidgetNode` to `ModelNode` (the bare `build() => _helper()` case still throws `ParseException` with a documented skip).
+  - Corpus growth from 10 to 20 fixtures (spec calls for "20 hand-picked real-world Flutter files"; current corpus is 10). Would require sourcing additional `flutter/samples`-style files.
+  - Equality-policy unification across `ModelNode` subtypes (`WidgetNode` has no `==`; `OpaqueNode` and `MethodReferenceNode` do — `StructuralEquivalence` is the official oracle, so this is cosmetic).
+  - `WidgetSerializer` named-argument alphabetical ordering (only matters for genuinely-new inserted widgets; doesn't affect round-trip correctness).
+  - True multi-reference helper *support* (current defense degrades them to opaque; supporting them would require structural sharing in the model or a different update propagation strategy).
+
+**Headline numbers:** 90 tests passing (up from 59 at M5 close), 1 documented skip. CI-grade run with 10k per-fixture iterations ≈ 80 seconds. The peer review's BLOCKER findings (string escaping, applySourceEdits validation, comment preservation, `__positional` mismatch, non-list slot synthesis) are all fixed and tested.
+
+**Next:** Eric reviews and ratifies M5.1 alongside M5. After approval the kernel is feature-complete and hardened.
 
 ### [2026-05-13] M5 — helper-method following, kernel feature-complete
 **Worked on:** Eric approved M4. Opened M5 — the last kernel milestone.

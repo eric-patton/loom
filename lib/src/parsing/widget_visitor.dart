@@ -110,20 +110,8 @@ class WidgetVisitor {
     }
   }
 
-  Expression? _extractReturnExpression(MethodDeclaration method) {
-    final body = method.body;
-    if (body is ExpressionFunctionBody) {
-      return body.expression;
-    }
-    if (body is BlockFunctionBody) {
-      for (final stmt in body.block.statements) {
-        if (stmt is ReturnStatement) {
-          return stmt.expression;
-        }
-      }
-    }
-    return null;
-  }
+  Expression? _extractReturnExpression(MethodDeclaration method) =>
+      extractMethodReturnExpression(method);
 
   OpaqueNode _opaqueNode(SyntacticEntity entity) {
     final span = _span(entity);
@@ -440,6 +428,29 @@ class WidgetVisitor {
     }
     return null;
   }
+}
+
+/// Returns the `Expression` a `MethodDeclaration` returns, or `null`
+/// if its body has no return expression we can model.
+///
+/// Handles both arrow bodies (`=> expr`) and block bodies (the first
+/// top-level `ReturnStatement` wins; early returns inside `if`/`for`
+/// blocks are nested and thus ignored). Shared between the parser
+/// (root build-method extraction) and the visitor (helper-method body
+/// extraction for M5 `MethodReferenceNode` resolution).
+Expression? extractMethodReturnExpression(MethodDeclaration method) {
+  final body = method.body;
+  if (body is ExpressionFunctionBody) {
+    return body.expression;
+  }
+  if (body is BlockFunctionBody) {
+    for (final stmt in body.block.statements) {
+      if (stmt is ReturnStatement) {
+        return stmt.expression;
+      }
+    }
+  }
+  return null;
 }
 
 class _CallInfo {

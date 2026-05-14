@@ -56,7 +56,7 @@ WidgetTreeModel parseWidgetTree(String source) {
         if ((referenceCounts[entry.key] ?? 0) <= 1) entry.key: entry.value,
     };
 
-    final root = _extractRootExpression(buildMethod);
+    final root = extractMethodReturnExpression(buildMethod);
     if (root == null) {
       throw const ParseException(
         'build() found but has no return expression',
@@ -109,19 +109,4 @@ class _ReferenceCounter extends RecursiveAstVisitor<void> {
     }
     counts.update(name, (n) => n + 1, ifAbsent: () => 1);
   }
-}
-
-Expression? _extractRootExpression(MethodDeclaration method) {
-  final body = method.body;
-  if (body is ExpressionFunctionBody) {
-    return body.expression;
-  }
-  if (body is BlockFunctionBody) {
-    for (final stmt in body.block.statements) {
-      if (stmt is ReturnStatement) {
-        return stmt.expression;
-      }
-    }
-  }
-  return null;
 }
