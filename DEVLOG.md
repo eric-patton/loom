@@ -8,10 +8,15 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M6.0.1 — class-field GoRouter entry-point support
-**Last touched:** 2026-05-14 — closed the M6.0 gap surfaced by the real-world fixture work. Extended `route_tree_parser.dart`'s class-walking loop to scan `FieldDeclaration` initializers alongside method returns; tightened `RouteCatalog.rootClassNames()` from `{GoRouter, GoRoute, ShellRoute}` to `{GoRouter}` (tree-root semantics: GoRoute and ShellRoute are tree-internal, never standalone roots). Pinned a second real-world fixture: `real_world_go_router_named_routes.dart` (flutter/packages @ `0ffbde8f`, `packages/go_router/example/lib/named_routes.dart`) — exercises `late final GoRouter _router = GoRouter(...)` class-field shape with triple-nested routes. **Scout coverage on flutter/packages/go_router lifted from 8 → 30 route clean parses** (out of 117 files). 147 tests, all green. M6.0 + M6.0.1 together cover the three real-world entry-point shapes: top-level var, class-method return, class-field initializer.
+**Active milestone:** M6.1 — extract loom_core (deduplication of widget/route scaffolding)
+**Last touched:** 2026-05-14 — landed the three-phase M6.1 refactor on the seam M6.0 build-alongside revealed:
+- **Phase 1 (47647c1):** unified `ModelNode` hierarchy. Sealed `ModelNode = WidgetNode | RouteNode | OpaqueNode | MethodReferenceNode`. `RouteTreeNode` / `RouteOpaqueNode` / `RouteMethodReferenceNode` deleted; all four concrete types live in `lib/src/model/node.dart` (renamed from `widget_node.dart`).
+- **Phase 2 (63b64fe):** extracted `BaseVisitor` scaffold to `lib/src/parsing/base_visitor.dart`. `WidgetVisitor` and `RouteVisitor` are now thin shims (~110 and ~45 lines respectively, down from ~470 and ~330). Three domain hooks: `specFor`, `buildModeledNode`, `customConstructorPropertyValue`. Shared `CallInfo`, `ParseException`, `extractMethodReturnExpression` live in base_visitor.dart. `CatalogSpec` extracted as the shared spec type; `WidgetSpec` and `RouteSpec` are typedefs.
+- **Phase 3 (04e4f22):** extracted `ListEditHelpers` (byte-level list-edit math, no node-type dependency) and promoted the inlined route serializer into a standalone `RouteSerializer` sibling of `WidgetSerializer`. `EditPlanner` and `RouteEditPlanner` are now thin per-domain glue (~95 lines each, down from ~414 and ~445).
+
+Cumulative M6.1 diff: roughly **+1,500 / −2,200 lines** across ~15 files. Net code reduction ~700 lines, and every duplicated visitor / edit-planner section between widget- and route-side is now a single shared implementation. 147 tests still pass, `dart analyze` and `dart format` clean throughout. Scout against flutter/packages/go_router (117 files): identical numbers to M6.0.1 — 0 crashes, 0 idempotence failures, 30 route clean parses.
 **Blockers:** none
-**Next action:** **Eric review gate for M6.0 + M6.0.1.** Then M6.1 — extract `loom_core` (the language-general machinery), now informed by the actual seam between widget- and route-side code. See the M6 roadmap section.
+**Next action:** **Eric review gate for M6.0 + M6.0.1 + M6.1.** Then either M6.2 (more constructor-tree DSL catalogs to stress-test the shared scaffolding — test framework `group`/`test`, MaterialApp config trees, possibly Shelf cascades) or M7 (class-structure modeling — fields/methods as a flat list, very different shape from constructor trees).
 
 ---
 
@@ -175,7 +180,7 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | Milestone | Deliverable | Why |
 |---|---|---|
 | **M6.0** (shipped 2026-05-14) | First non-widget catalog: route DSL (GoRouter-shaped). Same constructor-tree shape as widgets. | Forcing function: a second consumer of the kernel. |
-| M6.1 | Extract `loom_core`. The M6.0 diff between widget and route layers reveals the actual shared seam: source-span / source-edit / list-style / opaque-property / catalog-dispatch machinery. Likely outcome: `lib/src/core/` (general) + `lib/src/widgets/` + `lib/src/routes/` (catalogs), with the duplicated `OpaqueNode` / `MethodReferenceNode` / `RouteOpaqueNode` / `RouteMethodReferenceNode` unified. | Reduce duplication; make the kernel reusable externally; ratify the seam with evidence. |
+| **M6.1** (shipped 2026-05-14) | Extracted shared scaffolding in three phases: (1) unified sealed `ModelNode` hierarchy (Route node types collapsed into shared `OpaqueNode` / `MethodReferenceNode`); (2) `BaseVisitor` abstract class with three domain hooks; (3) `ListEditHelpers` for byte-level slot edits + `RouteSerializer` sibling of `WidgetSerializer`. Each visitor / edit-planner now ~50–100 lines instead of ~300–450. | Made the kernel genuinely reusable for a third domain — M6.2's next catalog needs ~50 lines, not a copy of the scaffolding. |
 | M6.2 | Add 2–3 more constructor-tree DSL catalogs to stress-test generality: `test` framework (`group`/`test` blocks), `MaterialApp` / `CupertinoApp` config trees, possibly Shelf `Router()` cascade (different shape — may pressure the kernel). | Catches generality assumptions a single second-user might not. |
 | **M7** | Class-structure modeling — fields, methods, constructor declarations as a *flat list of members*, not a tree. Different shape from widgets. | OutSystems-style entity modeling: Drift tables, Freezed unions, json_serializable classes. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
@@ -241,6 +246,38 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M6.1 — extract loom_core (three-phase refactor)
+**Worked on:** Closed the planned M6.1 deduplication of widget- and route-side scaffolding that M6.0 build-alongside intentionally shipped. Split into three commits for reviewability.
+
+**Phase 1 — unify ModelNode hierarchy (commit 47647c1).** Sealed `ModelNode = WidgetNode | RouteNode | OpaqueNode | MethodReferenceNode` replaces the parallel `RouteTreeNode | RouteOpaqueNode | RouteMethodReferenceNode` hierarchy. All four concrete types now live in `lib/src/model/node.dart` (renamed from `widget_node.dart`); `route_node.dart` deleted. `RouteTreeModel.root` typed as `ModelNode`. Pattern-match sites across the codebase gained either a `RouteNode` case (`bin/loom.dart` printers, `widget_serializer.dart`, `node_path.dart`, scout) — most as invariant-violation throws since the widget-side visitors never produce route nodes and vice-versa.
+
+**Phase 2 — extract BaseVisitor scaffold (commit 63b64fe).** `lib/src/parsing/base_visitor.dart` hosts the ~250 lines of shared AST-walking logic. Three domain hooks:
+- `specFor(className) → CatalogSpec?` — consult the domain catalog
+- `buildModeledNode(...) → ModelNode` — instantiate the concrete `WidgetNode` or `RouteNode`
+- `customConstructorPropertyValue(call) → PropertyValue?` — opt-in for widget-side `EdgeInsets.all(N)` / `Color(0x…)`
+
+`CatalogSpec` is the shared spec type (extracted to `lib/src/catalog/catalog_spec.dart`); `WidgetSpec` and `RouteSpec` become typedefs. `ParseException`, `CallInfo` (was private `_CallInfo`), and `extractMethodReturnExpression` move from `widget_visitor.dart` to `base_visitor.dart`. `widget_visitor.dart` re-exports the public ones for backward compat. Parser entry-point method renamed `convertModelNode` / `convertRouteTreeNode` → `convertNode` (shared API on `BaseVisitor`). Net change: `widget_visitor.dart` from ~470 to ~110 lines; `route_visitor.dart` from ~330 to ~45.
+
+**Phase 3 — extract list edit helpers + RouteSerializer (commit 04e4f22).** `lib/src/emission/list_edit_helpers.dart` hosts `insertAt` / `removeAt` / `moveBetween` plus the comment-aware whitespace trim helpers (`_trimEndBeforeComment`, `_trimStartAfterComment`, `_lineIndentBefore`, `_interElementSep`). These take raw `(slotStyle, children, source)` — no node-type dependency, so the same helpers work for any future domain.
+
+The inlined route serializer from `RouteEditPlanner._serializeModelNode` / `_serializeRouteNode` extracted to `lib/src/emission/route_serializer.dart`, mirroring `WidgetSerializer`. `EditPlanner` and `RouteEditPlanner` are now thin per-domain glue (~95 lines each, down from ~414 and ~445): each method picks `slotStyle` + `children` from a `WidgetNode` / `RouteNode` parent, calls the shared helper, and (for inserts) serializes the new child via the domain serializer first.
+
+**Cumulative M6.1 diff:** roughly +1,500 / −2,200 lines across ~15 files. Net code reduction ~700 lines. Every duplicated visitor / edit-planner section between widget- and route-side is now a single shared implementation. The kernel is genuinely reusable for a third domain: implementing M6.2's next catalog means writing ~50 lines (a new `XxxCatalog`, a `XxxVisitor extends BaseVisitor`, an `XxxEditPlanner` mirroring the two existing ones) — no copying scaffolding.
+
+**Validation:**
+- 147 tests green throughout all three phases.
+- `dart analyze` and `dart format` clean.
+- Scout against flutter/packages/go_router (117 files): 0 crashes, 0 idempotence failures, 30 route clean parses — identical to M6.0.1 baseline.
+
+**Learned:**
+- **The build-alongside / extract-opportunistically pattern paid off.** The M6.0 duplication revealed the seam concretely — Phase 2's three domain hooks are exactly what the diff between WidgetVisitor and RouteVisitor showed was different. If I'd tried to design the abstraction up-front in M6.0, I would have probably over-parameterized.
+- **Dart sealed-class semantics force you to think about library boundaries.** The four concrete `ModelNode` subtypes have to live in one library, which I chose to make one file (`node.dart`). Cross-file `part`/`part of` was the other option, but a single ~300-line file is more idiomatic.
+- **CatalogSpec / WidgetSpec / RouteSpec being structurally identical from the start was a real signal.** The build-alongside approach lets you NOTICE this kind of coincidence (vs. designing parameters up front and inevitably making them differ in some way). Typedefs preserve the named API while eliminating the duplication.
+
+**Next:** Eric reviews M6.0 + M6.0.1 + M6.1. Then either:
+- **M6.2**: add 2–3 more constructor-tree DSL catalogs (test framework, MaterialApp config trees, possibly Shelf cascades) to stress-test the shared scaffolding's actual reusability.
+- **M7**: class-structure modeling — fields, methods, constructors as a *flat list of members*, not a tree. Different shape from constructor trees; pressures the kernel in genuinely new ways.
 
 ### [2026-05-14] M6.0.1 — class-field GoRouter entry-point + named_routes fixture
 **Worked on:** Closed the M6.0 hardening gap (class-field initializers, 10/18 example files) before the review gate. Extended `route_tree_parser.dart`'s class-walking loop to scan `FieldDeclaration` initializers alongside method returns. Tightened `RouteCatalog.rootClassNames()` from all-catalog-entries to `{GoRouter}` — `GoRoute` and `ShellRoute` are tree-internal, not standalone tree roots, and the looser set was a latent bug for any class that also exposed a `GoRoute` returning helper. Pinned `real_world_go_router_named_routes.dart` (190 LOC) as a second real-world fixture exercising the class-field shape with triple-nested routes.
