@@ -4,19 +4,22 @@ import 'package:analyzer/dart/ast/token.dart';
 
 import '../catalog/route_catalog.dart';
 import '../model/list_slot_style.dart';
+import '../model/node.dart';
 import '../model/property_value.dart';
-import '../model/route_node.dart';
 import '../model/source_span.dart';
 import '../model/style_hints.dart';
-import 'widget_visitor.dart' show ParseException, extractMethodReturnExpression;
+import 'widget_visitor.dart' show extractMethodReturnExpression;
 
-/// Walks a route expression and produces a `RouteTreeNode`.
+/// Walks a route expression and produces a `ModelNode` (a `RouteNode` for
+/// modeled constructor calls, otherwise `OpaqueNode` or
+/// `MethodReferenceNode`).
 ///
 /// Adapted copy of `WidgetVisitor` (M6.0 build-alongside): same scaffolding,
-/// swapped catalog and node-construction types. The diff between this and
-/// `widget_visitor.dart` is the M6.1 spec for extracting `loom_core`. The
-/// EdgeInsets / Color special-casing on the widget side is intentionally
-/// absent here — routes don't use those property shapes.
+/// different catalog. Phase 2 of M6.1 will lift the shared scaffolding into
+/// a base class; for now the duplication remains visible.
+///
+/// The EdgeInsets / Color special-casing on the widget side is
+/// intentionally absent here — routes don't use those property shapes.
 class RouteVisitor {
   RouteVisitor(
     this.source, {
@@ -37,9 +40,11 @@ class RouteVisitor {
 
   final Set<String> _resolvingMethods = <String>{};
 
-  /// Converts an expression in a route-tree position to a `RouteTreeNode`.
-  /// Never throws.
-  RouteTreeNode convertRouteTreeNode(Expression expr) {
+  /// Converts an expression in a route-tree position to a `ModelNode`.
+  /// Returns a `RouteNode` for modeled catalog constructor calls; falls
+  /// through to `MethodReferenceNode` (in-class helpers) or `OpaqueNode`
+  /// otherwise. Never throws.
+  ModelNode convertRouteTreeNode(Expression expr) {
     if (expr is MethodInvocation &&
         expr.target == null &&
         expr.typeArguments == null &&
@@ -65,7 +70,7 @@ class RouteVisitor {
     return _buildRouteNode(call, spec);
   }
 
-  RouteTreeNode _buildMethodReference(
+  ModelNode _buildMethodReference(
     MethodInvocation callExpr,
     MethodDeclaration declaration,
   ) {
@@ -77,7 +82,7 @@ class RouteVisitor {
     _resolvingMethods.add(methodName);
     try {
       final body = convertRouteTreeNode(bodyExpr);
-      return RouteMethodReferenceNode(
+      return MethodReferenceNode(
         methodName: methodName,
         callSourceSpan: _span(callExpr),
         body: body,
@@ -87,9 +92,9 @@ class RouteVisitor {
     }
   }
 
-  RouteOpaqueNode _opaqueNode(SyntacticEntity entity) {
+  OpaqueNode _opaqueNode(SyntacticEntity entity) {
     final span = _span(entity);
-    return RouteOpaqueNode(
+    return OpaqueNode(
       sourceSpan: span,
       sourceText: source.substring(span.offset, span.offset + span.length),
     );
@@ -105,7 +110,7 @@ class RouteVisitor {
 
   RouteNode _buildRouteNode(_CallInfo call, RouteSpec spec) {
     final properties = <String, PropertyValue>{};
-    final childSlots = <String, List<RouteTreeNode>>{};
+    final childSlots = <String, List<ModelNode>>{};
     final childSlotStyles = <String, ListSlotStyle>{};
 
     final args = call.argumentList.arguments;
@@ -143,18 +148,18 @@ class RouteVisitor {
     );
   }
 
-  ({List<RouteTreeNode> children, ListSlotStyle? style}) _collectChildSlot(
+  ({List<ModelNode> children, ListSlotStyle? style}) _collectChildSlot(
     Expression slotExpr,
     ChildSlotShape shape,
   ) {
     if (shape == ChildSlotShape.list) {
       if (slotExpr is! ListLiteral) {
         return (
-          children: <RouteTreeNode>[_opaqueNode(slotExpr)],
+          children: <ModelNode>[_opaqueNode(slotExpr)],
           style: null,
         );
       }
-      final children = <RouteTreeNode>[];
+      final children = <ModelNode>[];
       for (final element in slotExpr.elements) {
         if (element is Expression) {
           children.add(convertRouteTreeNode(element));
@@ -165,7 +170,7 @@ class RouteVisitor {
       return (children: children, style: _listStyle(slotExpr));
     }
     return (
-      children: <RouteTreeNode>[convertRouteTreeNode(slotExpr)],
+      children: <ModelNode>[convertRouteTreeNode(slotExpr)],
       style: null,
     );
   }
@@ -303,10 +308,6 @@ class RouteVisitor {
     return null;
   }
 }
-
-/// Re-export the widget-side `ParseException` so the route parser doesn't
-/// need its own exception type.
-typedef RouteParseException = ParseException;
 
 class _CallInfo {
   _CallInfo({

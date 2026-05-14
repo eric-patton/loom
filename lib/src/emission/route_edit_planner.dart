@@ -1,7 +1,7 @@
 import '../catalog/route_catalog.dart';
 import '../model/list_slot_style.dart';
+import '../model/node.dart';
 import '../model/property_value.dart';
-import '../model/route_node.dart';
 import 'property_serializer.dart';
 import 'source_edit.dart';
 
@@ -32,14 +32,14 @@ class RouteEditPlanner {
     required RouteNode parent,
     required String slotName,
     required int index,
-    required RouteTreeNode newChild,
+    required ModelNode newChild,
     required String source,
   }) =>
       _insertAt(
         parent: parent,
         slotName: slotName,
         index: index,
-        newSourceText: _serializeRouteTreeNode(newChild),
+        newSourceText: _serializeModelNode(newChild),
         source: source,
       );
 
@@ -51,7 +51,7 @@ class RouteEditPlanner {
     required String source,
   }) {
     final style = _requireListStyle(parent, slotName);
-    final children = parent.childSlots[slotName] ?? const <RouteTreeNode>[];
+    final children = parent.childSlots[slotName] ?? const <ModelNode>[];
     if (index < 0 || index >= children.length) {
       throw ArgumentError(
         'Remove index $index out of range [0, ${children.length})',
@@ -133,7 +133,7 @@ class RouteEditPlanner {
     if (from == to) {
       return const <SourceEdit>[];
     }
-    final children = parent.childSlots[slotName] ?? const <RouteTreeNode>[];
+    final children = parent.childSlots[slotName] ?? const <ModelNode>[];
     if (from < 0 || from >= children.length) {
       throw ArgumentError(
         'Move source $from out of range [0, ${children.length})',
@@ -179,7 +179,7 @@ class RouteEditPlanner {
     required String source,
   }) {
     final style = _requireListStyle(parent, slotName);
-    final children = parent.childSlots[slotName] ?? const <RouteTreeNode>[];
+    final children = parent.childSlots[slotName] ?? const <ModelNode>[];
     if (index < 0 || index > children.length) {
       throw ArgumentError(
         'Insert index $index out of range [0, ${children.length}]',
@@ -234,7 +234,7 @@ class RouteEditPlanner {
 
   static String _interElementSep(
     String source,
-    List<RouteTreeNode> children,
+    List<ModelNode> children,
     ListSlotStyle style,
   ) {
     if (children.length >= 2) {
@@ -341,13 +341,19 @@ class RouteEditPlanner {
     return source.substring(lineStart, i);
   }
 
-  /// Inlined route-tree serializer for the insert path. M6.0 doesn't ship
-  /// a standalone `RouteSerializer` because nothing else needs it yet —
-  /// M6.1 will likely promote this to a sibling of `WidgetSerializer`.
-  static String _serializeRouteTreeNode(RouteTreeNode node) => switch (node) {
+  /// Inlined route-tree serializer for the insert path. M6.1 Phase 3 will
+  /// promote this to a standalone `RouteSerializer` sibling of
+  /// `WidgetSerializer`. `WidgetNode` in the switch is unreachable in
+  /// practice — the route visitor never produces one — but the sealed
+  /// `ModelNode` hierarchy now includes it, so we throw to make the
+  /// invariant explicit.
+  static String _serializeModelNode(ModelNode node) => switch (node) {
         final RouteNode r => _serializeRouteNode(r),
-        final RouteOpaqueNode o => o.sourceText,
-        final RouteMethodReferenceNode m => '${m.methodName}()',
+        final OpaqueNode o => o.sourceText,
+        final MethodReferenceNode m => '${m.methodName}()',
+        WidgetNode() => throw ArgumentError(
+            'RouteEditPlanner cannot serialize a WidgetNode',
+          ),
       };
 
   static String _serializeRouteNode(RouteNode node) {
@@ -419,14 +425,14 @@ class RouteEditPlanner {
     for (final entry in node.childSlots.entries) {
       final shape = spec.childSlots[entry.key];
       if (shape == ChildSlotShape.list) {
-        final inner = entry.value.map(_serializeRouteTreeNode).join(', ');
+        final inner = entry.value.map(_serializeModelNode).join(', ');
         namedParts[entry.key] = '${entry.key}: [$inner]';
       } else {
         if (entry.value.isEmpty) {
           continue;
         }
         namedParts[entry.key] =
-            '${entry.key}: ${_serializeRouteTreeNode(entry.value.first)}';
+            '${entry.key}: ${_serializeModelNode(entry.value.first)}';
       }
     }
     final sortedNamedKeys = namedParts.keys.toList()..sort();

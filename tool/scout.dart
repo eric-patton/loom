@@ -82,6 +82,7 @@ void main(List<String> args) {
             final MethodReferenceNode m =>
               'MethodReferenceNode(${m.methodName})',
             OpaqueNode _ => 'OpaqueNode',
+            final RouteNode r => 'RouteNode(${r.className})',
           };
           widgetSamples.add('${entity.path} -> $rootDesc');
         }
@@ -107,9 +108,10 @@ void main(List<String> args) {
           if (routeSamples.length < 5) {
             final rootDesc = switch (routeModel.root) {
               final RouteNode r => 'RouteNode(${r.className})',
-              final RouteMethodReferenceNode m =>
-                'RouteMethodReferenceNode(${m.methodName})',
-              RouteOpaqueNode _ => 'RouteOpaqueNode',
+              final MethodReferenceNode m =>
+                'MethodReferenceNode(${m.methodName})',
+              OpaqueNode _ => 'OpaqueNode',
+              final WidgetNode w => 'WidgetNode(${w.className})',
             };
             routeSamples.add('${entity.path} -> $rootDesc');
           }

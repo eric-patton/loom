@@ -1,5 +1,5 @@
 import '../catalog/widget_catalog.dart';
-import '../model/widget_node.dart';
+import '../model/node.dart';
 import 'property_serializer.dart';
 
 /// Recursively converts a `ModelNode` to Dart source.
@@ -23,6 +23,13 @@ class WidgetSerializer {
         // create helpers via emission. Move-style edits use a byte-copy
         // path (see moveChildEdits) and don't reach the serializer.
         final MethodReferenceNode m => '${m.methodName}()',
+        // M6.1 unified the `ModelNode` hierarchy across widget and route
+        // trees. The widget serializer never receives a `RouteNode` in
+        // practice (the widget parser never produces one), but the sealed
+        // type now includes it, so we throw to make the invariant explicit.
+        RouteNode() => throw ArgumentError(
+            'WidgetSerializer cannot serialize a RouteNode',
+          ),
       };
 
   static String _serializeWidget(WidgetNode node) {

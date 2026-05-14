@@ -2,7 +2,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 
 import '../catalog/route_catalog.dart';
-import '../model/route_node.dart';
+import '../model/node.dart';
 import '../model/source_span.dart';
 import 'route_visitor.dart';
 import 'widget_visitor.dart' show ParseException, extractMethodReturnExpression;

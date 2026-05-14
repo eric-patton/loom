@@ -1,6 +1,6 @@
 import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
-import '../model/widget_node.dart';
+import '../model/node.dart';
 
 /// Structural model equivalence — the oracle the round-trip property test
 /// uses to verify `parse(apply(emit(M, edits), source))` matches the

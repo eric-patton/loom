@@ -1,6 +1,6 @@
 import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
-import '../model/widget_node.dart';
+import '../model/node.dart';
 import 'property_serializer.dart';
 import 'source_edit.dart';
 import 'widget_serializer.dart';

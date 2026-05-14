@@ -13,14 +13,14 @@ export 'src/emission/source_edit.dart';
 export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
 export 'src/model/list_slot_style.dart';
+// node.dart hosts the full sealed hierarchy: ModelNode + WidgetNode +
+// RouteNode + OpaqueNode + MethodReferenceNode + WidgetTreeModel +
+// RouteTreeModel + ParseDiagnostic + kPositionalOpaqueKeyPrefix.
+export 'src/model/node.dart';
 export 'src/model/node_path.dart';
 export 'src/model/property_value.dart';
-// route_node.dart re-exports ParseDiagnostic and kPositionalOpaqueKeyPrefix.
-export 'src/model/route_node.dart';
 export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';
-// widget_node.dart re-exports ModelNode, WidgetNode, OpaqueNode, WidgetTreeModel.
-export 'src/model/widget_node.dart';
 export 'src/parsing/route_tree_parser.dart';
 export 'src/parsing/widget_tree_parser.dart';
 export 'src/parsing/widget_visitor.dart' show ParseException;

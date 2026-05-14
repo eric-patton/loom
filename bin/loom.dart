@@ -89,6 +89,9 @@ void _printTree(WidgetTreeModel model, IOSink sink) {
     final OpaqueNode _ => 'rootType=OpaqueNode',
     final MethodReferenceNode m =>
       'rootType=MethodReferenceNode(${m.methodName})',
+    RouteNode() => throw StateError(
+        'Widget tree contains a RouteNode (visitor invariant violated)',
+      ),
   };
   final diagSuffix = model.diagnostics.isEmpty
       ? ''
@@ -118,6 +121,10 @@ void _printNode(ModelNode node, IOSink sink, String indent) {
         '[call @${m.callSourceSpan.offset}+${m.callSourceSpan.length}]',
       );
       _printNode(m.body, sink, '$indent    ');
+    case RouteNode():
+      throw StateError(
+        'Widget tree contains a RouteNode (visitor invariant violated)',
+      );
   }
 }
 
@@ -156,9 +163,12 @@ String _formatValue(PropertyValue value) => switch (value) {
 void _printRouteTree(RouteTreeModel model, IOSink sink) {
   final rootDesc = switch (model.root) {
     final RouteNode r => 'rootClass=${r.className}',
-    final RouteOpaqueNode _ => 'rootType=RouteOpaqueNode',
-    final RouteMethodReferenceNode m =>
-      'rootType=RouteMethodReferenceNode(${m.methodName})',
+    final OpaqueNode _ => 'rootType=OpaqueNode',
+    final MethodReferenceNode m =>
+      'rootType=MethodReferenceNode(${m.methodName})',
+    WidgetNode() => throw StateError(
+        'Route tree contains a WidgetNode (visitor invariant violated)',
+      ),
   };
   final diagSuffix = model.diagnostics.isEmpty
       ? ''
@@ -171,11 +181,11 @@ void _printRouteTree(RouteTreeModel model, IOSink sink) {
   _printRouteNode(model.root, sink, '  ');
 }
 
-void _printRouteNode(RouteTreeNode node, IOSink sink, String indent) {
+void _printRouteNode(ModelNode node, IOSink sink, String indent) {
   switch (node) {
     case final RouteNode r:
       _printRoute(r, sink, indent);
-    case final RouteOpaqueNode o:
+    case final OpaqueNode o:
       final preview = o.sourceText.length > 40
           ? '${o.sourceText.substring(0, 40).replaceAll('\n', '\\n')}...'
           : o.sourceText.replaceAll('\n', '\\n');
@@ -183,12 +193,16 @@ void _printRouteNode(RouteTreeNode node, IOSink sink, String indent) {
         '$indent<opaque @${o.sourceSpan.offset}+${o.sourceSpan.length}> '
         '"$preview"',
       );
-    case final RouteMethodReferenceNode m:
+    case final MethodReferenceNode m:
       sink.writeln(
         '$indent-> ${m.methodName}()  '
         '[call @${m.callSourceSpan.offset}+${m.callSourceSpan.length}]',
       );
       _printRouteNode(m.body, sink, '$indent    ');
+    case WidgetNode():
+      throw StateError(
+        'Route tree contains a WidgetNode (visitor invariant violated)',
+      );
   }
 }
 

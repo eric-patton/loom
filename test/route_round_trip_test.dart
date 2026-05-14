@@ -96,7 +96,7 @@ void main() {
             span: SourceSpan(offset: 0, length: 0),
           ),
         },
-        childSlots: const <String, List<RouteTreeNode>>{},
+        childSlots: const <String, List<ModelNode>>{},
         sourceSpan: const SourceSpan(offset: 0, length: 0),
         styleHints: const StyleHints(
           hasConst: false,

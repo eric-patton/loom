@@ -3,7 +3,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 
 import '../catalog/widget_catalog.dart';
 import '../model/source_span.dart';
-import '../model/widget_node.dart';
+import '../model/node.dart';
 import 'widget_visitor.dart';
 
 /// Parses a Dart source string into a `WidgetTreeModel`.

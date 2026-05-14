@@ -7,7 +7,7 @@ export 'widget_catalog.dart' show ChildSlotShape;
 /// Same role as `WidgetCatalog` on the widget side: tells the parser which
 /// named arguments hold child routes (and what shape), and which positional
 /// arguments map to model properties. Anything outside this catalog lands
-/// as `RouteOpaqueNode`.
+/// as `OpaqueNode`.
 ///
 /// Initial population covers the three constructors a typical app router
 /// uses. Adding more (e.g. `StatefulShellRoute.indexedStack`,

@@ -7,7 +7,7 @@ import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
 import '../model/source_span.dart';
 import '../model/style_hints.dart';
-import '../model/widget_node.dart';
+import '../model/node.dart';
 
 /// Thrown when the visitor cannot produce a `WidgetNode` at the root of
 /// the parse — typically because the build method returns an expression

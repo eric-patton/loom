@@ -1,5 +1,5 @@
+import 'node.dart';
 import 'property_value.dart';
-import 'widget_node.dart';
 
 /// One step along a path through the model: which child slot to descend
 /// into, and which index within that slot.
@@ -292,6 +292,14 @@ ModelNode _withPropertyOnModelNode(
       throw const OpaqueEditException(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
+    case RouteNode():
+      // M6.1: ModelNode is now sealed across widget and route trees.
+      // node_path's navigation is widget-tree-scoped today; route-tree
+      // navigation would mirror this scaffolding but with RouteNode in
+      // place of WidgetNode. Deferred until a downstream consumer asks.
+      throw ArgumentError(
+        'NodePath navigation does not support RouteNode (widget-tree only)',
+      );
   }
 }
 
@@ -399,6 +407,10 @@ ModelNode _modifySlotOnModelNode(
       throw const OpaqueEditException(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
+    case RouteNode():
+      throw ArgumentError(
+        'NodePath navigation does not support RouteNode (widget-tree only)',
+      );
   }
 }
 
@@ -422,5 +434,12 @@ void _walk(
     case OpaqueNode():
       // Leaf.
       break;
+    case RouteNode():
+      // M6.1 unified the hierarchy but `_walk` is widget-tree-scoped today.
+      // A route tree's walk would mirror this scaffolding using the route
+      // catalog's slot map. Deferred until a downstream consumer asks.
+      throw ArgumentError(
+        'NodePath walk does not support RouteNode (widget-tree only)',
+      );
   }
 }

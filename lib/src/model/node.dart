@@ -12,16 +12,26 @@ const String kPositionalOpaqueKeyPrefix = '__positional';
 
 /// A node in the visual model.
 ///
-/// Sealed: every node is either a `WidgetNode` (modeled constructor call,
-/// editable via the kernel API) or an `OpaqueNode` (verbatim source range
-/// the kernel does not model — closures, ternaries, helper-method calls
-/// returning Widget, comprehensions, etc.). M4 introduced the split.
+/// Sealed: every node is one of `WidgetNode` (a modeled Flutter widget
+/// constructor call), `RouteNode` (a modeled route DSL constructor call,
+/// added in M6.0), `OpaqueNode` (verbatim source range the kernel does
+/// not model — closures, ternaries, helper-method calls, comprehensions,
+/// etc.), or `MethodReferenceNode` (an in-class helper-method reference
+/// resolved to its returned expression). M6.1 unified the previously
+/// parallel widget-side and route-side hierarchies under this single
+/// sealed base.
 ///
-/// All `ModelNode`s carry a `sourceSpan`. The two subtypes diverge in
-/// what else they carry and in whether the kernel exposes mutation on
-/// them: `WidgetNode`'s properties and child slots are editable;
-/// `OpaqueNode`'s content is byte-preserved and any path that descends
-/// into one throws at edit time.
+/// All `ModelNode`s carry a `sourceSpan`. Subtypes diverge in what else
+/// they carry and in whether the kernel exposes mutation on them:
+/// `WidgetNode` and `RouteNode` are editable; `OpaqueNode`'s content is
+/// byte-preserved and any path that descends into one throws at edit time;
+/// `MethodReferenceNode` is a wrapper around a resolved body whose edits
+/// target the helper's own source range.
+///
+/// Domain enforcement is by visitor contract, not type: the widget visitor
+/// never produces a `RouteNode`, and vice-versa. `WidgetTreeModel.root`
+/// and `RouteTreeModel.root` are both typed `ModelNode` for uniformity;
+/// downstream consumers can pattern-match exhaustively.
 sealed class ModelNode {
   const ModelNode();
   SourceSpan get sourceSpan;
@@ -205,10 +215,11 @@ class WidgetTreeModel {
       '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
 }
 
-/// A single analyzer parse diagnostic, surfaced on `WidgetTreeModel`.
-/// Mirrors the subset of `package:analyzer`'s `AnalysisError` shape that
-/// the kernel cares about — source span, severity-blind message — without
-/// pulling analyzer types into the kernel's public API.
+/// A single analyzer parse diagnostic, surfaced on `WidgetTreeModel` and
+/// `RouteTreeModel`. Mirrors the subset of `package:analyzer`'s
+/// `AnalysisError` shape that the kernel cares about — source span,
+/// severity-blind message — without pulling analyzer types into the
+/// kernel's public API.
 class ParseDiagnostic {
   const ParseDiagnostic({required this.span, required this.message});
 
@@ -218,4 +229,83 @@ class ParseDiagnostic {
   @override
   String toString() =>
       'ParseDiagnostic($message @${span.offset}+${span.length})';
+}
+
+/// A modeled route DSL constructor call — `GoRouter(...)`, `GoRoute(...)`,
+/// `ShellRoute(...)`, etc. Same internal shape as `WidgetNode` (it IS a
+/// constructor-call tree), distinguished only by which catalog the parser
+/// consulted when building it. M6.1 unified the two hierarchies; before
+/// that, route trees had their own parallel `RouteOpaqueNode` and
+/// `RouteMethodReferenceNode` classes — now collapsed into the shared
+/// `OpaqueNode` and `MethodReferenceNode`.
+class RouteNode extends ModelNode {
+  RouteNode({
+    required this.className,
+    required Map<String, PropertyValue> properties,
+    required Map<String, List<ModelNode>> childSlots,
+    required this.sourceSpan,
+    required this.styleHints,
+    Map<String, ListSlotStyle> childSlotStyles =
+        const <String, ListSlotStyle>{},
+  })  : properties = Map.unmodifiable(properties),
+        childSlots = Map.unmodifiable({
+          for (final entry in childSlots.entries)
+            entry.key: List<ModelNode>.unmodifiable(entry.value),
+        }),
+        childSlotStyles = Map.unmodifiable(childSlotStyles);
+
+  /// Class name of the constructor invoked — e.g. `'GoRouter'`, `'GoRoute'`.
+  final String className;
+
+  /// Modeled literal properties keyed by their named-argument label.
+  /// Function-literal arguments like `builder: (ctx, state) => …` land in
+  /// here as `OpaquePropertyValue` (the same opaque-property surface
+  /// widget-side uses).
+  final Map<String, PropertyValue> properties;
+
+  /// Route-valued named arguments grouped by their slot name. `routes:`
+  /// is list-shaped; the same single/list distinction the widget side
+  /// uses applies here, with single-shaped slots holding a one-element
+  /// list.
+  final Map<String, List<ModelNode>> childSlots;
+
+  /// Per-list-slot style hints captured at parse time. Same role as on
+  /// `WidgetNode`: preserves bracket span, trailing-comma state, and
+  /// single-/multi-line shape across structural edits.
+  final Map<String, ListSlotStyle> childSlotStyles;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  final StyleHints styleHints;
+
+  @override
+  String toString() {
+    final totalChildren = childSlots.values.fold<int>(
+      0,
+      (sum, list) => sum + list.length,
+    );
+    return 'RouteNode($className @${sourceSpan.offset}+${sourceSpan.length}, '
+        '${properties.length} prop(s), ${childSlots.length} slot(s), '
+        '$totalChildren child(ren))';
+  }
+}
+
+/// Public root of the route-tree visual model. Same role as
+/// `WidgetTreeModel` for the route DSL — root + analyzer diagnostics.
+/// `root` is `ModelNode` (not just `RouteNode`) so the resolver can land
+/// on `MethodReferenceNode` or `OpaqueNode` at the root when the route
+/// expression isn't a direct constructor call.
+class RouteTreeModel {
+  const RouteTreeModel({
+    required this.root,
+    this.diagnostics = const <ParseDiagnostic>[],
+  });
+
+  final ModelNode root;
+  final List<ParseDiagnostic> diagnostics;
+
+  @override
+  String toString() => 'RouteTreeModel(rootType=${root.runtimeType}'
+      '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
 }

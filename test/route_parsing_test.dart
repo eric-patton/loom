@@ -58,7 +58,7 @@ void main() {
     });
 
     test('every node has a valid SourceSpan', () {
-      void check(RouteTreeNode node) {
+      void check(ModelNode node) {
         expect(node.sourceSpan.length, greaterThan(0));
         expect(node.sourceSpan.end, lessThanOrEqualTo(source.length));
         if (node is RouteNode) {
@@ -153,11 +153,11 @@ void main() {
       expect(root.className, equals('GoRouter'));
     });
 
-    test('helper call resolves to RouteMethodReferenceNode', () {
+    test('helper call resolves to MethodReferenceNode', () {
       final routes = root.childSlots['routes']!;
-      expect(routes.first, isA<RouteMethodReferenceNode>());
+      expect(routes.first, isA<MethodReferenceNode>());
 
-      final ref = routes.first as RouteMethodReferenceNode;
+      final ref = routes.first as MethodReferenceNode;
       expect(ref.methodName, equals('_homeRoute'));
       expect(ref.body, isA<RouteNode>());
       final body = ref.body as RouteNode;
