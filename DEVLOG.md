@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5.5 — analyzer bumped 7.7 → 13.0, visitor adapted, band-aid removed
-**Last touched:** 2026-05-14 — closed the analyzer-version-ceiling Gotcha from M5.4. Bumped `analyzer: ^7.3.0` → `^13.0.0` (now matching what the Dart 3.11.5 SDK ships) and adapted the visitor + reference counter to analyzer 13's renamed AST: `ClassDeclaration.body.members` (was `.members`), `NamedArgument` with `Token name` + `argumentExpression` (was `NamedExpression` with `Label.label` + `expression`), `NamedType.name` (was `.name2`). Dropped the `_enabledExperimentalFlags` band-aid — analyzer 13 has all the previously-experimental features (dot-shorthand, digit-separators, etc.) stable by default. Combined scout against flutter/codelabs + flutter/samples: **1551 .dart files, 0 crashes, 0 diagnostics, 0 idempotence failures, 587 clean parses**. 114 tests + perf gates still green. The high-iteration round-trip property test slowed (25s → 156s at 10k per fixture) because analyzer 13's parser is heavier per call; per-call still well within spec gates (parse <100ms, emit <10ms).
+**Active milestone:** M6.0 — non-Flutter Dart layer (first slice: route DSL)
+**Last touched:** 2026-05-14 — added a second consumer of the kernel: `RouteNode` / `RouteTreeModel`, `RouteCatalog` (GoRouter + GoRoute + ShellRoute), `parseRouteTree`, `RouteVisitor`, `RouteEditPlanner`. Parser entry-point shape is different from widgets — top-level `final router = GoRouter(...);` with a class-method-return fallback (`GoRouter buildRouter() => ...`). 4 new fixtures, 23 new tests; 114 + 23 = **137 tests, all green**. CLI auto-detects widget vs route. Scout extended to dual-mode and re-validated: zero crashes / zero idempotence failures across 1,274 real-world Dart files (loom-repo, lowcode-flutter, flutter/examples). Build-alongside strategy: `RouteVisitor` and `route_tree_parser.dart` are intentional copies of their widget counterparts with the catalog and node-construction types swapped. The diff is the spec for M6.1's `loom_core` extraction.
 **Blockers:** none
-**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3 + M5.4 + M5.5.** Every spec Open Question is settled, every deferred item is closed, the kernel is on the same analyzer the SDK ships, and it's been validated against 1551 real Flutter files (plus the pinned 20-fixture corpus). No remaining open items.
+**Next action:** **Eric review gate for M6.0.** Then M6.1 — extract `loom_core` (the language-general machinery) into its own sub-namespace, now informed by the actual seam between widget- and route-side code rather than guesses. See the M6 roadmap section for M6.1 → M10+ trajectory toward the OutSystems-for-Dart/Flutter end state.
 
 ---
 
@@ -148,6 +148,42 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 - [x] Round-trip invariants hold across method boundaries (verified by the round-trip property test running 1,000+ random edits across `helper_methods.dart`)
 - [ ] **Gate**: reviewed by Eric — kernel ships to UI layer
 
+### M6.0 — Non-Flutter Dart layer (first slice: route DSL)
+
+- [x] Sealed `RouteTreeNode` hierarchy added: `RouteNode | RouteOpaqueNode | RouteMethodReferenceNode`
+- [x] `RouteTreeModel` parallel to `WidgetTreeModel` (root + diagnostics list)
+- [x] `RouteCatalog` covers `GoRouter`, `GoRoute`, `ShellRoute` (each with `routes:` list slot)
+- [x] `parseRouteTree(String source)` locates routes via top-level variable initializer (primary path) or class-method return (fallback)
+- [x] `RouteVisitor` adapts the widget-side traversal: same scaffolding minus widget-only property kinds (EdgeInsets / Color)
+- [x] Function-literal arguments (e.g. `builder:`) flow through `OpaquePropertyValue` (reused unchanged)
+- [x] In-class helper-method resolution wired (4th fixture exercises `routes: [_homeRoute()]`)
+- [x] `RouteEditPlanner` covers property / insert / remove / move edits scoped to `RouteNode`
+- [x] CLI `loom parse <file>` auto-detects widget vs route trees
+- [x] Scout extended to dual-mode parser detection; per-file outcome reporting
+- [x] 4 fixtures (`route_simple`, `route_nested`, `route_shell`, `route_with_helper`) + 23 tests
+- [x] Round-trip invariant 1 holds on routes: property edit, insert, remove, move all re-parse cleanly
+- [x] Round-trip invariant 2 holds on routes: `apply([], source) == source` byte-exact
+- [x] Real-world scout: 1,274 files (loom + lowcode-flutter + flutter/examples), 0 crashes, 0 idempotence failures
+- [ ] **Gate**: reviewed by Eric before M6.1 begins
+
+---
+
+## M6 roadmap — toward OutSystems-for-Dart/Flutter
+
+The user explicitly asked the M6 plan to capture "everything we would need to build to support everything." M6.0 shipped the first slice; the roadmap below sequences the remaining work.
+
+| Milestone | Deliverable | Why |
+|---|---|---|
+| **M6.0** (shipped 2026-05-14) | First non-widget catalog: route DSL (GoRouter-shaped). Same constructor-tree shape as widgets. | Forcing function: a second consumer of the kernel. |
+| M6.1 | Extract `loom_core`. The M6.0 diff between widget and route layers reveals the actual shared seam: source-span / source-edit / list-style / opaque-property / catalog-dispatch machinery. Likely outcome: `lib/src/core/` (general) + `lib/src/widgets/` + `lib/src/routes/` (catalogs), with the duplicated `OpaqueNode` / `MethodReferenceNode` / `RouteOpaqueNode` / `RouteMethodReferenceNode` unified. | Reduce duplication; make the kernel reusable externally; ratify the seam with evidence. |
+| M6.2 | Add 2–3 more constructor-tree DSL catalogs to stress-test generality: `test` framework (`group`/`test` blocks), `MaterialApp` / `CupertinoApp` config trees, possibly Shelf `Router()` cascade (different shape — may pressure the kernel). | Catches generality assumptions a single second-user might not. |
+| **M7** | Class-structure modeling — fields, methods, constructor declarations as a *flat list of members*, not a tree. Different shape from widgets. | OutSystems-style entity modeling: Drift tables, Freezed unions, json_serializable classes. |
+| **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
+| M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
+| M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
+
+The bet: **M6.0 alone doesn't unlock OutSystems-for-Dart — the kernel generalization does.** Every milestone above re-uses the same source-span / source-edit / round-trip core, and M6.0 is the cheapest way to prove that core actually generalizes.
+
 ---
 
 ## Fixture Corpus
@@ -192,6 +228,38 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M6.0 — Non-Flutter Dart layer (first slice: route DSL)
+**Worked on:** Generalized the kernel beyond Flutter widgets by giving it a second consumer. Eric asked to "plan out the non-Flutter Dart layer next" with the long-arc goal of an OutSystems-style multi-domain visual layer over Dart code. M6.0 ships the first slice: a GoRouter-shaped route DSL plugged into the same parse-emit machinery as widgets.
+
+**What was built:**
+- `lib/src/model/route_node.dart`: sealed `RouteTreeNode` hierarchy (`RouteNode | RouteOpaqueNode | RouteMethodReferenceNode`) + `RouteTreeModel`.
+- `lib/src/catalog/route_catalog.dart`: `RouteCatalog` covering `GoRouter`, `GoRoute`, `ShellRoute`. Single `Map<String, RouteSpec>`, same internal shape as `WidgetCatalog`.
+- `lib/src/parsing/route_tree_parser.dart`: `parseRouteTree` — primary entry-point is top-level `final router = GoRouter(...)` declarations; fallback walks class declarations for a method returning a route root (covers `GoRouter get router => GoRouter(...)` and `GoRouter buildRouter() { return GoRouter(...); }`).
+- `lib/src/parsing/route_visitor.dart`: copy of `WidgetVisitor` (~290 lines) with the catalog and node-construction types swapped. Widget-only property kinds (EdgeInsets, Color) are intentionally absent — routes don't use those shapes. In-class helper-method resolution carried over verbatim (4th fixture exercises it).
+- `lib/src/emission/route_edit_planner.dart`: property / insert / remove / move edits scoped to `RouteNode`. Internal whitespace / comment-trim helpers are duplicated from `EditPlanner`; M6.1 will share them.
+- CLI: `bin/loom.dart` auto-detects widget vs route tree in the `parse` subcommand.
+- Scout: `tool/scout.dart` extended to dual-mode parser detection; per-file outcome reporting (widget-clean / widget-diag / route-clean / route-diag / none / crash).
+- 4 fixtures: `route_simple`, `route_nested`, `route_shell`, `route_with_helper`. 23 tests across `route_parsing_test.dart` + `route_round_trip_test.dart`.
+
+**Sequencing strategy (per the plan): build alongside, extract opportunistically.** `RouteVisitor` and `route_tree_parser.dart` are intentional copies of their widget counterparts. The duplication is the input to M6.1's `loom_core` extraction — pulling out shared code based on evidence rather than guesses.
+
+**Design adjustment from the plan:** the plan said "reuse existing `OpaqueNode` and `MethodReferenceNode`" for the route side. Dart's sealed-class semantics forbid cross-library `implements`, so a single type cannot belong to two sealed hierarchies declared in different libraries. M6.0 instead declares parallel `RouteOpaqueNode` and `RouteMethodReferenceNode` under the new sealed `RouteTreeNode` base. The duplication is small (each is a tiny class), and M6.1 will unify all four under a shared base once the right shape is visible.
+
+**Validation:**
+- 137 tests green (114 widget + 23 new route).
+- `dart run bin/loom.dart parse` works on both fixture kinds; widget-side regression-free.
+- Scout against 1,274 real-world Dart files (loom-repo, lowcode-flutter, flutter/examples): 0 crashes, 0 idempotence failures.
+- Note: the originally-planned flutter/codelabs + flutter/samples checkouts from M5.4 were no longer on disk; substituted flutter/examples (1,214 files) as a comparable real-world surface. None of those examples use GoRouter, so route-detection coverage from the broad scout is currently 0 — the 4 fixtures plus 4 hits in the loom-repo scout are the only route-tree validation. M6.2's "more catalogs" milestone will broaden this.
+
+**Learned:**
+- **Dart's sealed-class semantics force a duplication decision.** A class can extend `ModelNode` and also `implements RouteTreeNode` only if `RouteTreeNode` is non-sealed (loses exhaustive matching) or both are in the same library (couples the layers tighter than M6.0 wants). The duplication path is small enough to take, and the planned M6.1 unification has clean shape now.
+- **The route entry-point is genuinely different from the widget entry-point.** Widgets live inside a `Widget build(BuildContext)` method body, always nested in a class. Routes typically live at top-level (`final router = GoRouter(...);`). Parsing a route tree requires looking at the file's *top-level declarations*, not searching for a method. The class-method fallback handles the less-common shape. This pressures the assumption that "find the modeled root expression" is a single pattern — it's catalog-dependent.
+- **Function-literal arguments flow through `OpaquePropertyValue` for free.** The existing widget visitor already opaqued anything that wasn't a simple literal / enum-ref / known constructor. Routes' `builder: (ctx, state) => ...` callbacks just land in the same path without code changes. The opaque-property machinery is genuinely domain-agnostic.
+
+**Headline numbers:** kernel now has two domain consumers (widgets + routes). Public API surface added: `RouteNode`, `RouteTreeModel`, `RouteTreeNode`, `RouteOpaqueNode`, `RouteMethodReferenceNode`, `parseRouteTree`, `RouteEditPlanner`, `RouteCatalog`, `RouteSpec`. 1,274-file scout, 0 crashes, 0 idempotence failures. Same invariants (round-trip + no-op idempotence) hold for route trees as for widget trees.
+
+**Next:** Eric reviews M6.0. Then M6.1: extract `loom_core` against the diff between widget and route layers — pull out source-span / source-edit / list-style / catalog-dispatch / AST-walking scaffolding into a shared core; unify `OpaqueNode` + `RouteOpaqueNode` (and the method-ref pair) under a common sealed base.
 
 ### [2026-05-14] M5.5 — analyzer 7.7 → 13.0, visitor adapted, experimental-flags band-aid removed
 **Worked on:** Closed the long-term TODO documented in M5.4: bump `analyzer` past 13.0.0 and adapt the visitor to its renamed AST API. The pinned `^7.3.0` was the `_macros` SDK-conflict workaround from M1 scaffolding; moving past it was non-trivial because of breaking AST changes.

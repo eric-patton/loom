@@ -5,17 +5,22 @@
 /// edits back. See PROJECT_SPEC.md for the contract and invariants.
 library;
 
+export 'src/catalog/route_catalog.dart' show RouteCatalog, RouteSpec;
 export 'src/emission/edit_planner.dart';
 export 'src/emission/property_serializer.dart';
+export 'src/emission/route_edit_planner.dart';
 export 'src/emission/source_edit.dart';
 export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
 export 'src/model/list_slot_style.dart';
 export 'src/model/node_path.dart';
 export 'src/model/property_value.dart';
+// route_node.dart re-exports ParseDiagnostic and kPositionalOpaqueKeyPrefix.
+export 'src/model/route_node.dart';
 export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';
 // widget_node.dart re-exports ModelNode, WidgetNode, OpaqueNode, WidgetTreeModel.
 export 'src/model/widget_node.dart';
+export 'src/parsing/route_tree_parser.dart';
 export 'src/parsing/widget_tree_parser.dart';
 export 'src/parsing/widget_visitor.dart' show ParseException;

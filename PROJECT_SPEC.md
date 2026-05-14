@@ -10,6 +10,7 @@ This document is the working spec. It defines what to build, what not to build, 
 > - File consolidations: `opaque_node.dart` lives inside `widget_node.dart` (sealed-subtype requirement); `ast_equivalence.dart` → `model_equivalence.dart` (Q3 settled at the model level); `formatter.dart` deleted; `dart_style` and `glados`/`checks` dev deps dropped — none earned their keep.
 > - `WidgetTreeModel.root` widened from `WidgetNode` to `ModelNode` (M5.3), so `build() => _helper()` and bare-helper roots resolve. `WidgetTreeModel.diagnostics` carries analyzer parse errors (Q4 settled).
 > - Catalog covers 17 widgets (Column, Row, Padding, Center, SizedBox, Container, Expanded, GestureDetector, InkWell, Material, SafeArea, MaterialApp, Scaffold, AppBar, DefaultTabController, TabBar, TabBarView, Tab, Text, Icon, IconButton, FloatingActionButton). Anything else opaques.
+> - **M6.0**: kernel generalizes beyond widgets. `RouteCatalog` + `parseRouteTree` + `RouteEditPlanner` model non-widget constructor-tree DSLs (initial coverage: GoRouter / GoRoute / ShellRoute). Loom is **not Flutter-coupled** — the widget catalog is one of several pluggable upper layers on top of a shared parse-emit kernel. See DEVLOG M6.0 for the M6.1 → M10+ roadmap toward an OutSystems-style multi-domain visual layer.
 >
 > When this spec and `DEVLOG.md` disagree, `DEVLOG.md` is authoritative.
 

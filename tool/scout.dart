@@ -1,15 +1,15 @@
 // ignore_for_file: dangling_library_doc_comments
 
-/// Scout: run `parseWidgetTree` + no-op idempotence over every `.dart`
-/// file in a directory tree. Used to stress-test the kernel against real-
-/// world code beyond the pinned fixture corpus.
+/// Scout: run both `parseWidgetTree` and `parseRouteTree` + no-op
+/// idempotence over every `.dart` file in a directory tree. Used to
+/// stress-test the kernel against real-world code beyond the pinned
+/// fixture corpus.
 ///
-/// Tracks four outcomes per file:
-///   - parsed clean: model built, zero analyzer diagnostics
-///   - parsed with diagnostics: model built, but the analyzer
-///     error-recovered (Q4 surface)
-///   - ParseException: expected for non-widget files (no `build()` etc.)
-///   - other exception: a kernel crash on shape we don't handle gracefully
+/// Per-file outcomes tracked:
+///   - parsed widget clean / with diagnostics
+///   - parsed route clean / with diagnostics
+///   - no tree found (both parsers threw `ParseException`)
+///   - other exception (a kernel crash on shape we don't handle gracefully)
 ///
 /// And the invariant we ALWAYS check on parsed files:
 ///   - `applySourceEdits(source, []) == source`
@@ -33,15 +33,18 @@ void main(List<String> args) {
   }
 
   var total = 0;
-  var parsedClean = 0;
-  var parsedWithDiagnostics = 0;
-  var threwParseException = 0;
+  var parsedWidgetClean = 0;
+  var parsedWidgetDiagnostics = 0;
+  var parsedRouteClean = 0;
+  var parsedRouteDiagnostics = 0;
+  var noTreeFound = 0;
   var threwOther = 0;
   var idempotenceFailed = 0;
   final crashes = <_Crash>[];
   final idempotenceFails = <String>[];
   final diagnosticFiles = <String>[];
-  final cleanSamples = <String>[];
+  final widgetSamples = <String>[];
+  final routeSamples = <String>[];
 
   for (final entity in root.listSync(recursive: true)) {
     if (entity is! File) {
@@ -59,41 +62,80 @@ void main(List<String> args) {
       continue;
     }
 
+    var parsedAny = false;
     try {
-      final model = parseWidgetTree(source);
-      if (model.diagnostics.isEmpty) {
-        parsedClean++;
-        if (cleanSamples.length < 5) {
-          final rootDesc = switch (model.root) {
+      final widgetModel = parseWidgetTree(source);
+      parsedAny = true;
+      if (widgetModel.diagnostics.isEmpty) {
+        parsedWidgetClean++;
+        if (widgetSamples.length < 5) {
+          final rootDesc = switch (widgetModel.root) {
             final WidgetNode w => 'WidgetNode(${w.className})',
             final MethodReferenceNode m =>
               'MethodReferenceNode(${m.methodName})',
             OpaqueNode _ => 'OpaqueNode',
           };
-          cleanSamples.add('${entity.path} -> $rootDesc');
+          widgetSamples.add('${entity.path} -> $rootDesc');
         }
       } else {
-        parsedWithDiagnostics++;
-        diagnosticFiles.add('${entity.path} (${model.diagnostics.length})');
+        parsedWidgetDiagnostics++;
+        diagnosticFiles
+            .add('${entity.path} [widget] (${widgetModel.diagnostics.length})');
       }
+    } on ParseException {
+      // Fall through to route parser.
+    } on Object catch (e, st) {
+      threwOther++;
+      crashes.add(_Crash(entity.path, e, st));
+      continue;
+    }
+
+    if (!parsedAny) {
+      try {
+        final routeModel = parseRouteTree(source);
+        parsedAny = true;
+        if (routeModel.diagnostics.isEmpty) {
+          parsedRouteClean++;
+          if (routeSamples.length < 5) {
+            final rootDesc = switch (routeModel.root) {
+              final RouteNode r => 'RouteNode(${r.className})',
+              final RouteMethodReferenceNode m =>
+                'RouteMethodReferenceNode(${m.methodName})',
+              RouteOpaqueNode _ => 'RouteOpaqueNode',
+            };
+            routeSamples.add('${entity.path} -> $rootDesc');
+          }
+        } else {
+          parsedRouteDiagnostics++;
+          diagnosticFiles
+              .add('${entity.path} [route] (${routeModel.diagnostics.length})');
+        }
+      } on ParseException {
+        noTreeFound++;
+      } on Object catch (e, st) {
+        threwOther++;
+        crashes.add(_Crash(entity.path, e, st));
+        continue;
+      }
+    }
+
+    if (parsedAny) {
       final result = applySourceEdits(source, const <SourceEdit>[]);
       if (result != source) {
         idempotenceFailed++;
         idempotenceFails.add(entity.path);
       }
-    } on ParseException {
-      threwParseException++;
-    } on Object catch (e, st) {
-      threwOther++;
-      crashes.add(_Crash(entity.path, e, st));
     }
   }
 
   stdout.writeln('Scout summary for ${root.path}:');
   stdout.writeln('  Total .dart files:                $total');
-  stdout.writeln('  Parsed clean:                     $parsedClean');
-  stdout.writeln('  Parsed with diagnostics:          $parsedWithDiagnostics');
-  stdout.writeln('  ParseException (non-widget file): $threwParseException');
+  stdout.writeln('  Parsed widget clean:              $parsedWidgetClean');
+  stdout
+      .writeln('  Parsed widget with diagnostics:   $parsedWidgetDiagnostics');
+  stdout.writeln('  Parsed route clean:               $parsedRouteClean');
+  stdout.writeln('  Parsed route with diagnostics:    $parsedRouteDiagnostics');
+  stdout.writeln('  No tree found:                    $noTreeFound');
   stdout.writeln('  Other exception (CRASH):          $threwOther');
   stdout.writeln('  Idempotence failed:               $idempotenceFailed');
 
@@ -126,10 +168,17 @@ void main(List<String> args) {
       stdout.writeln('  $entry');
     }
   }
-  if (cleanSamples.isNotEmpty) {
+  if (widgetSamples.isNotEmpty) {
     stdout.writeln('');
-    stdout.writeln('Clean-parse samples (first 5):');
-    for (final entry in cleanSamples) {
+    stdout.writeln('Widget clean-parse samples (first 5):');
+    for (final entry in widgetSamples) {
+      stdout.writeln('  $entry');
+    }
+  }
+  if (routeSamples.isNotEmpty) {
+    stdout.writeln('');
+    stdout.writeln('Route clean-parse samples (first 5):');
+    for (final entry in routeSamples) {
       stdout.writeln('  $entry');
     }
   }
