@@ -31,11 +31,16 @@ class EditPlanner {
   /// Indices in `[0, children.length]` are valid; `children.length`
   /// appends. The list's existing style (trailing-comma + single/multi-line)
   /// is preserved.
+  ///
+  /// `newChild` may be any `ModelNode` — a `WidgetNode` is freshly
+  /// serialized, an `OpaqueNode` emits its captured `sourceText`, and a
+  /// `MethodReferenceNode` emits `methodName()` (the helper must already
+  /// exist in the source for the call to resolve at the inserted site).
   static SourceEdit insertChildEdit({
     required WidgetNode parent,
     required String slotName,
     required int index,
-    required WidgetNode newChild,
+    required ModelNode newChild,
     required String source,
   }) =>
       _insertAt(

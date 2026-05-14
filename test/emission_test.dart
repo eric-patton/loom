@@ -134,6 +134,123 @@ void main() {
       expect(
           PropertySerializer.serialize(v), equals('MainAxisAlignment.center'));
     });
+
+    test('NumLiteralValue NaN -> ArgumentError', () {
+      const v = NumLiteralValue(value: double.nan, isDouble: true, span: _span);
+      expect(() => PropertySerializer.serialize(v), throwsArgumentError);
+    });
+
+    test('NumLiteralValue infinity -> ArgumentError', () {
+      const v = NumLiteralValue(
+        value: double.infinity,
+        isDouble: true,
+        span: _span,
+      );
+      expect(() => PropertySerializer.serialize(v), throwsArgumentError);
+    });
+
+    test('ColorValue negative -> ArgumentError', () {
+      const v = ColorValue(argbValue: -1, span: _span);
+      expect(() => PropertySerializer.serialize(v), throwsArgumentError);
+    });
+
+    test('ColorValue > 32 bits -> ArgumentError', () {
+      const v = ColorValue(argbValue: 0x100000000, span: _span);
+      expect(() => PropertySerializer.serialize(v), throwsArgumentError);
+    });
+  });
+
+  group('positional-opaque round-trip', () {
+    test(
+      'Text(modeledArg, unmodeledArg) preserves positional order on emit',
+      () {
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Text('foo', 'bar');
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final text = model.root;
+        // First positional is catalog-modeled as `data`; second is opaque.
+        expect(text.properties['data'], isA<StringLiteralValue>());
+        expect(
+          text.properties['${kPositionalOpaqueKeyPrefix}1'],
+          isA<OpaquePropertyValue>(),
+        );
+
+        final serialized = WidgetSerializer.serialize(text);
+        expect(serialized, contains("'foo'"));
+        expect(serialized, contains("'bar'"));
+        expect(
+          serialized.indexOf("'foo'"),
+          lessThan(serialized.indexOf("'bar'")),
+          reason: 'positional args must emit in source order',
+        );
+
+        // Re-parse: the round-trip is structurally identical.
+        final reparsed = parseWidgetTree(
+          source.replaceAll(
+            "Text('foo', 'bar')",
+            serialized,
+          ),
+        );
+        expect(
+          StructuralEquivalence.equal(reparsed, model),
+          isTrue,
+          reason: '$serialized must reparse to an equivalent model',
+        );
+      },
+    );
+  });
+
+  group('applySourceEdits validation', () {
+    test('negative offset throws ArgumentError', () {
+      expect(
+        () => applySourceEdits('abc', [
+          const SourceEdit(offset: -1, length: 0, replacement: 'X'),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
+    test('out-of-bounds range throws ArgumentError', () {
+      expect(
+        () => applySourceEdits('abc', [
+          const SourceEdit(offset: 0, length: 10, replacement: 'X'),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
+    test('overlapping edits throw ArgumentError', () {
+      expect(
+        () => applySourceEdits('abcdef', [
+          const SourceEdit(offset: 0, length: 3, replacement: 'X'),
+          const SourceEdit(offset: 2, length: 3, replacement: 'Y'),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
+    test('two pure-insert edits at the same offset throw ArgumentError', () {
+      expect(
+        () => applySourceEdits('abc', [
+          const SourceEdit(offset: 1, length: 0, replacement: 'X'),
+          const SourceEdit(offset: 1, length: 0, replacement: 'Y'),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
+    test('adjacent non-overlapping edits succeed', () {
+      final out = applySourceEdits('abcdef', [
+        const SourceEdit(offset: 0, length: 2, replacement: 'X'),
+        const SourceEdit(offset: 2, length: 2, replacement: 'Y'),
+      ]);
+      expect(out, equals('XYef'));
+    });
   });
 
   group('EditPlanner.propertyEdit', () {

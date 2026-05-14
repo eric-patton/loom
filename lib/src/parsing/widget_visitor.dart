@@ -180,10 +180,12 @@ class WidgetVisitor {
       } else {
         final propName = spec.positionalToProperty[i];
         if (propName == null) {
-          // Unmodeled positional argument: capture as an unnamed opaque
-          // property under a generated key. Out of scope for M4; treat as
-          // opaque under the key '__positional$i' so it round-trips.
-          properties['__positional$i'] = _opaqueProperty(arg);
+          // Unmodeled positional argument: capture as an opaque property
+          // under a synthetic key built from `kPositionalOpaqueKeyPrefix`
+          // plus the source index. The serializer recognizes this prefix
+          // and re-emits the value as a positional argument at the same
+          // index, interleaved with any catalog-modeled positionals.
+          properties['$kPositionalOpaqueKeyPrefix$i'] = _opaqueProperty(arg);
         } else {
           properties[propName] = _convertProperty(arg);
         }
@@ -208,16 +210,13 @@ class WidgetVisitor {
       if (slotExpr is! ListLiteral) {
         // Non-list expression in a list-shaped slot (e.g. a spread or
         // a method call returning List<Widget>). Wrap the whole thing
-        // as a single opaque entry and synthesize a degenerate style.
+        // as a single opaque entry, and crucially do NOT synthesize a
+        // ListSlotStyle: there is no real bracketed list literal here,
+        // so structural edits must not target this slot. The visitor's
+        // caller skips style assignment when style is null.
         return (
           children: <ModelNode>[_opaqueNode(slotExpr)],
-          style: ListSlotStyle(
-            bracketsSpan: _span(slotExpr),
-            hasTrailingComma: false,
-            isMultiLine: source
-                .substring(slotExpr.offset, slotExpr.offset + slotExpr.length)
-                .contains('\n'),
-          ),
+          style: null,
         );
       }
       final children = <ModelNode>[];

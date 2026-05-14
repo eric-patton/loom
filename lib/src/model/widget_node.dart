@@ -3,6 +3,13 @@ import 'property_value.dart';
 import 'source_span.dart';
 import 'style_hints.dart';
 
+/// Synthetic property-key prefix used by the visitor when capturing
+/// positional arguments that have no `positionalToProperty` mapping in
+/// the catalog. The serializer recognizes the same prefix and emits
+/// those entries as positional args in numeric-suffix order, interleaved
+/// with the catalog's modeled positionals.
+const String kPositionalOpaqueKeyPrefix = '__positional';
+
 /// A node in the visual model.
 ///
 /// Sealed: every node is either a `WidgetNode` (modeled constructor call,

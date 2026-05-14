@@ -44,30 +44,46 @@ class WidgetSerializer {
 
     final parts = <String>[];
 
-    // Positional args, in catalog index order.
+    // Positional args: collect from BOTH the catalog (modeled positionals)
+    // and from `__positional$i` opaque entries (unmodeled positionals).
+    // Both are keyed by their original positional index so we emit them
+    // in source order, not grouped by source.
     final reverseLookup = <String, int>{
       for (final entry in spec.positionalToProperty.entries)
         entry.value: entry.key,
     };
-    final positionalIndices = spec.positionalToProperty.keys.toList()..sort();
-    for (final idx in positionalIndices) {
-      final propName = spec.positionalToProperty[idx]!;
-      final value = node.properties[propName];
+    final positionalByIndex = <int, String>{};
+    for (final entry in spec.positionalToProperty.entries) {
+      final value = node.properties[entry.value];
       if (value != null) {
-        parts.add(PropertySerializer.serialize(value));
+        positionalByIndex[entry.key] = PropertySerializer.serialize(value);
       }
     }
+    for (final entry in node.properties.entries) {
+      if (!entry.key.startsWith(kPositionalOpaqueKeyPrefix)) {
+        continue;
+      }
+      final idx = int.tryParse(
+        entry.key.substring(kPositionalOpaqueKeyPrefix.length),
+      );
+      if (idx == null) {
+        continue;
+      }
+      positionalByIndex[idx] = PropertySerializer.serialize(entry.value);
+    }
+    final sortedPositional = positionalByIndex.keys.toList()..sort();
+    for (final idx in sortedPositional) {
+      parts.add(positionalByIndex[idx]!);
+    }
 
-    // Named args: properties (non-positional) + child slots. Sorted by name.
+    // Named args: properties (non-positional, non-__positional) + child
+    // slots. Sorted alphabetically by name.
     final namedParts = <String, String>{};
     for (final entry in node.properties.entries) {
       if (reverseLookup.containsKey(entry.key)) {
         continue;
       }
-      // Skip synthetic positional-opaque keys (visitor generates names
-      // like `__positional0` for unmodeled positionals — those round
-      // trip via PropertySerializer for opaque types).
-      if (entry.key.startsWith('__positional')) {
+      if (entry.key.startsWith(kPositionalOpaqueKeyPrefix)) {
         continue;
       }
       namedParts[entry.key] =
