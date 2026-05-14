@@ -1,29 +1,19 @@
-/// Metadata for the (small) set of widgets M1 actually models.
-///
-/// The parser consults the catalog for two questions:
-///   1. Which named arguments are widget-valued child slots, and what shape
-///      is each — `single` (`child:`-like) or `list` (`children:`-like)?
-///   2. Which positional arguments map to which model properties (e.g.
-///      `Text('hello')` -> property `data`)?
-///
-/// Widgets not in the catalog will cause the parser to throw in M1. The
-/// proper opaque-fallback story lands in M4 (`OpaqueNode`).
-enum ChildSlotShape { single, list }
+// Metadata for the set of widgets the kernel models.
+//
+// The catalog answers two parser questions per node:
+//   1. Which named arguments are widget-valued child slots, and what shape?
+//   2. Which positional arguments map to which model properties?
+//
+// Widgets not in the catalog land as `OpaqueNode` (M4).
+//
+// `WidgetSpec` is a typedef of the language-general `CatalogSpec` (extracted
+// M6.1 Phase 2 — the spec shape is shared with `RouteSpec` and any future
+// domain catalog).
+import 'catalog_spec.dart';
 
-class WidgetSpec {
-  const WidgetSpec({
-    this.childSlots = const <String, ChildSlotShape>{},
-    this.positionalToProperty = const <int, String>{},
-  });
+export 'catalog_spec.dart' show CatalogSpec, ChildSlotShape;
 
-  /// Named arguments that hold child widgets, and the shape of each slot.
-  /// A `single` slot accepts one widget directly (`child: foo`); a `list`
-  /// slot accepts a list literal of widgets (`children: [...]`).
-  final Map<String, ChildSlotShape> childSlots;
-
-  /// Maps positional argument index to model property name.
-  final Map<int, String> positionalToProperty;
-}
+typedef WidgetSpec = CatalogSpec;
 
 class WidgetCatalog {
   WidgetCatalog._();

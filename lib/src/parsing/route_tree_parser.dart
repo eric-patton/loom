@@ -49,7 +49,7 @@ RouteTreeModel parseRouteTree(String source) {
       }
       final visitor = RouteVisitor(source);
       return RouteTreeModel(
-        root: visitor.convertRouteTreeNode(initializer),
+        root: visitor.convertNode(initializer),
         diagnostics: diagnostics,
       );
     }
@@ -112,7 +112,7 @@ RouteTreeModel parseRouteTree(String source) {
 
     final visitor = RouteVisitor(source, classMethods: classMethods);
     return RouteTreeModel(
-      root: visitor.convertRouteTreeNode(rootExpr),
+      root: visitor.convertNode(rootExpr),
       diagnostics: diagnostics,
     );
   }

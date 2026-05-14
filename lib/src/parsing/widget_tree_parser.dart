@@ -74,7 +74,7 @@ WidgetTreeModel parseWidgetTree(String source) {
     }
     final visitor = WidgetVisitor(source, classMethods: safeMethods);
     return WidgetTreeModel(
-      root: visitor.convertModelNode(root),
+      root: visitor.convertNode(root),
       diagnostics: diagnostics,
     );
   }
@@ -88,7 +88,7 @@ WidgetTreeModel parseWidgetTree(String source) {
 /// for each name in `knownMethods`, how many widget-position references
 /// to that method it found. Property values, opaque expressions, method-
 /// call targets, and positional arguments are NOT recursed into — they
-/// can't reach `convertModelNode` in the visitor and so don't contribute
+/// can't reach `convertNode` in the visitor and so don't contribute
 /// to multi-reference risk. Without this widget-position filter the
 /// counter over-counted (e.g. `_a()` inside `_a().wrap()` looked like a
 /// helper reference even though the visitor would never resolve it as
@@ -114,7 +114,7 @@ class _ReferenceCounter {
   final Map<String, int> counts = <String, int>{};
 
   void _countAtWidgetPosition(Expression expr) {
-    // Mirror `WidgetVisitor.convertModelNode`: a no-target, no-arg,
+    // Mirror `BaseVisitor.convertNode`: a no-target, no-arg,
     // no-type-args call that matches a known method is what would be
     // resolved as `MethodReferenceNode`. Count and stop — we don't
     // descend into the helper's body here; that's walked separately

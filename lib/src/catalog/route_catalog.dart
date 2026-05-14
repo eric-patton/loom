@@ -1,32 +1,10 @@
-import 'widget_catalog.dart' show ChildSlotShape;
+// Catalog of route-DSL constructors (GoRouter-shaped) the kernel models.
+// `RouteSpec` is a typedef of the shared `CatalogSpec` (M6.1 Phase 2).
+import 'catalog_spec.dart';
 
-export 'widget_catalog.dart' show ChildSlotShape;
+export 'catalog_spec.dart' show CatalogSpec, ChildSlotShape;
 
-/// Catalog of route-DSL constructors (GoRouter-shaped) the kernel models.
-///
-/// Same role as `WidgetCatalog` on the widget side: tells the parser which
-/// named arguments hold child routes (and what shape), and which positional
-/// arguments map to model properties. Anything outside this catalog lands
-/// as `OpaqueNode`.
-///
-/// Initial population covers the three constructors a typical app router
-/// uses. Adding more (e.g. `StatefulShellRoute.indexedStack`,
-/// `GoRouter.routingConfig`) is a single-line addition.
-class RouteSpec {
-  const RouteSpec({
-    this.childSlots = const <String, ChildSlotShape>{},
-    this.positionalToProperty = const <int, String>{},
-  });
-
-  /// Named arguments that hold child routes, and the shape of each slot.
-  /// All route slots in the current catalog are list-shaped (`routes: [...]`).
-  final Map<String, ChildSlotShape> childSlots;
-
-  /// Maps positional argument index to model property name. Empty for the
-  /// initial three entries — GoRouter / GoRoute / ShellRoute use named args
-  /// for everything that matters.
-  final Map<int, String> positionalToProperty;
-}
+typedef RouteSpec = CatalogSpec;
 
 class RouteCatalog {
   RouteCatalog._();
