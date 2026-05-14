@@ -241,9 +241,16 @@ class Cycle extends StatelessWidget {
           'see the wrapped variant below',
     );
 
-    test('cyclic helper inside a wrapping widget produces inner OpaqueNode',
-        () {
-      const source = '''
+    test(
+      'self-recursive helper becomes opaque at every reference '
+      '(multi-reference defense)',
+      () {
+        // Recursive helper: `_self()` appears in both build() and
+        // `_self`'s own body, so it's referenced more than once across
+        // the analyzed scope. The parser's multi-reference defense
+        // drops it from the helper-method map before the visitor runs,
+        // so every reference falls through to `OpaqueNode`.
+        const source = '''
 import 'package:flutter/material.dart';
 
 class Cycle extends StatelessWidget {
@@ -266,28 +273,45 @@ class Cycle extends StatelessWidget {
   }
 }
 ''';
+        final model = parseWidgetTree(source);
+        final rootChildren = model.root.childSlots['children']!;
+        expect(rootChildren, hasLength(1));
+        expect(
+          rootChildren[0],
+          isA<OpaqueNode>(),
+          reason: 'multi-referenced (including self-recursive) helpers are '
+              'opaque at every reference',
+        );
+      },
+    );
+
+    test('multi-referenced helper opaque at every call site', () {
+      const source = '''
+import 'package:flutter/material.dart';
+
+class MultiRef extends StatelessWidget {
+  const MultiRef({super.key});
+
+  Widget _h() {
+    return const Text('shared');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _h(),
+        _h(),
+      ],
+    );
+  }
+}
+''';
       final model = parseWidgetTree(source);
       final rootChildren = model.root.childSlots['children']!;
-      expect(rootChildren, hasLength(1));
-
-      final ref = rootChildren[0];
-      if (ref is! MethodReferenceNode) {
-        fail('expected MethodReferenceNode, got ${ref.runtimeType}');
-      }
-      expect(ref.methodName, equals('_self'));
-
-      // The body is a Padding...
-      final padding = ref.body as WidgetNode;
-      expect(padding.className, equals('Padding'));
-      // ...whose `child` slot would have been _self() again, but the
-      // cycle detector kicks in and emits an OpaqueNode at the inner
-      // reference.
-      final innerChild = padding.childSlots['child']!.first;
-      expect(
-        innerChild,
-        isA<OpaqueNode>(),
-        reason: 'cycle stop: inner _self() should be opaque',
-      );
+      expect(rootChildren, hasLength(2));
+      expect(rootChildren[0], isA<OpaqueNode>());
+      expect(rootChildren[1], isA<OpaqueNode>());
     });
 
     test('edits to a widget inside a helper target the helper source', () {
