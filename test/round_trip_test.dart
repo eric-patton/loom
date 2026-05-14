@@ -44,6 +44,8 @@ const _m1Fixtures = <String>[
   'real_world_cookbook_tabs.dart',
   // M4: exercises opaque handling (closure, BoxDecoration, EdgeInsets.symmetric).
   'real_world_opaque_mybutton.dart',
+  // M5: exercises in-class helper-method following.
+  'helper_methods.dart',
 ];
 
 class _CachedFixture {

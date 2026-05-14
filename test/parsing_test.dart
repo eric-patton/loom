@@ -130,4 +130,165 @@ void main() {
       }
     });
   });
+
+  group('M5 helper-method following', () {
+    test('helpers resolve to MethodReferenceNode with body widget tree', () {
+      final source = File(
+        'test/fixtures/helper_methods.dart',
+      ).readAsStringSync();
+      final model = parseWidgetTree(source);
+
+      // Root: Column with children [MethodRef(_buildTitle), MethodRef(_buildContent)]
+      final rootChildren = model.root.childSlots['children']!;
+      expect(rootChildren, hasLength(2));
+
+      final first = rootChildren[0];
+      if (first is! MethodReferenceNode) {
+        fail('expected MethodReferenceNode, got ${first.runtimeType}');
+      }
+      expect(first.methodName, equals('_buildTitle'));
+      expect(first.body, isA<WidgetNode>());
+      expect((first.body as WidgetNode).className, equals('Padding'));
+
+      final second = rootChildren[1];
+      if (second is! MethodReferenceNode) {
+        fail('expected MethodReferenceNode, got ${second.runtimeType}');
+      }
+      expect(second.methodName, equals('_buildContent'));
+      expect((second.body as WidgetNode).className, equals('Column'));
+    });
+
+    test(
+      'cyclic helper (helper calls itself) terminates with inner OpaqueNode',
+      () {
+        const source = '''
+import 'package:flutter/material.dart';
+
+class Cycle extends StatelessWidget {
+  const Cycle({super.key});
+
+  Widget _self() {
+    return _self();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _self();
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+
+        // Root is the outer MethodReferenceNode for _self().
+        final root = model.root;
+        // model.root is WidgetTreeModel.root (WidgetNode), but in this
+        // fixture build() directly returns _self() — which resolves to a
+        // MethodReferenceNode, NOT a WidgetNode. Our parser requires the
+        // root to be WidgetNode (convertWidget throws if root is
+        // anything else). So we don't expect a passing model build for
+        // a build() that ONLY returns a helper call.
+        //
+        // Instead, parseWidgetTree throws. The cycle-detection check is
+        // observable when the helper is INSIDE another modelable widget.
+        // Verified by the next assertion.
+        expect(root.className, isNotEmpty);
+      },
+      skip: 'requires a build() that wraps _self() inside a modelable widget; '
+          'see the wrapped variant below',
+    );
+
+    test('cyclic helper inside a wrapping widget produces inner OpaqueNode',
+        () {
+      const source = '''
+import 'package:flutter/material.dart';
+
+class Cycle extends StatelessWidget {
+  const Cycle({super.key});
+
+  Widget _self() {
+    return Padding(
+      padding: const EdgeInsets.all(4.0),
+      child: _self(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _self(),
+      ],
+    );
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final rootChildren = model.root.childSlots['children']!;
+      expect(rootChildren, hasLength(1));
+
+      final ref = rootChildren[0];
+      if (ref is! MethodReferenceNode) {
+        fail('expected MethodReferenceNode, got ${ref.runtimeType}');
+      }
+      expect(ref.methodName, equals('_self'));
+
+      // The body is a Padding...
+      final padding = ref.body as WidgetNode;
+      expect(padding.className, equals('Padding'));
+      // ...whose `child` slot would have been _self() again, but the
+      // cycle detector kicks in and emits an OpaqueNode at the inner
+      // reference.
+      final innerChild = padding.childSlots['child']!.first;
+      expect(
+        innerChild,
+        isA<OpaqueNode>(),
+        reason: 'cycle stop: inner _self() should be opaque',
+      );
+    });
+
+    test('edits to a widget inside a helper target the helper source', () {
+      final source = File(
+        'test/fixtures/helper_methods.dart',
+      ).readAsStringSync();
+      final model = parseWidgetTree(source);
+
+      // Navigate to _buildTitle().body.Padding.child.Text and edit data.
+      final titleRef =
+          model.root.childSlots['children']![0] as MethodReferenceNode;
+      final padding = titleRef.body as WidgetNode;
+      final innerText = padding.childSlots['child']!.first as WidgetNode;
+      final oldData = innerText.properties['data']! as StringLiteralValue;
+
+      // The Text's sourceSpan should point inside _buildTitle's BODY,
+      // not at the call site in build(). _buildTitle is the first
+      // method in the file, so its Text is way before the build()'s
+      // call site.
+      expect(
+        innerText.sourceSpan.offset,
+        lessThan(titleRef.callSourceSpan.offset),
+        reason: 'inner Text span should be in helper definition, '
+            'BEFORE the call site at build()',
+      );
+
+      // Edit via path and verify it touches the helper's source.
+      const newValue = StringLiteralValue(
+        value: 'Updated title',
+        span: SourceSpan(offset: 0, length: 0),
+      );
+      final edit = EditPlanner.propertyEdit(
+        oldValue: oldData,
+        newValue: newValue,
+      );
+      expect(
+        edit.offset,
+        lessThan(titleRef.callSourceSpan.offset),
+        reason: 'edit must target the helper definition, not the call',
+      );
+
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource.contains("'Updated title'"), isTrue);
+      // The call site `_buildTitle()` text in build() is untouched.
+      expect(newSource.contains('_buildTitle()'), isTrue);
+    });
+  });
 }

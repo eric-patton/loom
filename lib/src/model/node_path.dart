@@ -3,6 +3,10 @@ import 'widget_node.dart';
 
 /// One step along a path through the model: which child slot to descend
 /// into, and which index within that slot.
+///
+/// `MethodReferenceNode` is navigated through a virtual slot named
+/// `body` with index `0` — paths that descend into a helper method's
+/// resolved widget tree include such a segment.
 typedef NodePathSegment = ({String slot, int index});
 
 /// A path from the model's root to a specific node, expressed as a
@@ -18,19 +22,18 @@ class OpaqueEditException implements Exception {
   String toString() => 'OpaqueEditException: $message';
 }
 
+const String _methodBodySlot = 'body';
+
 extension NodeNavigation on WidgetTreeModel {
   /// Returns the node reached by following `path`, or `null` if the path
-  /// is invalid (unknown slot or out-of-range index). The result may be
-  /// either a `WidgetNode` or an `OpaqueNode`.
+  /// is invalid. The result may be a `WidgetNode`, an `OpaqueNode`, or a
+  /// `MethodReferenceNode`.
   ModelNode? nodeAt(NodePath path) => _nodeAt(root, path);
 
   /// Returns a new model with the property at `path / propName` replaced
-  /// by `value`. Other parts of the tree are structurally unchanged
-  /// (and physically reused where possible since `WidgetNode` is immutable).
-  ///
-  /// Throws `OpaqueEditException` if `path` descends into an `OpaqueNode`,
-  /// or `ArgumentError` if `path` ends on a node that doesn't have a
-  /// property with the given name.
+  /// by `value`. Throws `OpaqueEditException` if `path` descends into an
+  /// `OpaqueNode`; throws `ArgumentError` if the target node doesn't have
+  /// a property with the given name.
   WidgetTreeModel withProperty(
     NodePath path,
     String propName,
@@ -39,10 +42,7 @@ extension NodeNavigation on WidgetTreeModel {
       WidgetTreeModel(root: _withProperty(root, path, propName, value));
 
   /// Returns a new model with `newChild` inserted at `parentPath / slot`
-  /// at the given `index`. The slot must exist and be list-shaped.
-  /// Indices in `[0, slot.length]` are valid; `slot.length` appends.
-  /// Throws `OpaqueEditException` if `parentPath` descends into an
-  /// `OpaqueNode`.
+  /// at the given `index`.
   WidgetTreeModel insertChild(
     NodePath parentPath,
     String slot,
@@ -65,8 +65,7 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Returns a new model with the child at `parentPath / slot[index]`
-  /// removed. The removed entry may be a `WidgetNode` or `OpaqueNode` —
-  /// removal moves it as a unit either way.
+  /// removed.
   WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) =>
       WidgetTreeModel(
         root: _modifySlot(root, parentPath, slot, (current) {
@@ -83,7 +82,7 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Returns a new model with the child at `parentPath / slot[from]`
-  /// moved to position `to`. Works on either widget or opaque entries.
+  /// moved to position `to`.
   WidgetTreeModel moveChild(
     NodePath parentPath,
     String slot,
@@ -113,8 +112,9 @@ extension NodeNavigation on WidgetTreeModel {
       );
 
   /// Walks the tree in pre-order and yields one entry per node, paired
-  /// with the path that reaches it. Includes both `WidgetNode`s and
-  /// `OpaqueNode`s. The first entry is always the root with an empty path.
+  /// with the path that reaches it. Descends through `WidgetNode`'s
+  /// child slots and through `MethodReferenceNode`'s virtual `body` slot.
+  /// `OpaqueNode`s are leaves.
   List<({NodePath path, ModelNode node})> walk() {
     final out = <({NodePath path, ModelNode node})>[];
     _walk(root, const <NodePathSegment>[], out);
@@ -125,15 +125,21 @@ extension NodeNavigation on WidgetTreeModel {
 ModelNode? _nodeAt(ModelNode start, NodePath path) {
   ModelNode current = start;
   for (final segment in path) {
-    if (current is! WidgetNode) {
-      // Can't descend into opaque (no childSlots).
+    if (current is WidgetNode) {
+      final slot = current.childSlots[segment.slot];
+      if (slot == null || segment.index < 0 || segment.index >= slot.length) {
+        return null;
+      }
+      current = slot[segment.index];
+    } else if (current is MethodReferenceNode) {
+      if (segment.slot != _methodBodySlot || segment.index != 0) {
+        return null;
+      }
+      current = current.body;
+    } else {
+      // OpaqueNode: cannot descend.
       return null;
     }
-    final slot = current.childSlots[segment.slot];
-    if (slot == null || segment.index < 0 || segment.index >= slot.length) {
-      return null;
-    }
-    current = slot[segment.index];
   }
   return current;
 }
@@ -177,15 +183,15 @@ WidgetNode _withProperty(
     );
   }
   final descendingInto = slot[segment.index];
-  if (descendingInto is! WidgetNode) {
-    throw const OpaqueEditException(
-      'path descends into an OpaqueNode; opaque content is not editable',
-    );
-  }
-  final updatedChild = _withProperty(descendingInto, rest, propName, value);
+  final newChild = _withPropertyOnModelNode(
+    descendingInto,
+    rest,
+    propName,
+    value,
+  );
   final updatedSlot = <ModelNode>[
     ...slot.sublist(0, segment.index),
-    updatedChild,
+    newChild,
     ...slot.sublist(segment.index + 1),
   ];
   final newSlots = <String, List<ModelNode>>{
@@ -200,6 +206,50 @@ WidgetNode _withProperty(
     sourceSpan: node.sourceSpan,
     styleHints: node.styleHints,
   );
+}
+
+ModelNode _withPropertyOnModelNode(
+  ModelNode node,
+  NodePath path,
+  String propName,
+  PropertyValue value,
+) {
+  switch (node) {
+    case final WidgetNode w:
+      return _withProperty(w, path, propName, value);
+    case final MethodReferenceNode m:
+      if (path.isEmpty) {
+        // Can't set a property directly on a MethodReferenceNode — its
+        // "properties" live inside the body. Caller's path probably
+        // expected to descend further.
+        throw ArgumentError(
+          'MethodReferenceNode has no editable properties at this position; '
+          'descend into "body" first.',
+        );
+      }
+      final segment = path.first;
+      if (segment.slot != _methodBodySlot || segment.index != 0) {
+        throw ArgumentError(
+          'Only the virtual "body" slot (index 0) is valid for '
+          'MethodReferenceNode; got "${segment.slot}[${segment.index}]"',
+        );
+      }
+      final newBody = _withPropertyOnModelNode(
+        m.body,
+        path.sublist(1),
+        propName,
+        value,
+      );
+      return MethodReferenceNode(
+        methodName: m.methodName,
+        callSourceSpan: m.callSourceSpan,
+        body: newBody,
+      );
+    case OpaqueNode():
+      throw const OpaqueEditException(
+        'path descends into an OpaqueNode; opaque content is not editable',
+      );
+  }
 }
 
 WidgetNode _modifySlot(
@@ -243,12 +293,12 @@ WidgetNode _modifySlot(
     );
   }
   final descendingInto = descend[segment.index];
-  if (descendingInto is! WidgetNode) {
-    throw const OpaqueEditException(
-      'path descends into an OpaqueNode; opaque content is not editable',
-    );
-  }
-  final updatedChild = _modifySlot(descendingInto, rest, slotName, transform);
+  final updatedChild = _modifySlotOnModelNode(
+    descendingInto,
+    rest,
+    slotName,
+    transform,
+  );
   final updatedSlot = <ModelNode>[
     ...descend.sublist(0, segment.index),
     updatedChild,
@@ -268,18 +318,66 @@ WidgetNode _modifySlot(
   );
 }
 
+ModelNode _modifySlotOnModelNode(
+  ModelNode node,
+  NodePath path,
+  String slotName,
+  List<ModelNode> Function(List<ModelNode> current) transform,
+) {
+  switch (node) {
+    case final WidgetNode w:
+      return _modifySlot(w, path, slotName, transform);
+    case final MethodReferenceNode m:
+      if (path.isEmpty) {
+        throw ArgumentError(
+          'MethodReferenceNode has no editable slots at this position; '
+          'descend into "body" first.',
+        );
+      }
+      final segment = path.first;
+      if (segment.slot != _methodBodySlot || segment.index != 0) {
+        throw ArgumentError(
+          'Only the virtual "body" slot (index 0) is valid for '
+          'MethodReferenceNode; got "${segment.slot}[${segment.index}]"',
+        );
+      }
+      final newBody = _modifySlotOnModelNode(
+        m.body,
+        path.sublist(1),
+        slotName,
+        transform,
+      );
+      return MethodReferenceNode(
+        methodName: m.methodName,
+        callSourceSpan: m.callSourceSpan,
+        body: newBody,
+      );
+    case OpaqueNode():
+      throw const OpaqueEditException(
+        'path descends into an OpaqueNode; opaque content is not editable',
+      );
+  }
+}
+
 void _walk(
   ModelNode node,
   NodePath pathSoFar,
   List<({NodePath path, ModelNode node})> out,
 ) {
   out.add((path: pathSoFar, node: node));
-  if (node is WidgetNode) {
-    for (final slotEntry in node.childSlots.entries) {
-      for (var i = 0; i < slotEntry.value.length; i++) {
-        final segment = (slot: slotEntry.key, index: i);
-        _walk(slotEntry.value[i], [...pathSoFar, segment], out);
+  switch (node) {
+    case final WidgetNode w:
+      for (final slotEntry in w.childSlots.entries) {
+        for (var i = 0; i < slotEntry.value.length; i++) {
+          final segment = (slot: slotEntry.key, index: i);
+          _walk(slotEntry.value[i], [...pathSoFar, segment], out);
+        }
       }
-    }
+    case final MethodReferenceNode m:
+      const segment = (slot: _methodBodySlot, index: 0);
+      _walk(m.body, [...pathSoFar, segment], out);
+    case OpaqueNode():
+      // Leaf.
+      break;
   }
 }

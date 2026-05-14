@@ -18,6 +18,11 @@ class WidgetSerializer {
   static String serialize(ModelNode node) => switch (node) {
         final WidgetNode w => _serializeWidget(w),
         final OpaqueNode o => o.sourceText,
+        // A `MethodReferenceNode` re-emits as `methodName()`. This
+        // assumes the helper already exists in the source — M5 doesn't
+        // create helpers via emission. Move-style edits use a byte-copy
+        // path (see moveChildEdits) and don't reach the serializer.
+        final MethodReferenceNode m => '${m.methodName}()',
       };
 
   static String _serializeWidget(WidgetNode node) {

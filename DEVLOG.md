@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M4 — Opaque blocks
-**Last touched:** 2026-05-13 — M4 acceptance hit. Sealed `ModelNode` introduced; `OpaqueNode` + `OpaquePropertyValue` absorb closures, ternaries, `BoxDecoration`/`TextStyle`-style constructors, `.map().toList()`, helper method calls. Real-world fixture `main_mybutton.dart` (GestureDetector + callback + BoxDecoration) round-trips cleanly. Path-descent into opaque throws `OpaqueEditException`. 55 tests green, no skips.
+**Active milestone:** M5 — Helper method following
+**Last touched:** 2026-05-13 — M5 acceptance hit. In-class helper-method calls (`_buildHeader()`, no args) resolve to `MethodReferenceNode` whose body holds the helper's parsed widget tree. Edits to nodes inside the body produce `SourceEdit`s targeted at the helper's source location, not the call site. Cyclic references degrade to `OpaqueNode` at the inner reference (cycle terminates). Cross-file refs and helpers-with-args stay opaque. 59 tests green, 1 documented skip.
 **Blockers:** none
-**Next action:** **Eric review gate for M4.** After approval, M5 implementation plan (helper-method following — `_buildHeader()` resolves to the in-class method body for editing).
+**Next action:** **Eric review gate for M5.** This is the kernel-ships gate — after approval, the kernel is ready for the UI layer to consume as a library.
 
 ---
 
@@ -134,12 +134,12 @@ Acceptance criteria pulled directly from PROJECT_SPEC.md. Check items off only w
 
 ### M5 — Helper method following
 
-- [ ] In-class method references represented as `MethodReferenceNode`
-- [ ] Navigation into referenced method works
-- [ ] Edits to referenced method update the helper's source
-- [ ] Cyclic references detected, no infinite recursion
-- [ ] Cross-file references explicitly fall back to opaque
-- [ ] Round-trip invariants hold across method boundaries
+- [x] In-class method references represented as `MethodReferenceNode`
+- [x] Navigation into referenced method works (`nodeAt` / `walk` descend through the virtual `body` slot; `withProperty` / `_modifySlot` rebuild the `MethodReferenceNode` chain)
+- [x] Edits to referenced method update the helper's source (body's nodes carry sourceSpans that point into the helper definition, so `EditPlanner.propertyEdit` naturally targets the helper)
+- [x] Cyclic references detected, no infinite recursion (`_resolvingMethods` set; inner self-reference becomes `OpaqueNode`)
+- [x] Cross-file references explicitly fall back to opaque (only in-class methods are looked up; everything else stays an `OpaqueNode`)
+- [x] Round-trip invariants hold across method boundaries (verified by the round-trip property test running 1,000+ random edits across `helper_methods.dart`)
 - [ ] **Gate**: reviewed by Eric — kernel ships to UI layer
 
 ---
@@ -159,6 +159,7 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_widgets_intro_tutorial.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_tutorial.dart` | 39 | Multi-slot Scaffold (appBar + body + floatingActionButton); AppBar with leading + title + actions (list); IconButton + Icon + FloatingActionButton; `onPressed: null` style |
 | `test/fixtures/real_world_cookbook_tabs.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/tabs/lib/main.dart` | 39 | MaterialApp → DefaultTabController → Scaffold → AppBar.bottom = TabBar(tabs: [Tab×3]) + body = TabBarView(children: [Icon×3]); deep list-of-widgets nesting |
 | `test/fixtures/real_world_opaque_mybutton.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_mybutton.dart` | 33 | M4 opaque coverage: closure (`onTap: () {…}`), unmodeled constructors (`BoxDecoration`, `BorderRadius.circular`), `EdgeInsets.symmetric`, indexer (`Colors.lightGreen[500]`), user-defined widget class (`MyButton`) |
+| `test/fixtures/helper_methods.dart` | hand-crafted | 28 | M5: in-class helpers (`_buildTitle`, `_buildContent`) each called once from `build()`. Edits inside helpers must target the helper's source range, not the call site |
 
 ---
 
@@ -175,6 +176,23 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-13] M5 — helper-method following, kernel feature-complete
+**Worked on:** Eric approved M4. Opened M5 — the last kernel milestone.
+  - New sealed subtype `MethodReferenceNode { methodName, callSourceSpan, body: ModelNode }` joins `WidgetNode | OpaqueNode`.
+  - `WidgetVisitor` gained a `classMethods` map (populated by `parseWidgetTree` from the enclosing `ClassDeclaration`) and a `_resolvingMethods` set for cycle detection. `convertModelNode` special-cases a `MethodInvocation` with `target == null && argumentList.arguments.isEmpty` whose method name matches an in-class method: it recursively converts the helper's return expression and wraps the result in a `MethodReferenceNode`. A cycle (helper resolving back to itself) is broken at the inner reference, which becomes an `OpaqueNode`.
+  - Navigation through `MethodReferenceNode` uses a virtual `(slot: 'body', index: 0)` segment. `nodeAt`, `walk`, `_withProperty`, and `_modifySlot` all handle this case. Immutable update rebuilds the `MethodReferenceNode` with the new body but the same `methodName` and `callSourceSpan`.
+  - `StructuralEquivalence` compares two `MethodReferenceNode`s by name and body (recursive equality).
+  - `WidgetSerializer` re-emits `MethodReferenceNode` as `methodName()` (assumes the helper already exists — M5 doesn't synthesize helpers).
+  - The CLI tree printer renders method-ref entries as `-> methodName() [call @offset+length]` and indents the body underneath.
+  - Hand-crafted fixture `helper_methods.dart`: `MyPage` whose `build()` returns `Column(children: [_buildTitle(), _buildContent()])`. Each helper called exactly once (multi-reference is out of scope per the design note). Lands in the round-trip property test corpus.
+  - Three M5 unit tests in `parsing_test.dart`: helper resolution to `MethodReferenceNode`; cyclic helper (helper calls itself inside a `Padding`) terminates with an inner `OpaqueNode`; and edits to a Text inside a helper produce a `SourceEdit` whose offset is in the HELPER source range, not the call site in `build()`.
+**Learned:**
+  - **The visitor's `_extractReturnExpression` is the same logic as the parser's `_extractRootExpression` for `MethodDeclaration` bodies.** Duplicated — 5 lines, not worth a shared utility. Just keep them in sync if either grows.
+  - **Multi-reference helpers are a soft constraint, not a runtime check.** If the same helper is called from two places, two in-memory `MethodReferenceNode`s point at structurally-equivalent but distinct `body` trees. Editing one path-through-helper updates only that path's `body` in the expected model. Source-level there's only one helper definition, so the reparse picks up the change in both call sites — and the expected model wouldn't match the reparsed one. M5's fixture and acceptance both have each helper called once; if a future fixture has multi-reference, the property test would fail and surface the issue. Documented in Gotchas.
+  - **The "build() that directly returns a helper call" pattern doesn't fit the current model shape.** Our `WidgetTreeModel.root: WidgetNode` requires the root to be a widget. If `build()` returns `_buildHeader()` directly, the root would be a `MethodReferenceNode` — but the model type forbids that. A wrapped variant (`return Column(children: [_buildHeader()])`) works fine. Left a documented skip in the test for the bare-helper-root pattern.
+**Decided:** No new Settled Decisions. Q4 (parse errors) stays explicitly deferred — M5 doesn't depend on it either. Five of the spec's five Open Questions either ratified or explicitly deferred to a future milestone that isn't on the road map yet.
+**Next:** **Eric review gate for M5 — the kernel-ships gate.** After approval the kernel is feature-complete per PROJECT_SPEC.md's milestone definitions and ready to be consumed by a UI layer. There is no M6 in the spec — the next phase is "build a UI on top of this."
 
 ### [2026-05-13] M4 — opaque blocks: real Flutter source parses without crashing
 **Worked on:** Eric approved M3. Opened M4. Introduced opacity at both the model-node level and the property-value level.
@@ -261,6 +279,8 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
+- **Multi-reference helpers aren't supported by the property tests** as a soft constraint. If the same helper is called from two places, two in-memory `MethodReferenceNode`s point at structurally-equivalent but distinct `body` trees. The expected model from `withProperty(path_through_one_ref, …)` only updates that path's body; the reparsed model picks up the helper-source change in BOTH call sites. The two models would diverge, and the property test would fail. M5's `helper_methods.dart` fixture has each helper called exactly once; adding multi-reference fixtures requires either propagating the in-memory edit to all references with the same name, or weakening the equivalence comparator. Out of scope for M5.
+- **`MethodReferenceNode` requires path navigation through a *virtual* slot named `body`.** It's not a real `childSlots` entry — `MethodReferenceNode` doesn't have `childSlots` — but `nodeAt`, `walk`, `_withProperty`, and `_modifySlot` all special-case it. New ModelNode subtypes need this same audit.
 - **`const Prefix.Name(args)` and `Prefix.Name(args)` produce different analyzer ASTs.** Non-const: `MethodInvocation(target=Prefix, methodName=Name)`. Const: `InstanceCreationExpression` with `NamedType.importPrefix = Prefix` and `NamedType.name2 = Name` (the analyzer treats `Prefix` as a possible import prefix, since without resolution that's a valid reading). The visitor's `_tryExtractCall` reads `importPrefix` and re-interprets it as the class name. Without this, `const EdgeInsets.all(8)` falls through to `OpaquePropertyValue` despite being a fully modelable expression.
 - **Sealed subtypes need to live in the same Dart library** (= same `.dart` file, unless `part`/`part of` is used). I started with `sealed class ModelNode` in `opaque_node.dart` and `WidgetNode extends ModelNode` in `widget_node.dart` — compile error `invalid_use_of_type_outside_library`. Combined into a single `widget_node.dart`. Future spec-shaped file splits will need to consider this if they refactor sealed hierarchies.
 - **When a `WidgetNode` field is added, all the immutable-update paths must forward it.** M3 added `childSlotStyles`. `withProperty` was missed and silently dropped the new field, which only surfaced when M2's property test rebuilt nodes via `withProperty` and compared against the reparsed (style-bearing) model. `_modifySlot` and any future structural-update path needs the same audit.

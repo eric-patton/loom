@@ -18,6 +18,21 @@ WidgetTreeModel parseWidgetTree(String source) {
     if (declaration is! ClassDeclaration) {
       continue;
     }
+
+    // Index in-class methods (other than `build`) so the visitor can
+    // resolve helper-method calls (M5). All non-`build` methods are
+    // included; the visitor restricts resolution to no-arg calls.
+    final classMethods = <String, MethodDeclaration>{};
+    for (final member in declaration.members) {
+      if (member is! MethodDeclaration) {
+        continue;
+      }
+      if (member.name.lexeme == 'build') {
+        continue;
+      }
+      classMethods[member.name.lexeme] = member;
+    }
+
     for (final member in declaration.members) {
       if (member is! MethodDeclaration) {
         continue;
@@ -31,7 +46,7 @@ WidgetTreeModel parseWidgetTree(String source) {
           'build() found but has no return expression',
         );
       }
-      final visitor = WidgetVisitor(source);
+      final visitor = WidgetVisitor(source, classMethods: classMethods);
       return WidgetTreeModel(root: visitor.convertWidget(root));
     }
   }

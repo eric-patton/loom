@@ -61,6 +61,8 @@ class StructuralEquivalence {
 bool _modelNodesEqual(ModelNode a, ModelNode b) => switch ((a, b)) {
       (final WidgetNode a, final WidgetNode b) => _widgetNodesEqual(a, b),
       (final OpaqueNode a, final OpaqueNode b) => a.sourceText == b.sourceText,
+      (final MethodReferenceNode a, final MethodReferenceNode b) =>
+        a.methodName == b.methodName && _modelNodesEqual(a.body, b.body),
       _ => false,
     };
 

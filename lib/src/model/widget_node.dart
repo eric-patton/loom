@@ -20,6 +20,56 @@ sealed class ModelNode {
   SourceSpan get sourceSpan;
 }
 
+/// A call to an in-class helper method that returns a widget. The
+/// `body` field holds the resolved widget tree from the helper's return
+/// expression; edits to `body` translate to `SourceEdit`s targeted at the
+/// helper's own source location, not the call site. Introduced in M5.
+///
+/// Scope (M5 first pass):
+///   - In-class helpers only. Cross-file helpers stay as `OpaqueNode`.
+///   - Helpers with zero arguments only. Helpers with arguments stay as
+///     `OpaqueNode` (we don't model argument expressions in general).
+///   - Cycle detection: a method that resolves back to itself becomes an
+///     `OpaqueNode` at the inner reference; the outer `MethodReferenceNode`
+///     still wraps the non-cyclic part.
+class MethodReferenceNode extends ModelNode {
+  const MethodReferenceNode({
+    required this.methodName,
+    required this.callSourceSpan,
+    required this.body,
+  });
+
+  /// Name of the helper method (e.g. `'_buildHeader'`).
+  final String methodName;
+
+  /// Source range of the CALL site (the `_buildHeader()` text in the
+  /// enclosing `build()` body). Distinct from the body's source range —
+  /// the body's nodes carry their own spans pointing into the helper's
+  /// definition.
+  final SourceSpan callSourceSpan;
+
+  /// The resolved widget tree rooted at the helper's return expression.
+  /// May be a `WidgetNode`, an `OpaqueNode` (helper itself returned an
+  /// unmodelable expression, or a cycle was hit), or a nested
+  /// `MethodReferenceNode` (helper calls another helper).
+  final ModelNode body;
+
+  @override
+  SourceSpan get sourceSpan => callSourceSpan;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MethodReferenceNode &&
+      other.methodName == methodName &&
+      other.body == body;
+
+  @override
+  int get hashCode => Object.hash(methodName, body);
+
+  @override
+  String toString() => 'MethodReferenceNode($methodName -> $body)';
+}
+
 /// A region of source the kernel does not model. Edits cannot touch its
 /// content; structural edits to the slot CONTAINING an `OpaqueNode` can
 /// still move or remove the node as an opaque unit.

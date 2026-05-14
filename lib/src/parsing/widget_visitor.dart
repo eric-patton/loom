@@ -30,12 +30,26 @@ class ParseException implements Exception {
 }
 
 class WidgetVisitor {
-  WidgetVisitor(this.source);
+  WidgetVisitor(
+    this.source, {
+    Map<String, MethodDeclaration> classMethods = const {},
+  }) : _classMethods = classMethods;
 
   /// The full source string the model was parsed from. Used at parse time
   /// to detect list-literal multi-line shape and to anchor opaque-node
   /// source ranges.
   final String source;
+
+  /// In-class helper methods that return a Widget, indexed by name.
+  /// Used by M5 helper-method resolution. The parser populates this map
+  /// from the enclosing `ClassDeclaration` before calling the visitor.
+  final Map<String, MethodDeclaration> _classMethods;
+
+  /// Methods currently being resolved (depth-first). Used to break
+  /// cycles — if a recursive call would re-enter a method already on
+  /// this set, we fall back to `OpaqueNode` for the inner reference
+  /// instead of recursing infinitely.
+  final Set<String> _resolvingMethods = <String>{};
 
   /// Converts an expression in a child-slot position to a `ModelNode`.
   /// Returns a `WidgetNode` if the expression is a recognized widget
@@ -43,6 +57,21 @@ class WidgetVisitor {
   /// pointing at the source range of the original expression. Never
   /// throws.
   ModelNode convertModelNode(Expression expr) {
+    // M5: in-class helper-method reference takes priority over the
+    // generic "treat any zero-arg `Foo()` as a constructor call" reading.
+    // A no-target, no-arg `_methodName()` that matches an in-class method
+    // resolves to a `MethodReferenceNode` (unless we'd recurse into the
+    // same method, in which case it falls through to opaque).
+    if (expr is MethodInvocation &&
+        expr.target == null &&
+        expr.argumentList.arguments.isEmpty) {
+      final methodName = expr.methodName.name;
+      final decl = _classMethods[methodName];
+      if (decl != null && !_resolvingMethods.contains(methodName)) {
+        return _buildMethodReference(expr, decl);
+      }
+    }
+
     final call = _tryExtractCall(expr);
     if (call == null) {
       return _opaqueNode(expr);
@@ -55,6 +84,45 @@ class WidgetVisitor {
       return _opaqueNode(expr);
     }
     return _buildWidgetNode(call, spec);
+  }
+
+  ModelNode _buildMethodReference(
+    MethodInvocation callExpr,
+    MethodDeclaration declaration,
+  ) {
+    final bodyExpr = _extractReturnExpression(declaration);
+    if (bodyExpr == null) {
+      // Helper has no return expression we can model; degrade to opaque
+      // at the call site.
+      return _opaqueNode(callExpr);
+    }
+    final methodName = declaration.name.lexeme;
+    _resolvingMethods.add(methodName);
+    try {
+      final body = convertModelNode(bodyExpr);
+      return MethodReferenceNode(
+        methodName: methodName,
+        callSourceSpan: _span(callExpr),
+        body: body,
+      );
+    } finally {
+      _resolvingMethods.remove(methodName);
+    }
+  }
+
+  Expression? _extractReturnExpression(MethodDeclaration method) {
+    final body = method.body;
+    if (body is ExpressionFunctionBody) {
+      return body.expression;
+    }
+    if (body is BlockFunctionBody) {
+      for (final stmt in body.block.statements) {
+        if (stmt is ReturnStatement) {
+          return stmt.expression;
+        }
+      }
+    }
+    return null;
   }
 
   OpaqueNode _opaqueNode(SyntacticEntity entity) {

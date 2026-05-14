@@ -70,6 +70,12 @@ void _printNode(ModelNode node, IOSink sink, String indent) {
       sink.writeln(
         '$indent<opaque @${o.sourceSpan.offset}+${o.sourceSpan.length}> "$preview"',
       );
+    case final MethodReferenceNode m:
+      sink.writeln(
+        '$indent-> ${m.methodName}()  '
+        '[call @${m.callSourceSpan.offset}+${m.callSourceSpan.length}]',
+      );
+      _printNode(m.body, sink, '$indent    ');
   }
 }
 
