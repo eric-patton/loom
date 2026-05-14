@@ -167,6 +167,61 @@ void main() {
     });
   });
 
+  group('parseRouteTree on real_world_go_router_main.dart', () {
+    // Source: flutter/packages @ 0ffbde8f622b8dc61e4608483dc4f80f7fab027b,
+    // packages/go_router/example/lib/main.dart. Canonical go_router app
+    // example with a top-level `final GoRouter _router = GoRouter(...)`,
+    // one nested route, and `builder:` function literals on every GoRoute.
+    late RouteTreeModel model;
+    late RouteNode root;
+
+    setUpAll(() {
+      final source = File('test/fixtures/real_world_go_router_main.dart')
+          .readAsStringSync();
+      model = parseRouteTree(source);
+      root = model.root as RouteNode;
+    });
+
+    test('parses with no diagnostics', () {
+      expect(model.diagnostics, isEmpty);
+    });
+
+    test('root is GoRouter with one top-level route', () {
+      expect(root.className, equals('GoRouter'));
+      final routes = root.childSlots['routes'];
+      expect(routes, hasLength(1));
+    });
+
+    test('top route has path "/" and one nested route', () {
+      final top = root.childSlots['routes']!.first as RouteNode;
+      expect(top.className, equals('GoRoute'));
+      expect((top.properties['path'] as StringLiteralValue).value, equals('/'));
+
+      final nested = top.childSlots['routes'];
+      expect(nested, hasLength(1));
+      final detailRoute = nested!.first as RouteNode;
+      expect((detailRoute.properties['path'] as StringLiteralValue).value,
+          equals('details'));
+    });
+
+    test('builder properties land as opaque (function literals)', () {
+      final top = root.childSlots['routes']!.first as RouteNode;
+      expect(top.properties['builder'], isA<OpaquePropertyValue>());
+
+      final nested = top.childSlots['routes']!.first as RouteNode;
+      expect(nested.properties['builder'], isA<OpaquePropertyValue>());
+    });
+
+    test('typed list literal <RouteBase>[...] is parsed as list slot', () {
+      // The list literal has a type annotation; the visitor must still
+      // recognize it as a ListLiteral and capture per-slot list style.
+      final style = root.childSlotStyles['routes'];
+      expect(style, isNotNull);
+      expect(style!.hasTrailingComma, isTrue);
+      expect(style.isMultiLine, isTrue);
+    });
+  });
+
   group('parseRouteTree rejection', () {
     test('throws on a widget file', () {
       final source =

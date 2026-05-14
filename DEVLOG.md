@@ -9,9 +9,9 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 ## Current State
 
 **Active milestone:** M6.0 — non-Flutter Dart layer (first slice: route DSL)
-**Last touched:** 2026-05-14 — added a second consumer of the kernel: `RouteNode` / `RouteTreeModel`, `RouteCatalog` (GoRouter + GoRoute + ShellRoute), `parseRouteTree`, `RouteVisitor`, `RouteEditPlanner`. Parser entry-point shape is different from widgets — top-level `final router = GoRouter(...);` with a class-method-return fallback (`GoRouter buildRouter() => ...`). 4 new fixtures, 23 new tests; 114 + 23 = **137 tests, all green**. CLI auto-detects widget vs route. Scout extended to dual-mode and re-validated: zero crashes / zero idempotence failures across 1,274 real-world Dart files (loom-repo, lowcode-flutter, flutter/examples). Build-alongside strategy: `RouteVisitor` and `route_tree_parser.dart` are intentional copies of their widget counterparts with the catalog and node-construction types swapped. The diff is the spec for M6.1's `loom_core` extraction.
+**Last touched:** 2026-05-14 — M6.0 hardening: pinned a canonical real-world route fixture from `flutter/packages` @ `0ffbde8f`, the official go_router example (`packages/go_router/example/lib/main.dart`). 5 new tests targeting it (parse correctness, opaque function-literal handling, typed-list `<RouteBase>[...]` style capture). Updated CLI + scout to try **both** parsers independently per file — was previously falling back from widget→route, which masked the common real-world shape where a file has both a `build()` method (opaque MaterialApp.router) AND a top-level GoRouter declaration. Scout against `flutter/packages/go_router` (117 files): 0 crashes, 0 idempotence failures, **8 route trees detected** (vs 0 in the M6.0 baseline). 143 tests, all green. Identified a real-world gap: 10 of 18 example files use `late final GoRouter _router = GoRouter(...)` as a **class-field initializer**, which the parser's entry-point detection doesn't yet handle (covers top-level vars + class-method-returns; field initializers fall through to "no tree found"). Documented as M6.0.1 — small extension, ~20-line change in `route_tree_parser.dart`. M6.0 prior state — 4 fixtures, 23 tests, 137 tests total — remains intact.
 **Blockers:** none
-**Next action:** **Eric review gate for M6.0.** Then M6.1 — extract `loom_core` (the language-general machinery) into its own sub-namespace, now informed by the actual seam between widget- and route-side code rather than guesses. See the M6 roadmap section for M6.1 → M10+ trajectory toward the OutSystems-for-Dart/Flutter end state.
+**Next action:** **Decide on M6.0.1** (extend parser to detect class-field GoRouter initializers — 10/18 example files use this shape) **before Eric's review gate**, OR proceed to review with the gap explicitly documented. Then M6.1 — extract `loom_core` (the language-general machinery), now informed by the actual seam between widget- and route-side code. See the M6 roadmap section.
 
 ---
 
@@ -213,6 +213,18 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_text_input.dart` | flutter/website @ `e927ec21`, `examples/cookbook/forms/text_input/lib/main.dart` | 50 | MaterialApp → Scaffold → opaque MyCustomForm; second class MyCustomForm uses Column with multiple Paddings around opaque TextField/TextFormField |
 | `test/fixtures/real_world_long_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/long_lists/lib/main.dart` | 32 | MyApp with non-const constructor and `final List<String> items` field; MaterialApp → Scaffold → opaque ListView.builder with closures |
 
+### Route fixtures (M6.0)
+
+A separate corpus for the route-DSL upper layer. Each exercises the route parser + visitor + edit planner.
+
+| File | Source | Lines | Exercises |
+|---|---|---|---|
+| `test/fixtures/route_simple.dart` | hand-crafted | 9 | Flat router: top-level `final router = GoRouter(initialLocation, routes: [GoRoute×2])`. Primary entry-point shape. |
+| `test/fixtures/route_nested.dart` | hand-crafted | 15 | Parent GoRoute with two child GoRoutes; tests nested `routes:` slots. |
+| `test/fixtures/route_shell.dart` | hand-crafted | 13 | ShellRoute wrapping two GoRoutes; sibling top-level GoRoute. |
+| `test/fixtures/route_with_helper.dart` | hand-crafted | 16 | Class-method fallback entry point + `routes: [_homeRoute()]` resolving to `RouteMethodReferenceNode`. |
+| `test/fixtures/real_world_go_router_main.dart` | flutter/packages @ `0ffbde8f`, `packages/go_router/example/lib/main.dart` | 86 | Canonical go_router example: top-level `final GoRouter _router = GoRouter(...)`, typed list literal `<RouteBase>[...]`, nested GoRoute with `builder:` function literals (→ opaque), MaterialApp.router widget tree alongside. |
+
 ---
 
 ## Session Log
@@ -228,6 +240,28 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M6.0 hardening — real-world go_router fixture + dual-parser detection
+**Worked on:** Eric asked to "add a real GoRouter-using real-world fixture" to tighten M6.0's validation surface (the M6.0 commit had only 4 hand-crafted fixtures, no broad-scout route coverage). Cloned `flutter/packages` from GitHub at HEAD `0ffbde8f622b8dc61e4608483dc4f80f7fab027b`, pinned `packages/go_router/example/lib/main.dart` as `test/fixtures/real_world_go_router_main.dart`. Added 5 parsing tests targeting it (parse correctness, opaque `builder:` function-literal handling, typed list-literal `<RouteBase>[...]` style capture).
+
+**Auto-detect fix:** the M6.0 CLI and scout had a "try widget first, fall back to route" flow — which is wrong because real-world files commonly carry **both** trees (a `build()` method returning `MaterialApp.router(routerConfig: _router)` and a top-level `final GoRouter _router = ...`). The fallback flow let widget detection mask the route tree. Changed both to try both parsers independently and surface whichever succeed. Pure refinement; no behavior change for files with only one tree.
+
+**Broader scout:** ran scout against the entire `packages/go_router` subtree (117 .dart files). Result: 59 widget clean parses, **8 route clean parses**, 0 crashes, 0 idempotence failures. The 8 route detections are all top-level `final GoRouter _router = GoRouter(...)` shape.
+
+**Real-world gap identified:** 10 of 18 example files use `late final GoRouter _router = GoRouter(...)` as a **class-field initializer** rather than a top-level variable. The current parser's entry points (top-level var + class-method-return) don't cover this. Documented as **M6.0.1**: an ~20-line extension to `route_tree_parser.dart`'s class-walking loop to also scan `FieldDeclaration` initializers. Would lift coverage from 8/18 → ~16/18 of canonical go_router examples.
+
+**Validation:**
+- 143 tests green (138 + 5 new on the real-world fixture).
+- `dart analyze` clean, `dart format` clean.
+- Idempotence holds on the new fixture (added to `_routeFixtures` list in `route_round_trip_test.dart`).
+- Scout against `flutter/packages/go_router`: 117 files, 0 crashes, 0 idempotence failures.
+
+**Learned:**
+- **The "try one, fall back to the other" flow is wrong for catalog-discriminated parsers.** Files commonly have multiple tree shapes; the right behavior is "try each independently and report what's there." This will become more obviously correct as we add more catalogs in M6.2.
+- **Class-field initializers are a third common entry-point shape** for catalog roots. The widget side never had this case because widgets always live inside a `build()` method; routes are different. The deferred M6.0.1 fix is mechanical but worth doing before claiming "broad real-world coverage."
+- **Typed list literals (`<RouteBase>[...]`) parse identically to untyped lists** in the analyzer AST — the type argument lives in `ListLiteral.typeArguments`, but `leftBracket`/`rightBracket` and the elements list are the same. List-style detection works without modification.
+
+**Next:** Decide on M6.0.1 (extend parser to detect class-field GoRouter initializers — 10/18 example files use this shape) before Eric's review gate, OR proceed to review with the gap explicitly documented. Then M6.1.
 
 ### [2026-05-14] M6.0 — Non-Flutter Dart layer (first slice: route DSL)
 **Worked on:** Generalized the kernel beyond Flutter widgets by giving it a second consumer. Eric asked to "plan out the non-Flutter Dart layer next" with the long-arc goal of an OutSystems-style multi-domain visual layer over Dart code. M6.0 ships the first slice: a GoRouter-shaped route DSL plugged into the same parse-emit machinery as widgets.

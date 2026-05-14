@@ -45,26 +45,42 @@ int _runParse(List<String> args) {
   }
   final source = file.readAsStringSync();
 
+  // Try both parsers independently — a single file commonly carries both
+  // a widget tree (a `build()` method) and a route tree (a top-level
+  // `final router = GoRouter(...)` or a class-field initializer). Print
+  // whichever ones succeed.
+  WidgetTreeModel? widgetModel;
   ParseException? widgetError;
   try {
-    final model = parseWidgetTree(source);
-    _printTree(model, stdout);
-    return 0;
+    widgetModel = parseWidgetTree(source);
   } on ParseException catch (e) {
     widgetError = e;
   }
 
+  RouteTreeModel? routeModel;
+  ParseException? routeError;
   try {
-    final routeModel = parseRouteTree(source);
-    _printRouteTree(routeModel, stdout);
-    return 0;
-  } on ParseException {
-    // Both parsers rejected the file. Report the widget-side message,
-    // since widget trees are the more common case; route trees are a
-    // fallback shape only some files use.
-    stderr.writeln('loom parse: ${widgetError.message}');
+    routeModel = parseRouteTree(source);
+  } on ParseException catch (e) {
+    routeError = e;
+  }
+
+  if (widgetModel == null && routeModel == null) {
+    stderr.writeln('loom parse: ${widgetError!.message}');
+    stderr.writeln('loom parse: ${routeError!.message}');
     return 1;
   }
+
+  if (widgetModel != null) {
+    _printTree(widgetModel, stdout);
+  }
+  if (routeModel != null) {
+    if (widgetModel != null) {
+      stdout.writeln('');
+    }
+    _printRouteTree(routeModel, stdout);
+  }
+  return 0;
 }
 
 void _printTree(WidgetTreeModel model, IOSink sink) {

@@ -62,10 +62,18 @@ void main(List<String> args) {
       continue;
     }
 
-    var parsedAny = false;
+    // Try both parsers independently — a single file commonly has both
+    // a build() method (widget tree) AND a top-level GoRouter declaration
+    // (route tree). Counting them separately lets the scout reflect what
+    // the file actually contains rather than picking one and masking the
+    // other.
+    var widgetParsed = false;
+    var routeParsed = false;
+    var crashed = false;
+
     try {
       final widgetModel = parseWidgetTree(source);
-      parsedAny = true;
+      widgetParsed = true;
       if (widgetModel.diagnostics.isEmpty) {
         parsedWidgetClean++;
         if (widgetSamples.length < 5) {
@@ -83,17 +91,17 @@ void main(List<String> args) {
             .add('${entity.path} [widget] (${widgetModel.diagnostics.length})');
       }
     } on ParseException {
-      // Fall through to route parser.
+      // No widget tree here. Continue to route attempt.
     } on Object catch (e, st) {
       threwOther++;
       crashes.add(_Crash(entity.path, e, st));
-      continue;
+      crashed = true;
     }
 
-    if (!parsedAny) {
+    if (!crashed) {
       try {
         final routeModel = parseRouteTree(source);
-        parsedAny = true;
+        routeParsed = true;
         if (routeModel.diagnostics.isEmpty) {
           parsedRouteClean++;
           if (routeSamples.length < 5) {
@@ -111,15 +119,19 @@ void main(List<String> args) {
               .add('${entity.path} [route] (${routeModel.diagnostics.length})');
         }
       } on ParseException {
-        noTreeFound++;
+        // No route tree here either.
       } on Object catch (e, st) {
         threwOther++;
         crashes.add(_Crash(entity.path, e, st));
-        continue;
+        crashed = true;
       }
     }
 
-    if (parsedAny) {
+    if (!crashed && !widgetParsed && !routeParsed) {
+      noTreeFound++;
+    }
+
+    if (widgetParsed || routeParsed) {
       final result = applySourceEdits(source, const <SourceEdit>[]);
       if (result != source) {
         idempotenceFailed++;

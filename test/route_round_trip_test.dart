@@ -16,6 +16,8 @@ const _routeFixtures = <String>[
   'route_nested.dart',
   'route_shell.dart',
   'route_with_helper.dart',
+  // Real-world: flutter/packages @ 0ffbde8f, packages/go_router/example/lib/main.dart
+  'real_world_go_router_main.dart',
 ];
 
 String _loadFixture(String name) =>
