@@ -36,8 +36,10 @@ class SourceEdit {
 ///   - Any edit has a negative offset or length
 ///   - Any edit's `offset + length` exceeds `source.length`
 ///   - Two edits' ranges overlap
-///   - Two pure inserts (`length == 0`) target the same offset (order is
-///     ambiguous)
+///   - Two edits share the same offset (regardless of length — order is
+///     ambiguous when both target the same starting point, because the
+///     "should the insert land before or after the replacement?" question
+///     has no canonical answer)
 ///
 /// Empty list is the identity case; this is what makes the spec's no-op
 /// idempotence invariant trivially hold: `applySourceEdits(s, []) == s`.
@@ -73,22 +75,29 @@ String applySourceEdits(String source, List<SourceEdit> edits) {
   }
 
   // Pairwise overlap / ambiguous-order check via ascending-offset sort.
+  // Two edits at the same offset always throw — the only previously-allowed
+  // case (one pure insert + one with length > 0 at the same offset) passed
+  // validation in one input order and threw "overlap" in the other, which
+  // made application non-deterministic. Treating any same-offset pair as
+  // ambiguous is the simpler invariant and matches the underlying reality:
+  // there is no canonical answer to "does the insert land before or after
+  // the replacement?".
   final ascending = <SourceEdit>[...edits]
     ..sort((a, b) => a.offset.compareTo(b.offset));
   for (var i = 1; i < ascending.length; i++) {
     final prev = ascending[i - 1];
     final curr = ascending[i];
+    if (curr.offset == prev.offset) {
+      throw ArgumentError(
+        'Two SourceEdits at offset ${curr.offset} '
+        '($prev and $curr); application order is ambiguous',
+      );
+    }
     if (curr.offset < prev.offset + prev.length) {
       throw ArgumentError(
         'Overlapping SourceEdits: '
         '[${prev.offset}, ${prev.offset + prev.length}) and '
         '[${curr.offset}, ${curr.offset + curr.length})',
-      );
-    }
-    if (curr.offset == prev.offset && prev.length == 0 && curr.length == 0) {
-      throw ArgumentError(
-        'Two pure-insert SourceEdits at offset ${curr.offset}; '
-        'application order is ambiguous',
       );
     }
   }

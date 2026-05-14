@@ -1,7 +1,7 @@
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/visitor.dart';
 
+import '../catalog/widget_catalog.dart';
 import '../model/widget_node.dart';
 import 'widget_visitor.dart';
 
@@ -40,16 +40,18 @@ WidgetTreeModel parseWidgetTree(String source) {
     }
 
     // Multi-reference defense: pre-scan the build body and each helper
-    // body for argumentless self-target calls to in-class methods.
-    // Helpers invoked from more than one call site can't be safely
-    // represented as `MethodReferenceNode` — an in-memory edit through
-    // one reference would diverge from the reparsed model (which sees
-    // the helper-source change reflected at every call site). Such
-    // helpers are removed from the lookup map, so the visitor emits
-    // `OpaqueNode` for every reference.
+    // body for argumentless no-target calls to in-class methods that
+    // occur at *widget positions* (the only positions the visitor
+    // would resolve into `MethodReferenceNode`). Helpers invoked from
+    // more than one widget position can't be safely represented as
+    // `MethodReferenceNode` — an in-memory edit through one reference
+    // would diverge from the reparsed model (which sees the helper-
+    // source change reflected at every call site). Such helpers are
+    // removed from the lookup map, so the visitor emits `OpaqueNode`
+    // for every reference.
     final referenceCounts = _countMethodReferences(
       knownMethods: classMethods.keys.toSet(),
-      bodies: [buildMethod.body, ...classMethods.values.map((m) => m.body)],
+      methods: [buildMethod, ...classMethods.values],
     );
     final safeMethods = <String, MethodDeclaration>{
       for (final entry in classMethods.entries)
@@ -71,42 +73,116 @@ WidgetTreeModel parseWidgetTree(String source) {
   );
 }
 
-/// Walks the given AST `bodies` and returns, for each name in
-/// `knownMethods`, how many times it appears as a no-target,
-/// zero-argument `MethodInvocation`. Used to detect helper methods
-/// that would be referenced from multiple call sites — those can't be
-/// safely modeled as `MethodReferenceNode`, so the parser drops them
-/// from the visitor's lookup map and they fall through to `OpaqueNode`.
+/// Walks each method's return expression as the visitor would and returns,
+/// for each name in `knownMethods`, how many widget-position references
+/// to that method it found. Property values, opaque expressions, method-
+/// call targets, and positional arguments are NOT recursed into — they
+/// can't reach `convertModelNode` in the visitor and so don't contribute
+/// to multi-reference risk. Without this widget-position filter the
+/// counter over-counted (e.g. `_a()` inside `_a().wrap()` looked like a
+/// helper reference even though the visitor would never resolve it as
+/// such).
 Map<String, int> _countMethodReferences({
   required Set<String> knownMethods,
-  required Iterable<FunctionBody> bodies,
+  required Iterable<MethodDeclaration> methods,
 }) {
-  final visitor = _ReferenceCounter(knownMethods);
-  for (final body in bodies) {
-    body.accept(visitor);
+  final counter = _ReferenceCounter(knownMethods);
+  for (final method in methods) {
+    final expr = extractMethodReturnExpression(method);
+    if (expr != null) {
+      counter._countAtWidgetPosition(expr);
+    }
   }
-  return visitor.counts;
+  return counter.counts;
 }
 
-class _ReferenceCounter extends RecursiveAstVisitor<void> {
+class _ReferenceCounter {
   _ReferenceCounter(this._knownMethods);
 
   final Set<String> _knownMethods;
   final Map<String, int> counts = <String, int>{};
 
-  @override
-  void visitMethodInvocation(MethodInvocation node) {
-    super.visitMethodInvocation(node);
-    if (node.target != null) {
+  void _countAtWidgetPosition(Expression expr) {
+    // Mirror `WidgetVisitor.convertModelNode`: a no-target, no-arg,
+    // no-type-args call that matches a known method is what would be
+    // resolved as `MethodReferenceNode`. Count and stop — we don't
+    // descend into the helper's body here; that's walked separately
+    // when the counter iterates the helper's MethodDeclaration.
+    if (expr is MethodInvocation &&
+        expr.target == null &&
+        expr.typeArguments == null &&
+        expr.argumentList.arguments.isEmpty) {
+      final name = expr.methodName.name;
+      if (_knownMethods.contains(name)) {
+        counts.update(name, (n) => n + 1, ifAbsent: () => 1);
+        return;
+      }
+    }
+    // Otherwise: treat as a possible constructor invocation. Recurse
+    // into named-arg expressions for catalog-known child slots; skip
+    // property values, positional args, and unknown widgets (the
+    // visitor treats those as leaves / opaque, so the counter must
+    // too).
+    final call = _extractCall(expr);
+    if (call == null) {
       return;
     }
-    if (node.argumentList.arguments.isNotEmpty) {
+    final spec = WidgetCatalog.specFor(call.className);
+    if (spec == null) {
       return;
     }
-    final name = node.methodName.name;
-    if (!_knownMethods.contains(name)) {
-      return;
+    for (final arg in call.argumentList.arguments) {
+      if (arg is! NamedExpression) {
+        continue;
+      }
+      final shape = spec.childSlots[arg.name.label.name];
+      if (shape == null) {
+        continue;
+      }
+      _countInSlot(arg.expression, shape);
     }
-    counts.update(name, (n) => n + 1, ifAbsent: () => 1);
   }
+
+  void _countInSlot(Expression slotExpr, ChildSlotShape shape) {
+    if (shape == ChildSlotShape.list) {
+      if (slotExpr is! ListLiteral) {
+        // Non-list expression in a list slot: visitor records this as
+        // a single OpaqueNode and discards the inside. Don't recurse.
+        return;
+      }
+      for (final element in slotExpr.elements) {
+        if (element is Expression) {
+          _countAtWidgetPosition(element);
+        }
+        // Spread / if / for collection elements: opaque; don't recurse.
+      }
+    } else {
+      _countAtWidgetPosition(slotExpr);
+    }
+  }
+
+  _CallShape? _extractCall(Expression expr) {
+    if (expr is InstanceCreationExpression) {
+      final type = expr.constructorName.type;
+      final className = type.importPrefix?.name.lexeme ?? type.name2.lexeme;
+      return _CallShape(className, expr.argumentList);
+    }
+    if (expr is MethodInvocation) {
+      final target = expr.target;
+      if (target == null) {
+        return _CallShape(expr.methodName.name, expr.argumentList);
+      }
+      if (target is SimpleIdentifier) {
+        // `Class.named(...)` form. Class name is the target.
+        return _CallShape(target.name, expr.argumentList);
+      }
+    }
+    return null;
+  }
+}
+
+class _CallShape {
+  _CallShape(this.className, this.argumentList);
+  final String className;
+  final ArgumentList argumentList;
 }

@@ -69,6 +69,19 @@ class WidgetSerializer {
       if (idx == null) {
         continue;
       }
+      if (positionalByIndex.containsKey(idx)) {
+        // Both a catalog-mapped positional and an `__positional$idx`
+        // entry claim this index — the visitor never produces this
+        // shape (it picks one path per arg), so this can only happen
+        // when an external caller hand-builds a `WidgetNode`. Refuse
+        // to silently pick one over the other.
+        final mapped = spec.positionalToProperty[idx];
+        throw ArgumentError(
+          'Conflicting positional argument at index $idx on '
+          '${node.className}: catalog maps index to "$mapped" and '
+          'properties also contains "${entry.key}". Drop one.',
+        );
+      }
       positionalByIndex[idx] = PropertySerializer.serialize(entry.value);
     }
     final sortedPositional = positionalByIndex.keys.toList()..sort();

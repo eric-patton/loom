@@ -357,6 +357,96 @@ class MultiRef extends StatelessWidget {
       expect(rootChildren[1], isA<OpaqueNode>());
     });
 
+    test(
+      'non-widget-position call to a helper does not count as a reference '
+      '(widget-position-aware counter)',
+      () {
+        // Round-2 finding #6: the old RecursiveAstVisitor counter
+        // recursed into property values and method-call targets,
+        // counting `_h()` even where the visitor would treat it as
+        // opaque (never a MethodReferenceNode candidate). That over-
+        // counted to 2+ and falsely dropped the legitimate widget-
+        // position call site too.
+        //
+        // Here `_h()` appears ONCE at a widget position (root return)
+        // and ONCE inside a property-position OpaquePropertyValue
+        // (`onPressed: _h`). With widget-position-aware counting, the
+        // widget-position call resolves to MethodReferenceNode.
+        //
+        // Tearoff and call inside an opaque arg both count as non-
+        // widget positions per the visitor's logic.
+        const source = '''
+import 'package:flutter/material.dart';
+
+class App extends StatelessWidget {
+  const App({super.key});
+
+  Widget _h() {
+    return const Text('hi');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(child: _h(), foo: someFunc(_h()));
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        // _h() inside Container.child is widget-position → MethodRef.
+        final inner = model.root.childSlots['child']!.first;
+        expect(
+          inner,
+          isA<MethodReferenceNode>(),
+          reason: '_h() at widget position should resolve, since the '
+              'non-widget-position _h() inside someFunc(_h()) does not '
+              'count toward the multi-reference limit',
+        );
+      },
+    );
+
+    test(
+      'helper called with type arguments falls through to opaque '
+      '(_h<int>() does not resolve as MethodReferenceNode)',
+      () {
+        // Round-2 finding #9: visitor used to ignore typeArguments and
+        // resolve `_h<int>()` to MethodReferenceNode, then re-emit as
+        // `_h()` — dropping the type args. Now: falls through to opaque.
+        const source = '''
+import 'package:flutter/material.dart';
+
+class App extends StatelessWidget {
+  const App({super.key});
+
+  Widget _h<T>() {
+    return const Text('hi');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _h<int>(),
+      ],
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final children = model.root.childSlots['children']!;
+        expect(children, hasLength(1));
+        expect(
+          children[0],
+          isA<OpaqueNode>(),
+          reason: 'type-argumented helper call must be opaque so source '
+              'bytes (with type args) round-trip verbatim',
+        );
+        expect(
+          (children[0] as OpaqueNode).sourceText,
+          equals('_h<int>()'),
+        );
+      },
+    );
+
     test('edits to a widget inside a helper target the helper source', () {
       final source = File(
         'test/fixtures/helper_methods.dart',

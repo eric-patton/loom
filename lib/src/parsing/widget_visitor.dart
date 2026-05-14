@@ -59,11 +59,15 @@ class WidgetVisitor {
   ModelNode convertModelNode(Expression expr) {
     // M5: in-class helper-method reference takes priority over the
     // generic "treat any zero-arg `Foo()` as a constructor call" reading.
-    // A no-target, no-arg `_methodName()` that matches an in-class method
-    // resolves to a `MethodReferenceNode` (unless we'd recurse into the
-    // same method, in which case it falls through to opaque).
+    // A no-target, no-arg, no-type-args `_methodName()` that matches an
+    // in-class method resolves to a `MethodReferenceNode` (unless we'd
+    // recurse into the same method, in which case it falls through to
+    // opaque). Type-argumented calls (`_h<int>()`) also fall through to
+    // opaque — the serializer would otherwise drop the type args on
+    // re-emission, breaking the round-trip.
     if (expr is MethodInvocation &&
         expr.target == null &&
+        expr.typeArguments == null &&
         expr.argumentList.arguments.isEmpty) {
       final methodName = expr.methodName.name;
       final decl = _classMethods[methodName];
@@ -90,7 +94,7 @@ class WidgetVisitor {
     MethodInvocation callExpr,
     MethodDeclaration declaration,
   ) {
-    final bodyExpr = _extractReturnExpression(declaration);
+    final bodyExpr = extractMethodReturnExpression(declaration);
     if (bodyExpr == null) {
       // Helper has no return expression we can model; degrade to opaque
       // at the call site.
@@ -109,9 +113,6 @@ class WidgetVisitor {
       _resolvingMethods.remove(methodName);
     }
   }
-
-  Expression? _extractReturnExpression(MethodDeclaration method) =>
-      extractMethodReturnExpression(method);
 
   OpaqueNode _opaqueNode(SyntacticEntity entity) {
     final span = _span(entity);

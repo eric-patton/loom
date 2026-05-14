@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5.1 — post-review hardening pass
-**Last touched:** 2026-05-13 — closed the substantive findings from the four-agent peer review of the M5-complete kernel. Real bugs (string-escape coverage, applySourceEdits validation gaps, `__positional` round-trip mismatch, bogus `ListSlotStyle` on non-list slot expressions, NaN/Color guards), comment preservation in structural edits, multi-reference helper defense at parse time, per-fixture iteration semantics, performance benchmark, dead-file cleanup, and additional lint coverage. 90 tests green, 1 documented skip; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` (now 10k *per fixture*) finishes in ~80s.
+**Active milestone:** M5.2 — round-2 review hardening
+**Last touched:** 2026-05-14 — closed all five BLOCKER/HIGH findings plus four opportunistic mediums and three cleanup nits from the round-2 multi-agent peer review. Real bugs (applySourceEdits same-offset ambiguity, last-element removal orphan comma, empty multi-line list insert indent/comma, fallback separator indent, model/planner non-list slot disagreement) and the mediums (widget-position-aware reference counter, positional override conflict, type-args on helper calls). Plus drop unused dev deps, inline a stale forwarder, escape 0x7F. **100 tests green** (up from 90), 1 documented skip; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` finishes in ~14s.
 **Blockers:** none
-**Next action:** **Eric review gate for M5 + M5.1.** Two findings deliberately left unfixed (out of scope for hardening, documented in Gotchas): widening `WidgetTreeModel.root` to `ModelNode` so `build() => _helper()` works, and adding 10 more real-world fixtures to satisfy the spec's "20 hand-picked real-world Flutter files" exactly.
+**Next action:** **Eric review gate for M5 + M5.1 + M5.2.** Findings deliberately deferred (documented below): widening `WidgetTreeModel.root` to `ModelNode` (the bare-helper-root case), corpus growth from 10 to 20 fixtures, `MethodReferenceNode.==` policy (cosmetic — StructuralEquivalence is the official oracle), `applySourceEdits` O(N·M) (within per-edit budget for current loads), supporting multi-class build() (intentional scope), and supporting multi-reference helpers (current opaque defense is the soft constraint).
 
 ---
 
@@ -176,6 +176,49 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M5.2 — round-2 hardening: close BLOCKER/HIGH findings and opportunistic mediums
+**Worked on:** Round-2 multi-agent peer review surfaced 5 real bugs (1 BLOCKER + 4 latent-but-real) plus ~10 mediums and a clutch of polish nits. This pass closes all five bugs, four of the mediums, and the cheap polish items; the rest were either deliberately deferred (out of scope) or judged cosmetic and not worth churning.
+
+**Real bugs fixed:**
+  - **`applySourceEdits` same-offset validation hole.** Two edits at the same offset where one is a pure insert (`length==0`) and the other has `length>0` used to pass validation in one input order and throw `"overlap"` in the reverse order, with the descending-offset sort then applying them in undefined relative order — the unstable sort dropped the pure insert silently. Now: any two edits at the same offset throw `ArgumentError` ("application order is ambiguous"), regardless of length. Single unambiguous case for same-offset edits doesn't exist — "does the insert land before or after the replacement?" has no canonical answer.
+  - **Last-element removal with a preserved trailing comment + a trailing comma leaves an orphan comma.** `[A, // c\n  B,]` → `removeChildEdit(index:1)` used to yield `[A, // c\n  ,]`, which analyzer error-recovers as a list with an empty second element. The reparse said 2 children while the model said 1 — direct invariant violation. Fix: when `_trimStartAfterComment` preserved a comment (i.e. `separatorStart > prev.sourceSpan.end`), the inter-element comma now functions as the trailing comma; extend the deletion to consume the original trailing comma after the removed element. The no-comment case is unchanged.
+  - **Empty multi-line list insert double-indents and adds spurious trailing comma.** For `children: [\n      ],` (6-space indent on `]`'s line) inserting a Text used to emit a 12-space indent + an unwanted `,`. Fix: anchor the insertion just AFTER the opening `[` (so the existing newline+whitespace before `]` naturally becomes the closing-bracket indent), and don't emit a trailing comma (the empty list's `hasTrailingComma` is always `false` by parse semantics; the model's `insertChild` doesn't flip it, so emitting one would make the in-memory and reparsed models disagree).
+  - **`_interElementSep` fallback hardcoded 2-space indent.** When the natural separator between two list elements contained a `//` or `/*` (and so couldn't be duplicated), the fallback used `,\n  ` regardless of the real list indent. Inside nested widgets the real indent might be 8 or 10 spaces, so trailing siblings got pushed out of column. Round-trip equivalence still held (style-blind comparison), but Global Acceptance #4 ("whitespace in unedited regions preserved byte-for-byte") was broken. Fix: infer the indent from the first element's line.
+  - **Model and planner disagree on non-list slots.** After M5.1.2, a non-list expression in a list-shaped slot (`children: spread()`) is recorded as a single `OpaqueNode` with no `ListSlotStyle`. `EditPlanner` refuses to plan structural edits there (its `_requireListStyle` throws); `WidgetTreeModel.insertChild`/`removeChild`/`moveChild` happily mutated and produced models that couldn't be serialized. Fix: a new `_requireListSlotParent` guard in `node_path.dart` resolves the parent and rejects the call if the slot has no `ListSlotStyle` — matching the planner's behavior. Same guard applies to single-shaped slots like `Padding.child`, which were never legitimately structurally-editable.
+
+**Mediums fixed:**
+  - **Widget-position-aware `_ReferenceCounter`.** The old counter was a `RecursiveAstVisitor` that walked the entire AST and counted every no-target, no-arg `_method()` invocation. It over-counted in property positions (`Text(_a())`), method-call targets (`_a().wrap()`), and inside opaque expressions (closures, ternaries) — the visitor wouldn't resolve `_a()` to a `MethodReferenceNode` in any of those, so they shouldn't count toward the multi-reference limit. Fix: rewrote the counter as a recursive walker that mirrors `WidgetVisitor.convertModelNode`'s logic exactly — uses the catalog to identify constructor calls, recurses into named-arg expressions for known child slots, treats everything else as opaque/property and stops. Same self-recursion / indirect-cycle defense still works.
+  - **`__positional$i` override conflict in `WidgetSerializer`.** If a hand-built `WidgetNode` had BOTH a catalog-mapped positional (`data` for Text at index 0) AND a `__positional0` opaque, the serializer's `positionalByIndex` map silently let one override the other. The visitor never produces this shape; external callers can. Fix: throws `ArgumentError` when both keys claim the same index.
+  - **`MethodReferenceNode` dropped type arguments.** `_h<int>()` resolved to `MethodReferenceNode(_h)` whose serializer emits `_h()` — type args lost on re-emission. Fix: visitor requires `typeArguments == null` on the no-target-no-arg shape; type-argumented helper calls fall through to `OpaqueNode`, which round-trips the source bytes (including type args) verbatim. Same `typeArguments == null` check added to the reference counter.
+
+**Cleanup / polish:**
+  - **Dropped `checks` and `glados`** from `pubspec.yaml` dev_dependencies. Neither was imported anywhere after M2's hand-rolled property loop replaced the glados-driven plan.
+  - **Inlined `_extractReturnExpression` forwarder** in `widget_visitor.dart`. Was a one-liner forwarding to top-level `extractMethodReturnExpression`; the call site now uses the top-level function directly.
+  - **Removed `comment_references` lint** from `analysis_options.yaml`. Earned nothing — the codebase uses backtick `Identifier` style for doc references, not bracket `[Identifier]`, so the rule never fired.
+  - **`_formatString` now escapes 0x7F (DEL)** as `\x7f`. Previously passed through as a raw non-printable byte. (Round-trip-correct, but emitting non-printable bytes in re-serialized source is a code-quality concern.)
+  - **Removed `final fixture = initialFixture;` leftover** in `round_trip_test.dart`'s structural-edit loop. The outer `for (final initialFixture in fixtures)` was a refactor artifact; the inner alias served no purpose.
+
+**Strengthened tests:**
+  - `applySourceEdits` validation: new test for the mixed-length same-offset case, both input orders.
+  - `EditPlanner` structural edits: new tests for last-element-with-comment removal, empty-multi-line-list insert indent + no-trailing-comma, and the fallback-indent case with a comment in the natural separator.
+  - `WidgetTreeModel`: new test verifying the model's structural-edit API refuses non-list slots.
+  - `WidgetSerializer`: new test for the positional-override conflict.
+  - Parser: new tests for the widget-position-aware counter (helper called from a property position still resolves at the widget position) and for the typeArguments fall-through to opaque.
+  - New "opaque byte preservation" test: edit a literal far from an opaque region, verify the opaque region's bytes are identical post-edit.
+  - New "composed batch of non-overlapping edits" test: batched property edits apply deterministically and the result reparses with both new values (closes Global Acceptance edit-composition gap that existed implicitly but wasn't directly tested).
+
+**Deliberately left unfixed (out of M5.2 scope, documented in Gotchas where applicable):**
+  - `WidgetTreeModel.root` is still `WidgetNode` (bare `build() => _helper()` still requires a wrap).
+  - Corpus is still 10 fixtures; spec calls for 20.
+  - `MethodReferenceNode.==` policy across body types is cosmetic — `StructuralEquivalence` is the official oracle, and the `==` API is documented to defer to it.
+  - `applySourceEdits` is O(N·M) on `source.length × edits.count`. Within the kernel's per-edit budget for current loads.
+  - Multi-class-in-one-file: parser walks the first class with a build method only. Intentional scope per the spec.
+  - True multi-reference helper *support*: current opaque-degrade defense is the established soft constraint.
+
+**Headline numbers:** 100 tests passing (up from 90), 1 documented skip. CI-grade run with 10k per-fixture iterations ≈ 14 seconds (down from ~80s — pure observation, no change in measurement methodology; round-2 didn't touch the property test inner loop). All round-2 BLOCKER + HIGH findings are fixed and tested. Round-2's stress on string escaping, validation, multi-reference defense, per-fixture iteration found no regressions, confirming the M5.1 work was durable.
+
+**Next:** Eric reviews and ratifies M5 + M5.1 + M5.2 together. After approval the kernel is feature-complete, hardened across two review rounds, and ready to ship to the UI layer.
 
 ### [2026-05-13] M5.1 — post-review hardening: close substantive findings from the multi-agent peer review
 **Worked on:** Four review subagents combed the M5-complete kernel for invariant gaps, code-quality concerns, adversarial inputs, and spec compliance divergences. This pass closes the substantive findings across seven sub-commits (`M5.1.1` … `M5.1.7`).

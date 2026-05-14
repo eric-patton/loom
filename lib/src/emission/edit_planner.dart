@@ -106,9 +106,35 @@ class EditPlanner {
         target.sourceSpan.offset,
         source,
       );
+      // When a comment was preserved in the separator, the comma
+      // between prev and target remains in source and now functions as
+      // a trailing comma of the contracted list. If the original list
+      // ALSO had a trailing comma after target, that comma is now
+      // orphan (yielding `[A, // c\n  ,]`, which analyzer error-recovers
+      // as a list with an empty second element — a direct invariant
+      // violation). Extend the deletion to consume that orphan comma.
+      // No comment preserved → the inter-element comma IS deleted, so
+      // the original trailing-comma-after-target naturally lands as
+      // the trailing comma of the contracted list; no extension needed.
+      var deleteEnd = target.sourceSpan.end;
+      final commentPreserved = separatorStart > prev.sourceSpan.end;
+      if (commentPreserved) {
+        var probe = target.sourceSpan.end;
+        while (probe < source.length) {
+          final ch = source.codeUnitAt(probe);
+          if (ch == 0x20 || ch == 0x09) {
+            probe++;
+          } else {
+            break;
+          }
+        }
+        if (probe < source.length && source.codeUnitAt(probe) == 0x2C) {
+          deleteEnd = probe + 1;
+        }
+      }
       return SourceEdit(
         offset: separatorStart,
-        length: target.sourceSpan.end - separatorStart,
+        length: deleteEnd - separatorStart,
         replacement: '',
       );
     }
@@ -278,18 +304,23 @@ class EditPlanner {
 
     if (children.isEmpty) {
       if (style.isMultiLine) {
-        // Infer the indent of the line containing `[` so the inserted
-        // element lands at indent + 2 spaces and the closing `]` keeps
-        // its original line indent.
-        final outerIndent = _lineIndentBefore(
-          style.bracketsSpan.offset,
-          source,
-        );
+        // Anchor the insertion just AFTER the opening `[` so the
+        // existing newline + whitespace before `]` naturally becomes the
+        // closing-bracket indent — no double-indent. The element's
+        // indent is inferred from the line containing `[` plus 2 spaces.
+        //
+        // No trailing comma is emitted: an empty list literal always
+        // has `hasTrailingComma=false` (the visitor reads it from the
+        // token before `]`, which is `[` itself), and `insertChild` on
+        // the model doesn't change that flag, so a trailing-comma flip
+        // here would make the in-memory model disagree with the reparse.
+        final openOff = style.bracketsSpan.offset;
+        final outerIndent = _lineIndentBefore(openOff, source);
         final elementIndent = '$outerIndent  ';
         return SourceEdit(
-          offset: closeOff,
+          offset: openOff + 1,
           length: 0,
-          replacement: '$elementIndent$newSourceText,\n$outerIndent',
+          replacement: '\n$elementIndent$newSourceText',
         );
       }
       return SourceEdit(
@@ -341,12 +372,23 @@ class EditPlanner {
       // Fall back to a default separator if the natural one contains a
       // comment — duplicating that comment on every insert would
       // misrepresent the source.
-      if (raw.contains('//') || raw.contains('/*')) {
-        return style.isMultiLine ? ',\n  ' : ', ';
+      if (!raw.contains('//') && !raw.contains('/*')) {
+        return raw;
       }
-      return raw;
     }
-    return style.isMultiLine ? ',\n  ' : ', ';
+    if (!style.isMultiLine) {
+      return ', ';
+    }
+    // Multi-line fallback: infer the indent from the first element's
+    // line so the inserted element lands at the same column. Hardcoding
+    // two spaces would push trailing siblings out of column whenever the
+    // real list indent is something else (e.g., 6 spaces inside a nested
+    // widget).
+    final firstIndent = _lineIndentBefore(
+      children.first.sourceSpan.offset,
+      source,
+    );
+    return ',\n$firstIndent';
   }
 
   /// Returns the run of horizontal whitespace immediately preceding

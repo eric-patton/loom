@@ -70,7 +70,10 @@ class PropertySerializer {
             buf.writeCharCode(code);
           }
         default:
-          if (code < 0x20) {
+          if (code < 0x20 || code == 0x7F) {
+            // Sub-space control bytes and DEL (0x7F): escape as `\xHH`
+            // rather than emitting raw, so the output source has no
+            // non-printable bytes.
             buf.write('\\x${code.toRadixString(16).padLeft(2, '0')}');
           } else {
             buf.writeCharCode(code);

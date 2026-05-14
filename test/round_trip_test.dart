@@ -197,9 +197,8 @@ void main() {
 
       // Iterate PER FIXTURE so every file gets `iterations` random
       // edit sequences (each up to 10 mixed structural edits).
-      for (final initialFixture in fixtures) {
+      for (final fixture in fixtures) {
         for (var i = 0; i < iterations; i++) {
-          final fixture = initialFixture;
           var currentSource = fixture.source;
           var currentModel = fixture.model;
 

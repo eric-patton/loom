@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:loom/loom.dart';
 import 'package:test/test.dart';
 
@@ -244,6 +246,29 @@ class App extends StatelessWidget {
       );
     });
 
+    test(
+      'pure insert + length>0 at same offset throw regardless of input order',
+      () {
+        // Round-2 finding: this case used to throw "overlap" in one
+        // input order and silently swallow the insert in the other.
+        // Both orders must now throw deterministically.
+        expect(
+          () => applySourceEdits('abc', [
+            const SourceEdit(offset: 0, length: 0, replacement: 'X'),
+            const SourceEdit(offset: 0, length: 1, replacement: 'Y'),
+          ]),
+          throwsArgumentError,
+        );
+        expect(
+          () => applySourceEdits('abc', [
+            const SourceEdit(offset: 0, length: 1, replacement: 'Y'),
+            const SourceEdit(offset: 0, length: 0, replacement: 'X'),
+          ]),
+          throwsArgumentError,
+        );
+      },
+    );
+
     test('adjacent non-overlapping edits succeed', () {
       final out = applySourceEdits('abcdef', [
         const SourceEdit(offset: 0, length: 2, replacement: 'X'),
@@ -251,6 +276,320 @@ class App extends StatelessWidget {
       ]);
       expect(out, equals('XYef'));
     });
+
+    test('composed batch of non-overlapping edits applies deterministically',
+        () {
+      // Spec invariant: composition. Applying a batch of edits at once
+      // matches applying them sequentially against shifted offsets.
+      // Here we plan multiple property edits against the same source
+      // (all referring to the original spans), then apply in one batch.
+      const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('a'),
+        Text('b'),
+        Text('c'),
+      ],
+    );
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final children = model.root.childSlots['children']!;
+      final aText = children[0] as WidgetNode;
+      final cText = children[2] as WidgetNode;
+
+      final edits = <SourceEdit>[
+        EditPlanner.propertyEdit(
+          oldValue: aText.properties['data']! as StringLiteralValue,
+          newValue: const StringLiteralValue(value: 'A!', span: _span),
+        ),
+        EditPlanner.propertyEdit(
+          oldValue: cText.properties['data']! as StringLiteralValue,
+          newValue: const StringLiteralValue(value: 'C!', span: _span),
+        ),
+      ];
+      final batched = applySourceEdits(source, edits);
+      expect(batched.contains("'A!'"), isTrue);
+      expect(batched.contains("'C!'"), isTrue);
+      expect(batched.contains("'b'"), isTrue);
+      // Reparses cleanly with both new values.
+      final reparsed = parseWidgetTree(batched);
+      final newChildren = reparsed.root.childSlots['children']!;
+      final newA = newChildren[0] as WidgetNode;
+      final newC = newChildren[2] as WidgetNode;
+      expect((newA.properties['data']! as StringLiteralValue).value, 'A!');
+      expect((newC.properties['data']! as StringLiteralValue).value, 'C!');
+    });
+  });
+
+  group('M5.2 structural edit fixes', () {
+    test(
+      'last-element removal with trailing line comment + trailing comma '
+      'reparses with correct child count (no orphan comma)',
+      () {
+        // Round-2 finding #2: `[A, // c\n B,]` then remove(1) used to
+        // leave `[A, // c\n ,]`. Analyzer error-recovers the dangling
+        // comma as an empty-expression child, so reparse said 2 children
+        // while the model said 1.
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('a'), // important
+        Text('b'),
+      ],
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final edit = EditPlanner.removeChildEdit(
+          parent: model.root,
+          slotName: 'children',
+          index: 1,
+          source: source,
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        expect(
+          newSource.contains('// important'),
+          isTrue,
+          reason: 'comment must survive',
+        );
+        expect(newSource.contains("Text('b')"), isFalse);
+        // Reparse: exactly one child, not two.
+        final reparsed = parseWidgetTree(newSource);
+        expect(reparsed.root.childSlots['children'], hasLength(1));
+      },
+    );
+
+    test(
+      'insertChild into empty multi-line list uses correct indent and no '
+      'spurious trailing comma',
+      () {
+        // Round-2 finding #3: empty `[\n    ]` with 4-space indent got
+        // a 10-space indent + unwanted trailing comma on first insert.
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+      ],
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final newChild = WidgetNode(
+          className: 'Text',
+          properties: {
+            'data': const StringLiteralValue(value: 'X', span: _span),
+          },
+          childSlots: const {},
+          sourceSpan: _span,
+          styleHints: const StyleHints(),
+        );
+        final edit = EditPlanner.insertChildEdit(
+          parent: model.root,
+          slotName: 'children',
+          index: 0,
+          newChild: newChild,
+          source: source,
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        // No 10-space indent before the new element.
+        expect(
+          newSource.contains("\n          Text('X')"),
+          isFalse,
+          reason: 'should not double-indent the inserted element',
+        );
+        // Should be at the same indent as `]` would have been + 2.
+        expect(newSource.contains("\n        Text('X')"), isTrue);
+        // Reparses to a list of exactly one child.
+        final reparsed = parseWidgetTree(newSource);
+        expect(reparsed.root.childSlots['children'], hasLength(1));
+      },
+    );
+
+    test(
+      'insertChild into multi-line list with commented separator preserves '
+      'real indent on inserted element',
+      () {
+        // Round-2 finding #4: when the natural separator contained a
+        // comment, the fallback used `,\n  ` (hardcoded 2 spaces).
+        // Inside a nested widget the list indent might be 8 spaces;
+        // the fallback should match.
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(4.0),
+      child: Column(
+        children: [
+          Text('a'), // c
+          Text('b'),
+        ],
+      ),
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final column = model.root.childSlots['child']!.first as WidgetNode;
+        final newChild = WidgetNode(
+          className: 'Text',
+          properties: {
+            'data': const StringLiteralValue(value: 'X', span: _span),
+          },
+          childSlots: const {},
+          sourceSpan: _span,
+          styleHints: const StyleHints(),
+        );
+        final edit = EditPlanner.insertChildEdit(
+          parent: column,
+          slotName: 'children',
+          index: 1,
+          newChild: newChild,
+          source: source,
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        // Inserted Text should appear at 10-space indent (matching
+        // children's existing indent), not at 2-space.
+        expect(
+          newSource.contains("\n          Text('X')"),
+          isTrue,
+          reason: 'fallback should use the existing element indent',
+        );
+        expect(newSource.contains("\n  Text('X')"), isFalse);
+      },
+    );
+
+    test(
+      'model insertChild on a non-list slot throws ArgumentError',
+      () {
+        // Round-2 finding #5: model and planner disagreed on non-list
+        // slots. After M5.1.2, `children: spread()` records as a
+        // single OpaqueNode with no ListSlotStyle; the planner refuses
+        // structural edits there. The model must refuse too.
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(4.0),
+      child: Text('only'),
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        // Padding's `child` slot is single-shaped — no ListSlotStyle.
+        expect(
+          () => model.insertChild(
+            const [],
+            'child',
+            0,
+            const OpaqueNode(
+              sourceSpan: SourceSpan(offset: 0, length: 0),
+              sourceText: 'X',
+            ),
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => model.removeChild(const [], 'child', 0),
+          throwsArgumentError,
+        );
+      },
+    );
+  });
+
+  group('opaque byte preservation', () {
+    test(
+      'a property edit elsewhere does not change the bytes of an opaque region',
+      () {
+        // The real_world_opaque_mybutton fixture contains a closure
+        // (`onTap: () { print('tap'); }`) that should land as an
+        // OpaquePropertyValue. Editing a different property in the
+        // tree must leave the opaque source bytes unchanged.
+        final source = File('test/fixtures/real_world_opaque_mybutton.dart')
+            .readAsStringSync();
+        final model = parseWidgetTree(source);
+        // Find any opaque property anywhere in the tree.
+        OpaquePropertyValue? opaque;
+        late int opaqueOffset;
+        late int opaqueLength;
+        for (final entry in model.walk()) {
+          final node = entry.node;
+          if (node is! WidgetNode) {
+            continue;
+          }
+          for (final propEntry in node.properties.entries) {
+            final value = propEntry.value;
+            if (value is OpaquePropertyValue) {
+              opaque = value;
+              opaqueOffset = value.span.offset;
+              opaqueLength = value.span.length;
+              break;
+            }
+          }
+          if (opaque != null) {
+            break;
+          }
+        }
+        if (opaque == null) {
+          fail('precondition: fixture must have an OpaquePropertyValue');
+        }
+
+        // Find a literal property to edit (must be far enough away that
+        // it's not inside the opaque span).
+        StringLiteralValue? editableOld;
+        for (final entry in model.walk()) {
+          final node = entry.node;
+          if (node is! WidgetNode) {
+            continue;
+          }
+          for (final propEntry in node.properties.entries) {
+            final value = propEntry.value;
+            if (value is StringLiteralValue &&
+                (value.span.offset >= opaqueOffset + opaqueLength ||
+                    value.span.end <= opaqueOffset)) {
+              editableOld = value;
+              break;
+            }
+          }
+          if (editableOld != null) {
+            break;
+          }
+        }
+        if (editableOld == null) {
+          fail('precondition: fixture must have an editable string');
+        }
+        final edit = EditPlanner.propertyEdit(
+          oldValue: editableOld,
+          newValue: const StringLiteralValue(value: 'CHANGED', span: _span),
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        // Compute the opaque span's new offset (might have shifted if
+        // edit was before).
+        final newOpaqueOffset = edit.offset < opaqueOffset
+            ? opaqueOffset + edit.replacement.length - edit.length
+            : opaqueOffset;
+        final bytesBefore =
+            source.substring(opaqueOffset, opaqueOffset + opaqueLength);
+        final bytesAfter = newSource.substring(
+          newOpaqueOffset,
+          newOpaqueOffset + opaqueLength,
+        );
+        expect(
+          bytesAfter,
+          equals(bytesBefore),
+          reason: 'opaque region bytes must be preserved verbatim',
+        );
+      },
+    );
   });
 
   group('EditPlanner.propertyEdit', () {
@@ -678,5 +1017,32 @@ class App extends StatelessWidget {
       );
       expect(WidgetSerializer.serialize(m), equals('_buildHeader()'));
     });
+
+    test(
+      r'positional override conflict throws (catalog index AND __positional$idx)',
+      () {
+        // Round-2 finding #7: visitor never produces this shape, but a
+        // hand-built WidgetNode that has both `data` (catalog positional
+        // 0 for Text) AND `__positional0` would silently let one
+        // override the other. Now: throws.
+        final conflict = WidgetNode(
+          className: 'Text',
+          properties: {
+            'data': const StringLiteralValue(value: 'foo', span: _span),
+            '${kPositionalOpaqueKeyPrefix}0': const OpaquePropertyValue(
+              span: _span,
+              sourceText: "'bar'",
+            ),
+          },
+          childSlots: const {},
+          sourceSpan: _span,
+          styleHints: const StyleHints(),
+        );
+        expect(
+          () => WidgetSerializer.serialize(conflict),
+          throwsArgumentError,
+        );
+      },
+    );
   });
 }

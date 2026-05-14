@@ -42,74 +42,111 @@ extension NodeNavigation on WidgetTreeModel {
       WidgetTreeModel(root: _withProperty(root, path, propName, value));
 
   /// Returns a new model with `newChild` inserted at `parentPath / slot`
-  /// at the given `index`.
+  /// at the given `index`. Throws `ArgumentError` if the slot is not
+  /// list-shaped (see `_requireListSlotParent`).
   WidgetTreeModel insertChild(
     NodePath parentPath,
     String slot,
     int index,
     ModelNode newChild,
-  ) =>
-      WidgetTreeModel(
-        root: _modifySlot(root, parentPath, slot, (current) {
-          if (index < 0 || index > current.length) {
-            throw ArgumentError(
-              'Insert index $index out of range [0, ${current.length}]',
-            );
-          }
-          return <ModelNode>[
-            ...current.sublist(0, index),
-            newChild,
-            ...current.sublist(index),
-          ];
-        }),
-      );
+  ) {
+    _requireListSlotParent(parentPath, slot);
+    return WidgetTreeModel(
+      root: _modifySlot(root, parentPath, slot, (current) {
+        if (index < 0 || index > current.length) {
+          throw ArgumentError(
+            'Insert index $index out of range [0, ${current.length}]',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          newChild,
+          ...current.sublist(index),
+        ];
+      }),
+    );
+  }
 
   /// Returns a new model with the child at `parentPath / slot[index]`
-  /// removed.
-  WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) =>
-      WidgetTreeModel(
-        root: _modifySlot(root, parentPath, slot, (current) {
-          if (index < 0 || index >= current.length) {
-            throw ArgumentError(
-              'Remove index $index out of range [0, ${current.length})',
-            );
-          }
-          return <ModelNode>[
-            ...current.sublist(0, index),
-            ...current.sublist(index + 1),
-          ];
-        }),
-      );
+  /// removed. Throws `ArgumentError` if the slot is not list-shaped.
+  WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) {
+    _requireListSlotParent(parentPath, slot);
+    return WidgetTreeModel(
+      root: _modifySlot(root, parentPath, slot, (current) {
+        if (index < 0 || index >= current.length) {
+          throw ArgumentError(
+            'Remove index $index out of range [0, ${current.length})',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          ...current.sublist(index + 1),
+        ];
+      }),
+    );
+  }
 
   /// Returns a new model with the child at `parentPath / slot[from]`
-  /// moved to position `to`.
+  /// moved to position `to`. Throws `ArgumentError` if the slot is not
+  /// list-shaped.
   WidgetTreeModel moveChild(
     NodePath parentPath,
     String slot,
     int from,
     int to,
-  ) =>
-      WidgetTreeModel(
-        root: _modifySlot(root, parentPath, slot, (current) {
-          if (from < 0 || from >= current.length) {
-            throw ArgumentError(
-              'Move source $from out of range [0, ${current.length})',
-            );
-          }
-          if (to < 0 || to >= current.length) {
-            throw ArgumentError(
-              'Move destination $to out of range [0, ${current.length})',
-            );
-          }
-          if (from == to) {
-            return current;
-          }
-          final mutable = <ModelNode>[...current];
-          final moved = mutable.removeAt(from);
-          mutable.insert(to, moved);
-          return mutable;
-        }),
+  ) {
+    _requireListSlotParent(parentPath, slot);
+    return WidgetTreeModel(
+      root: _modifySlot(root, parentPath, slot, (current) {
+        if (from < 0 || from >= current.length) {
+          throw ArgumentError(
+            'Move source $from out of range [0, ${current.length})',
+          );
+        }
+        if (to < 0 || to >= current.length) {
+          throw ArgumentError(
+            'Move destination $to out of range [0, ${current.length})',
+          );
+        }
+        if (from == to) {
+          return current;
+        }
+        final mutable = <ModelNode>[...current];
+        final moved = mutable.removeAt(from);
+        mutable.insert(to, moved);
+        return mutable;
+      }),
+    );
+  }
+
+  /// Guards `insertChild` / `removeChild` / `moveChild`: the model-level
+  /// structural-edit API operates only on list-shaped slots (those with
+  /// a captured `ListSlotStyle`). Single-shaped slots (e.g. `child:`)
+  /// and slots whose source expression isn't a list literal (e.g.
+  /// `children: spread()`, which the visitor captures as a single
+  /// `OpaqueNode` with no `ListSlotStyle`) are rejected here so the
+  /// model and `EditPlanner` agree on what's editable — otherwise the
+  /// model would accept a mutation that the planner refuses to
+  /// serialize back to source.
+  void _requireListSlotParent(NodePath parentPath, String slot) {
+    final node = nodeAt(parentPath);
+    if (node == null) {
+      throw ArgumentError('parentPath does not resolve to any node');
+    }
+    if (node is! WidgetNode) {
+      throw ArgumentError(
+        'parentPath resolves to ${node.runtimeType}, not a WidgetNode',
       );
+    }
+    if (!node.childSlotStyles.containsKey(slot)) {
+      throw ArgumentError(
+        '${node.className}.$slot is not a list-shaped slot; '
+        'structural edits require a list-shaped slot. Single-shaped '
+        'slots and slots whose source expression is not a list literal '
+        '(e.g. children: spread()) cannot be structurally edited.',
+      );
+    }
+  }
 
   /// Walks the tree in pre-order and yields one entry per node, paired
   /// with the path that reaches it. Descends through `WidgetNode`'s
