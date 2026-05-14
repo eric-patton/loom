@@ -80,30 +80,133 @@ class EditPlanner {
       );
     }
     if (index == 0) {
-      // First: target + the separator to children[1].
+      // First: target + the separator to children[1]. If a comment lives
+      // in that separator, trim the deletion to stop at the comment so
+      // the comment is preserved (Global Acceptance #4).
       final next = children[1];
+      final end = _trimEndBeforeComment(
+        target.sourceSpan.offset,
+        next.sourceSpan.offset,
+        source,
+      );
       return SourceEdit(
         offset: target.sourceSpan.offset,
-        length: next.sourceSpan.offset - target.sourceSpan.offset,
+        length: end - target.sourceSpan.offset,
         replacement: '',
       );
     }
     if (index == children.length - 1) {
       // Last: preceding separator + target. Any list trailing-comma stays.
+      // Trailing comments on the previous element are preserved by
+      // starting the deletion *after* any comment in the separator.
       final prev = children[index - 1];
+      final start = _trimStartAfterComment(
+        prev.sourceSpan.end,
+        target.sourceSpan.end,
+        source,
+      );
       return SourceEdit(
-        offset: prev.sourceSpan.end,
-        length: target.sourceSpan.end - prev.sourceSpan.end,
+        offset: start,
+        length: target.sourceSpan.end - start,
         replacement: '',
       );
     }
-    // Middle: target + the separator to the following element.
+    // Middle: target + the separator to the following element. Same
+    // comment-preservation trim as the first-element case.
     final next = children[index + 1];
+    final end = _trimEndBeforeComment(
+      target.sourceSpan.offset,
+      next.sourceSpan.offset,
+      source,
+    );
     return SourceEdit(
       offset: target.sourceSpan.offset,
-      length: next.sourceSpan.offset - target.sourceSpan.offset,
+      length: end - target.sourceSpan.offset,
       replacement: '',
     );
+  }
+
+  /// Given a candidate deletion range `[start, end)`, returns a new
+  /// `end` that stops just before any `//` or `/*` comment found inside
+  /// the range. Trailing whitespace immediately preceding the comment
+  /// is also dropped from the deletion. If no comment is found, `end`
+  /// is returned unchanged.
+  static int _trimEndBeforeComment(int start, int end, String source) {
+    for (var i = start; i + 1 < end; i++) {
+      final c = source.codeUnitAt(i);
+      if (c != 0x2F) {
+        continue;
+      }
+      final n = source.codeUnitAt(i + 1);
+      if (n != 0x2F && n != 0x2A) {
+        continue;
+      }
+      // Comment starts at i. Walk back over horizontal whitespace.
+      var trim = i;
+      while (trim > start) {
+        final ch = source.codeUnitAt(trim - 1);
+        if (ch == 0x20 || ch == 0x09) {
+          trim--;
+        } else {
+          break;
+        }
+      }
+      return trim;
+    }
+    return end;
+  }
+
+  /// Mirror of `_trimEndBeforeComment` for the last-element case:
+  /// given `[start, end)`, returns a new `start` that begins just AFTER
+  /// any comment block in the range. Trailing whitespace AFTER the
+  /// comment (up to the start of the element being removed) is also
+  /// dropped from the deletion. If no comment is found, `start` is
+  /// returned unchanged.
+  static int _trimStartAfterComment(int start, int end, String source) {
+    var lastCommentEnd = -1;
+    for (var i = start; i + 1 < end; i++) {
+      final c = source.codeUnitAt(i);
+      if (c != 0x2F) {
+        continue;
+      }
+      final n = source.codeUnitAt(i + 1);
+      if (n == 0x2F) {
+        // Line comment to end of line (or end of range).
+        var j = i + 2;
+        while (j < end && source.codeUnitAt(j) != 0x0A) {
+          j++;
+        }
+        lastCommentEnd = j;
+        i = j;
+      } else if (n == 0x2A) {
+        // Block comment to '*/'.
+        var j = i + 2;
+        while (j + 1 < end) {
+          if (source.codeUnitAt(j) == 0x2A &&
+              source.codeUnitAt(j + 1) == 0x2F) {
+            j += 2;
+            break;
+          }
+          j++;
+        }
+        lastCommentEnd = j;
+        i = j - 1; // -1 because the for-loop increments
+      }
+    }
+    if (lastCommentEnd < 0) {
+      return start;
+    }
+    // Skip whitespace after the comment.
+    var trim = lastCommentEnd;
+    while (trim < end) {
+      final ch = source.codeUnitAt(trim);
+      if (ch == 0x20 || ch == 0x09 || ch == 0x0A || ch == 0x0D) {
+        trim++;
+      } else {
+        break;
+      }
+    }
+    return trim;
   }
 
   /// Moves the child at `from` to position `to` in the same slot.
@@ -174,10 +277,18 @@ class EditPlanner {
 
     if (children.isEmpty) {
       if (style.isMultiLine) {
+        // Infer the indent of the line containing `[` so the inserted
+        // element lands at indent + 2 spaces and the closing `]` keeps
+        // its original line indent.
+        final outerIndent = _lineIndentBefore(
+          style.bracketsSpan.offset,
+          source,
+        );
+        final elementIndent = '$outerIndent  ';
         return SourceEdit(
           offset: closeOff,
           length: 0,
-          replacement: '  $newSourceText,\n',
+          replacement: '$elementIndent$newSourceText,\n$outerIndent',
         );
       }
       return SourceEdit(
@@ -222,11 +333,38 @@ class EditPlanner {
     ListSlotStyle style,
   ) {
     if (children.length >= 2) {
-      return source.substring(
+      final raw = source.substring(
         children[0].sourceSpan.end,
         children[1].sourceSpan.offset,
       );
+      // Fall back to a default separator if the natural one contains a
+      // comment — duplicating that comment on every insert would
+      // misrepresent the source.
+      if (raw.contains('//') || raw.contains('/*')) {
+        return style.isMultiLine ? ',\n  ' : ', ';
+      }
+      return raw;
     }
     return style.isMultiLine ? ',\n  ' : ', ';
+  }
+
+  /// Returns the run of horizontal whitespace immediately preceding
+  /// `offset` on its line — i.e. the indentation of `offset`'s line.
+  /// Used to choose indents for inserted elements in multi-line lists.
+  static String _lineIndentBefore(int offset, String source) {
+    var lineStart = offset;
+    while (lineStart > 0 && source.codeUnitAt(lineStart - 1) != 0x0A) {
+      lineStart--;
+    }
+    var i = lineStart;
+    while (i < offset) {
+      final ch = source.codeUnitAt(i);
+      if (ch == 0x20 || ch == 0x09) {
+        i++;
+      } else {
+        break;
+      }
+    }
+    return source.substring(lineStart, i);
   }
 }

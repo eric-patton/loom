@@ -442,6 +442,116 @@ class App extends StatelessWidget {
       expect(onTap, isA<OpaquePropertyValue>());
     });
 
+    test(
+        'removeChild preserves trailing line comment after deleted first element',
+        () {
+      const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('a'), // important
+        Text('b'),
+      ],
+    );
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final edit = EditPlanner.removeChildEdit(
+        parent: model.root,
+        slotName: 'children',
+        index: 0,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(
+        newSource.contains('// important'),
+        isTrue,
+        reason: 'line comment must survive the first-element removal',
+      );
+      expect(newSource.contains("Text('a')"), isFalse);
+    });
+
+    test(
+      'removeChild preserves block comment between elements (middle removal)',
+      () {
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('a'),
+        Text('b'), /* about c */
+        Text('c'),
+      ],
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final edit = EditPlanner.removeChildEdit(
+          parent: model.root,
+          slotName: 'children',
+          index: 1,
+          source: source,
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        expect(
+          newSource.contains('/* about c */'),
+          isTrue,
+          reason: 'block comment must survive middle-element removal',
+        );
+        expect(newSource.contains("Text('b')"), isFalse);
+      },
+    );
+
+    test(
+      'insertChild does not duplicate a comment in the inter-element separator',
+      () {
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('a'), // first
+        Text('b'),
+      ],
+    );
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        final newChild = WidgetNode(
+          className: 'Text',
+          properties: {
+            'data': StringLiteralValue(value: 'c', span: _span),
+          },
+          childSlots: const {},
+          sourceSpan: _span,
+          styleHints: const StyleHints(),
+        );
+        final edit = EditPlanner.insertChildEdit(
+          parent: model.root,
+          slotName: 'children',
+          index: 1,
+          newChild: newChild,
+          source: source,
+        );
+        final newSource = applySourceEdits(source, [edit]);
+        // The natural inter-element separator here is `, // first\n        `
+        // — emitting that around every inserted element would duplicate the
+        // comment. The fallback default `,\n  ` should be used instead.
+        final firstCount = '// first'.allMatches(newSource).length;
+        expect(
+          firstCount,
+          equals(1),
+          reason: 'comment must not be duplicated on insert',
+        );
+        expect(newSource.contains("Text('c')"), isTrue);
+      },
+    );
+
     test('moveChild swaps source positions of two siblings', () {
       const source = '''
 class App extends StatelessWidget {
