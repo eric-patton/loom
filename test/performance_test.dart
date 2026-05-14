@@ -45,7 +45,8 @@ void main() {
       // re-parse from scratch — that's the per-call cost the spec is
       // gating on.
       model = parseWidgetTree(source);
-      firstText = model.root.childSlots['children']!.first as WidgetNode;
+      firstText = (model.root as WidgetNode).childSlots['children']!.first
+          as WidgetNode;
       firstData = firstText.properties['data']! as StringLiteralValue;
     });
 

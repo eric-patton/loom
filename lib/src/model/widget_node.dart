@@ -64,14 +64,14 @@ class MethodReferenceNode extends ModelNode {
   @override
   SourceSpan get sourceSpan => callSourceSpan;
 
-  @override
-  bool operator ==(Object other) =>
-      other is MethodReferenceNode &&
-      other.methodName == methodName &&
-      other.body == body;
-
-  @override
-  int get hashCode => Object.hash(methodName, body);
+  // No `==` / `hashCode` override: all `ModelNode` subtypes default to
+  // identity. `StructuralEquivalence.equal` is the official oracle for
+  // semantic comparison — see `lib/src/equivalence/model_equivalence.dart`.
+  // Mixing identity for `WidgetNode` and structural for opaque/method-ref
+  // was previously inconsistent in subtle ways (e.g., a `MethodReferenceNode`
+  // with a `WidgetNode` body fell back to identity on the body, but with
+  // an `OpaqueNode` body fell back to structural — depending on the
+  // referenced helper's content). Uniform identity removes that footgun.
 
   @override
   String toString() => 'MethodReferenceNode($methodName -> $body)';
@@ -94,12 +94,8 @@ class OpaqueNode extends ModelNode {
   /// Verbatim source bytes for this opaque region.
   final String sourceText;
 
-  @override
-  bool operator ==(Object other) =>
-      other is OpaqueNode && other.sourceText == sourceText;
-
-  @override
-  int get hashCode => sourceText.hashCode;
+  // No `==` / `hashCode` override: see `MethodReferenceNode` for the
+  // rationale. `StructuralEquivalence.equal` compares by `sourceText`.
 
   @override
   String toString() {
@@ -176,13 +172,50 @@ class WidgetNode extends ModelNode {
   }
 }
 
-/// Public root of the visual model. Thin wrapper around the root `WidgetNode`;
-/// later milestones will add fields here (method references in M5, etc.).
+/// Public root of the visual model.
+///
+/// `root` is a `ModelNode` (not just `WidgetNode`) so that `build()` methods
+/// whose top-level return is a helper-method call (`build() => _helper()`)
+/// or an unmodelable expression land as `MethodReferenceNode` / `OpaqueNode`
+/// at the root rather than throwing at parse time. The kernel API still
+/// enforces what's editable per subtype (property edits on a `WidgetNode`,
+/// no edits descending into an `OpaqueNode`, etc.).
+///
+/// `diagnostics` carries any analyzer parse errors recovered from the
+/// source (Settled Decision Q4): the model still represents what the
+/// analyzer could error-recover, so callers — especially UI consumers —
+/// can show a "this file has syntax errors" warning or refuse edits
+/// while a file is mid-edit and not parseable.
 class WidgetTreeModel {
-  const WidgetTreeModel({required this.root});
+  const WidgetTreeModel({
+    required this.root,
+    this.diagnostics = const <ParseDiagnostic>[],
+  });
 
-  final WidgetNode root;
+  final ModelNode root;
+
+  /// Analyzer diagnostics gathered while parsing the source. Non-empty
+  /// when the source had syntax errors; the model still reflects what
+  /// could be error-recovered, but downstream callers may want to
+  /// refuse edits or show a warning until the diagnostics list is empty.
+  final List<ParseDiagnostic> diagnostics;
 
   @override
-  String toString() => 'WidgetTreeModel(rootClass=${root.className})';
+  String toString() => 'WidgetTreeModel(rootType=${root.runtimeType}'
+      '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
+}
+
+/// A single analyzer parse diagnostic, surfaced on `WidgetTreeModel`.
+/// Mirrors the subset of `package:analyzer`'s `AnalysisError` shape that
+/// the kernel cares about — source span, severity-blind message — without
+/// pulling analyzer types into the kernel's public API.
+class ParseDiagnostic {
+  const ParseDiagnostic({required this.span, required this.message});
+
+  final SourceSpan span;
+  final String message;
+
+  @override
+  String toString() =>
+      'ParseDiagnostic($message @${span.offset}+${span.length})';
 }

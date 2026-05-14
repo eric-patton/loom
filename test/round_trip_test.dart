@@ -48,6 +48,17 @@ const _m1Fixtures = <String>[
   'real_world_opaque_mybutton.dart',
   // M5: exercises in-class helper-method following.
   'helper_methods.dart',
+  // M5.3 real-world corpus expansion (flutter/website @ e927ec21).
+  'real_world_layout_base.dart',
+  'real_world_basic_list.dart',
+  'real_world_horizontal_list.dart',
+  'real_world_navigation_basics.dart',
+  'real_world_passing_data.dart',
+  'real_world_snackbars.dart',
+  'real_world_grid_lists.dart',
+  'real_world_orientation.dart',
+  'real_world_text_input.dart',
+  'real_world_long_lists.dart',
 ];
 
 class _CachedFixture {
@@ -69,7 +80,8 @@ void main() {
         // Guard against silently-empty parser: a no-op round-trip is
         // trivially true if the parser returned nothing, so verify the
         // parser actually built a model.
-        expect(model.root.className, isNotEmpty);
+        expect(model.root, isA<WidgetNode>());
+        expect((model.root as WidgetNode).className, isNotEmpty);
       });
     }
   });

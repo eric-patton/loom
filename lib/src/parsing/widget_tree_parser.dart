@@ -2,6 +2,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 
 import '../catalog/widget_catalog.dart';
+import '../model/source_span.dart';
 import '../model/widget_node.dart';
 import 'widget_visitor.dart';
 
@@ -14,6 +15,13 @@ import 'widget_visitor.dart';
 WidgetTreeModel parseWidgetTree(String source) {
   final result = parseString(content: source, throwIfDiagnostics: false);
   final unit = result.unit;
+  final diagnostics = <ParseDiagnostic>[
+    for (final error in result.errors)
+      ParseDiagnostic(
+        span: SourceSpan(offset: error.offset, length: error.length),
+        message: error.message,
+      ),
+  ];
 
   for (final declaration in unit.declarations) {
     if (declaration is! ClassDeclaration) {
@@ -65,7 +73,10 @@ WidgetTreeModel parseWidgetTree(String source) {
       );
     }
     final visitor = WidgetVisitor(source, classMethods: safeMethods);
-    return WidgetTreeModel(root: visitor.convertWidget(root));
+    return WidgetTreeModel(
+      root: visitor.convertModelNode(root),
+      diagnostics: diagnostics,
+    );
   }
 
   throw const ParseException(

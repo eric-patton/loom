@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5.2 — round-2 review hardening
-**Last touched:** 2026-05-14 — closed all five BLOCKER/HIGH findings plus four opportunistic mediums and three cleanup nits from the round-2 multi-agent peer review. Real bugs (applySourceEdits same-offset ambiguity, last-element removal orphan comma, empty multi-line list insert indent/comma, fallback separator indent, model/planner non-list slot disagreement) and the mediums (widget-position-aware reference counter, positional override conflict, type-args on helper calls). Plus drop unused dev deps, inline a stale forwarder, escape 0x7F. **100 tests green** (up from 90), 1 documented skip; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` finishes in ~14s.
+**Active milestone:** M5.3 — close all remaining open items
+**Last touched:** 2026-05-14 — closed every remaining deferred item from M5.1/M5.2. Widened `WidgetTreeModel.root` from `WidgetNode` to `ModelNode` so bare-helper-root `build() => _h()` now resolves (skip removed). Ratified Q4 (parse errors): partial model + diagnostics list surfaced on `WidgetTreeModel.diagnostics`. Rewrote `applySourceEdits` as a single-pass O(N) StringBuffer walk (was O(N·M)). Removed `==` overrides from `OpaqueNode` and `MethodReferenceNode` for uniform identity-only model nodes (StructuralEquivalence is the sole oracle). Added a top-of-spec disclaimer pointing at this DEVLOG for current state. Grew the corpus from 10 to 20 real-world fixtures (10 new files from flutter/website @ `e927ec21`). **114 tests green, 0 skips**; CI-grade run at `LOOM_PROPERTY_ITERATIONS=10000` across 20 fixtures finishes in ~25s (400k total edits).
 **Blockers:** none
-**Next action:** **Eric review gate for M5 + M5.1 + M5.2.** Findings deliberately deferred (documented below): widening `WidgetTreeModel.root` to `ModelNode` (the bare-helper-root case), corpus growth from 10 to 20 fixtures, `MethodReferenceNode.==` policy (cosmetic — StructuralEquivalence is the official oracle), `applySourceEdits` O(N·M) (within per-edit budget for current loads), supporting multi-class build() (intentional scope), and supporting multi-reference helpers (current opaque defense is the soft constraint).
+**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3.** Every Open Question from the spec is now ratified or explicitly settled. There are no remaining deliberately-deferred items. After approval the kernel is feature-complete, hardened across two review rounds, with all spec gates closed.
 
 ---
 
@@ -28,6 +28,12 @@ Decisions that have been made and should not be re-opened without explicit cause
 **Rationale:** Why this over alternatives. Cite the trade-off explicitly.
 **Revisit if:** Conditions under which this should be re-opened.
 ```
+
+### [2026-05-14] Q4 — Parse errors: partial model + diagnostics list
+**Question:** PROJECT_SPEC.md Open Question 4 — how should the parser behave when the source has syntax errors? Throw, drop the whole model, or build a partial model?
+**Decision:** Spec default — partial model + diagnostics list. `parseString` is called with `throwIfDiagnostics: false`, and the analyzer's `errors` list is surfaced on `WidgetTreeModel.diagnostics` as `List<ParseDiagnostic>` (each carries `SourceSpan` + message). The model itself reflects what the analyzer could error-recover; UI consumers can either show a "this file has syntax errors" warning or refuse edits while diagnostics are non-empty.
+**Rationale:** Throwing on errors would break the natural UI flow where a file is briefly unparseable mid-typing. A partial model preserves the editor's ability to show structure for the parts that DID parse, while the diagnostics flag warns the consumer not to apply destructive edits. Cost is essentially zero — the analyzer already returns the diagnostics list; we just propagate it.
+**Revisit if:** A real consumer needs richer diagnostic shape (severity levels, error codes) that the current `ParseDiagnostic` (span + message) doesn't capture, or if error-recovered ASTs prove unsafe to model at all (haven't seen any cases in the corpus).
 
 ### [2026-05-13] Q2 — Trailing-comma detection scope is per-list
 **Question:** PROJECT_SPEC.md Open Question 2 — should trailing-comma detection happen per-list, per-file, or per-line?
@@ -74,7 +80,7 @@ Mirrors the spec's Open Questions section. Update the status field as each resol
 1. **`const` and `new` keyword handling** — **Settled** [2026-05-13]: preserve on the node via `StyleHints`. See Settled Decisions.
 2. **Trailing comma detection scope** — **Settled** [2026-05-13]: per-list (captured per-`WidgetNode` in `StyleHints.hasTrailingComma`). See Settled Decisions.
 3. **AST equivalence definition** — **Settled** [2026-05-13]: structural, trivia-blind, const-aware, implemented at the model level. See Settled Decisions.
-4. **Parse errors in the source** — _Unresolved (spec default: partial model + unparseable flag)_ — deferred to M4
+4. **Parse errors in the source** — **Settled** [2026-05-14]: partial model + diagnostics list on `WidgetTreeModel.diagnostics`. See Settled Decisions.
 5. **Imports and top-level declarations** — **Settled** [2026-05-13]: not modeled; preserved by non-touching. See Settled Decisions.
 
 Each question moves to Settled Decisions once resolved. Replace the entry here with a one-line summary and a link to the decision.
@@ -160,6 +166,16 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_cookbook_tabs.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/tabs/lib/main.dart` | 39 | MaterialApp → DefaultTabController → Scaffold → AppBar.bottom = TabBar(tabs: [Tab×3]) + body = TabBarView(children: [Icon×3]); deep list-of-widgets nesting |
 | `test/fixtures/real_world_opaque_mybutton.dart` | flutter/website @ `e927ec21`, `examples/ui/widgets_intro/lib/main_mybutton.dart` | 33 | M4 opaque coverage: closure (`onTap: () {…}`), unmodeled constructors (`BoxDecoration`, `BorderRadius.circular`), `EdgeInsets.symmetric`, indexer (`Colors.lightGreen[500]`), user-defined widget class (`MyButton`) |
 | `test/fixtures/helper_methods.dart` | hand-crafted | 28 | M5: in-class helpers (`_buildTitle`, `_buildContent`) each called once from `build()`. Edits inside helpers must target the helper's source range, not the call site |
+| `test/fixtures/real_world_layout_base.dart` | flutter/website @ `e927ec21`, `examples/layout/base/lib/main.dart` | 30 | Minimal MaterialApp → Scaffold(appBar, body=Center(child=Text)) with `// #docregion` comments around catalog widgets |
+| `test/fixtures/real_world_basic_list.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/basic_list/lib/main.dart` | 24 | MaterialApp → Scaffold with `body: ListView(children: [ListTile, ...])`. ListView/ListTile not in catalog — exercises an opaque widget contained in a single-shaped slot |
+| `test/fixtures/real_world_horizontal_list.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/horizontal_list/lib/main.dart` | 37 | Container with `margin: EdgeInsets.symmetric(...)` opaque property + height literal int + ScrollConfiguration opaque child; collection-for inside ListView |
+| `test/fixtures/real_world_navigation_basics.dart` | flutter/website @ `e927ec21`, `examples/cookbook/navigation/navigation_basics/lib/main.dart` | 45 | First-of-multiple classes (FirstRoute) with Scaffold → Center → ElevatedButton(child:, onPressed: closure); SecondRoute defined but parser uses first class only |
+| `test/fixtures/real_world_passing_data.dart` | flutter/website @ `e927ec21`, `examples/cookbook/navigation/passing_data/lib/main.dart` | 78 | Three classes (Todo data class, TodosScreen, DetailScreen). Parser picks TodosScreen; Scaffold → ListView.builder (opaque) with closures |
+| `test/fixtures/real_world_snackbars.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/snackbars/lib/main.dart` | 50 | SnackBarDemo first; MaterialApp → Scaffold → opaque SnackBarPage; second class Center(child: ElevatedButton(...)) defined but not modeled |
+| `test/fixtures/real_world_grid_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/grid_lists/lib/main.dart` | 35 | MaterialApp → Scaffold → opaque GridView.count with closure inside `List.generate(...)` |
+| `test/fixtures/real_world_orientation.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/orientation/lib/main.dart` | 47 | First class MyApp uses `const MaterialApp(...)` containing opaque OrientationList; exercises const-MaterialApp + opaque-single-slot |
+| `test/fixtures/real_world_text_input.dart` | flutter/website @ `e927ec21`, `examples/cookbook/forms/text_input/lib/main.dart` | 50 | MaterialApp → Scaffold → opaque MyCustomForm; second class MyCustomForm uses Column with multiple Paddings around opaque TextField/TextFormField |
+| `test/fixtures/real_world_long_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/long_lists/lib/main.dart` | 32 | MyApp with non-const constructor and `final List<String> items` field; MaterialApp → Scaffold → opaque ListView.builder with closures |
 
 ---
 
@@ -176,6 +192,54 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M5.3 — close all deferred items: root widen, Q4, applySourceEdits perf, corpus 10→20
+**Worked on:** Closed every item that was deliberately deferred from M5.1 / M5.2.
+
+**Root widened from `WidgetNode` to `ModelNode`** (Gotcha resolved):
+  - `WidgetTreeModel.root: ModelNode` — bare-helper-root `build() => _h()` now resolves at the root level (returns `MethodReferenceNode(_h)` or `OpaqueNode` per the multi-reference defense), no more `ParseException` for that pattern. Skipped test un-skipped.
+  - `WidgetVisitor.convertWidget` deleted; `parseWidgetTree` calls `convertModelNode` directly. `ParseException` now only fires when there's no `build()` method or its body has no return expression.
+  - `NodeNavigation` extension methods (`withProperty`, `insertChild`, `removeChild`, `moveChild`) dispatch through the existing `_withPropertyOnModelNode` / `_modifySlotOnModelNode` helpers so any of the three root types works. The single-shaped-slot guard in `_requireListSlotParent` still uses `nodeAt(parentPath) is WidgetNode` — non-WidgetNode parents (e.g. opaque or method-ref) can't be structurally edited anyway, matching planner behavior.
+  - CLI's `_printTree` switches on the root subtype to render an appropriate header line, and emits any captured `diagnostics` before the tree.
+  - Test sites that assume a `WidgetNode` root use `model.root as WidgetNode` casts; the existing fixture corpus all have widget roots so no test behavior changed.
+
+**Q4 ratified** (Settled Decision [2026-05-14]):
+  - `WidgetTreeModel.diagnostics: List<ParseDiagnostic>` — spans + messages translated from the analyzer's `result.errors`. Empty for clean source; populated when the analyzer error-recovers.
+  - New `ParseDiagnostic { span, message }` value type (avoids leaking `package:analyzer` types through the public API).
+  - Two new tests: clean source → empty diagnostics; source with a missing close paren → non-empty diagnostics, all carrying valid spans + messages.
+
+**`applySourceEdits` rewritten as O(N) single-pass StringBuffer walk:**
+  - Previously each `replaceRange` re-allocated the source — `O(N * source.length)` for N edits.
+  - Now: walk the already-sorted ascending list with a cursor, emit pre-edit bytes via `buf.write(source.substring(...))`, emit replacement, advance cursor past edit. O(source.length + sum-of-replacements). Behavior identical (validated by the full 200k-edit property test still being green).
+  - Future-proofs the kernel for batched-output UI consumers issuing 1000+ edits per call.
+
+**`==` policy unified across `ModelNode` subtypes:**
+  - Removed `==` / `hashCode` overrides from `OpaqueNode` and `MethodReferenceNode`. All `ModelNode`s default to identity comparison.
+  - `StructuralEquivalence.equal` is now unambiguously the only oracle. Previously `MethodReferenceNode == MethodReferenceNode` recursively called `==` on `body`, which gave identity-fallback for `WidgetNode` bodies and structural-comparison for `OpaqueNode` bodies — inconsistent based on what the helper happened to return.
+
+**PROJECT_SPEC.md disclaimer** added at the top of the spec doc, pointing readers at DEVLOG.md for current state. Lists the specific deltas (package rename, file consolidations, `WidgetTreeModel.root` widening, diagnostics surface, catalog of 17 widgets).
+
+**Corpus 10 → 20 fixtures:** sourced 10 more files from flutter/website at the same pinned commit (`e927ec21e7ed6c185ade4c0e7341c4bcaff20434`):
+  - `real_world_layout_base.dart` — minimal MaterialApp+Scaffold+Center+Text
+  - `real_world_basic_list.dart` — ListView opaque inside Scaffold.body
+  - `real_world_horizontal_list.dart` — Container with `EdgeInsets.symmetric` opaque property
+  - `real_world_navigation_basics.dart` — first-of-multiple classes with onPressed closure
+  - `real_world_passing_data.dart` — three classes (Todo data class + TodosScreen first), opaque ListView.builder
+  - `real_world_snackbars.dart` — MaterialApp+Scaffold with opaque SnackBarPage and closure-heavy second class
+  - `real_world_grid_lists.dart` — opaque GridView.count + closure inside `List.generate`
+  - `real_world_orientation.dart` — `const MaterialApp(...)` with opaque OrientationList
+  - `real_world_text_input.dart` — Column with multiple Padding wrappers around opaque TextField/TextFormField
+  - `real_world_long_lists.dart` — non-const MyApp constructor with `final List<String> items` field, opaque ListView.builder
+  - Fixture corpus table in DEVLOG.md updated with attribution and what each exercises.
+
+**Learned:**
+  - **The fixture corpus exposed that the existing M5.2 fix for `Container(width: 160, color: color)` produces a non-list child slot.** Actually no — the `_for-in` collection element inside the ListView's `children:` is an `Expression` from `for (final color in Colors.primaries) Container(...)` — analyzer's AST has it as `ForElement`. The visitor's `_collectChildSlot` checks `if (element is Expression)` and skips ForElement (it's a `CollectionElement` subtype, not an `Expression`), so the whole element opaques. Worked as designed. (No code change needed — leaving this note for future me.)
+  - **Real flutter/website source has `// #docregion` comments scattered between widget elements.** These DO live in list-element separators. The existing comment-preservation fix in `_trimEndBeforeComment` / `_trimStartAfterComment` handles them naturally because they look like ordinary line comments. Stress-tested at 10k iterations per fixture across all 20 — green.
+  - **Root widening had subtler downstream impact than expected.** The model's `withProperty` / `insertChild` / `removeChild` / `moveChild` ALL had to dispatch through their `ModelNode`-aware variants rather than the `WidgetNode`-only ones. Once redirected, the existing `_requireListSlotParent` guard transparently handled non-WidgetNode roots (they fail the `is! WidgetNode` check on `nodeAt(parentPath)` with a clear error).
+
+**Headline numbers:** 114 tests passing, **0 skips**. CI-grade run at 10k iterations per fixture across 20 fixtures ≈ 25 seconds (~200k property edits + ~200k structural edits). The doubled corpus paired with the unchanged per-fixture iteration count means the round-trip property test now exercises 400k edits per CI invocation.
+
+**Next:** Eric reviews and ratifies M5 + M5.1 + M5.2 + M5.3. Every spec Open Question is now closed. No remaining deferred items. Kernel is ready to ship to a UI layer.
 
 ### [2026-05-14] M5.2 — round-2 hardening: close BLOCKER/HIGH findings and opportunistic mediums
 **Worked on:** Round-2 multi-agent peer review surfaced 5 real bugs (1 BLOCKER + 4 latent-but-real) plus ~10 mediums and a clutch of polish nits. This pass closes all five bugs, four of the mediums, and the cheap polish items; the rest were either deliberately deferred (out of scope) or judged cosmetic and not worth churning.

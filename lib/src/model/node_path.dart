@@ -39,7 +39,10 @@ extension NodeNavigation on WidgetTreeModel {
     String propName,
     PropertyValue value,
   ) =>
-      WidgetTreeModel(root: _withProperty(root, path, propName, value));
+      WidgetTreeModel(
+        root: _withPropertyOnModelNode(root, path, propName, value),
+        diagnostics: diagnostics,
+      );
 
   /// Returns a new model with `newChild` inserted at `parentPath / slot`
   /// at the given `index`. Throws `ArgumentError` if the slot is not
@@ -52,7 +55,7 @@ extension NodeNavigation on WidgetTreeModel {
   ) {
     _requireListSlotParent(parentPath, slot);
     return WidgetTreeModel(
-      root: _modifySlot(root, parentPath, slot, (current) {
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
         if (index < 0 || index > current.length) {
           throw ArgumentError(
             'Insert index $index out of range [0, ${current.length}]',
@@ -64,6 +67,7 @@ extension NodeNavigation on WidgetTreeModel {
           ...current.sublist(index),
         ];
       }),
+      diagnostics: diagnostics,
     );
   }
 
@@ -72,7 +76,7 @@ extension NodeNavigation on WidgetTreeModel {
   WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) {
     _requireListSlotParent(parentPath, slot);
     return WidgetTreeModel(
-      root: _modifySlot(root, parentPath, slot, (current) {
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
         if (index < 0 || index >= current.length) {
           throw ArgumentError(
             'Remove index $index out of range [0, ${current.length})',
@@ -83,6 +87,7 @@ extension NodeNavigation on WidgetTreeModel {
           ...current.sublist(index + 1),
         ];
       }),
+      diagnostics: diagnostics,
     );
   }
 
@@ -97,7 +102,7 @@ extension NodeNavigation on WidgetTreeModel {
   ) {
     _requireListSlotParent(parentPath, slot);
     return WidgetTreeModel(
-      root: _modifySlot(root, parentPath, slot, (current) {
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
         if (from < 0 || from >= current.length) {
           throw ArgumentError(
             'Move source $from out of range [0, ${current.length})',
@@ -116,6 +121,7 @@ extension NodeNavigation on WidgetTreeModel {
         mutable.insert(to, moved);
         return mutable;
       }),
+      diagnostics: diagnostics,
     );
   }
 

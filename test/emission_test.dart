@@ -174,7 +174,7 @@ class App extends StatelessWidget {
 }
 ''';
         final model = parseWidgetTree(source);
-        final text = model.root;
+        final text = model.root as WidgetNode;
         // First positional is catalog-modeled as `data`; second is opaque.
         expect(text.properties['data'], isA<StringLiteralValue>());
         expect(
@@ -297,7 +297,7 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final children = model.root.childSlots['children']!;
+      final children = (model.root as WidgetNode).childSlots['children']!;
       final aText = children[0] as WidgetNode;
       final cText = children[2] as WidgetNode;
 
@@ -317,7 +317,7 @@ class App extends StatelessWidget {
       expect(batched.contains("'b'"), isTrue);
       // Reparses cleanly with both new values.
       final reparsed = parseWidgetTree(batched);
-      final newChildren = reparsed.root.childSlots['children']!;
+      final newChildren = (reparsed.root as WidgetNode).childSlots['children']!;
       final newA = newChildren[0] as WidgetNode;
       final newC = newChildren[2] as WidgetNode;
       expect((newA.properties['data']! as StringLiteralValue).value, 'A!');
@@ -348,7 +348,7 @@ class App extends StatelessWidget {
 ''';
         final model = parseWidgetTree(source);
         final edit = EditPlanner.removeChildEdit(
-          parent: model.root,
+          parent: model.root as WidgetNode,
           slotName: 'children',
           index: 1,
           source: source,
@@ -362,7 +362,8 @@ class App extends StatelessWidget {
         expect(newSource.contains("Text('b')"), isFalse);
         // Reparse: exactly one child, not two.
         final reparsed = parseWidgetTree(newSource);
-        expect(reparsed.root.childSlots['children'], hasLength(1));
+        expect(
+            (reparsed.root as WidgetNode).childSlots['children'], hasLength(1));
       },
     );
 
@@ -393,7 +394,7 @@ class App extends StatelessWidget {
           styleHints: const StyleHints(),
         );
         final edit = EditPlanner.insertChildEdit(
-          parent: model.root,
+          parent: model.root as WidgetNode,
           slotName: 'children',
           index: 0,
           newChild: newChild,
@@ -410,7 +411,8 @@ class App extends StatelessWidget {
         expect(newSource.contains("\n        Text('X')"), isTrue);
         // Reparses to a list of exactly one child.
         final reparsed = parseWidgetTree(newSource);
-        expect(reparsed.root.childSlots['children'], hasLength(1));
+        expect(
+            (reparsed.root as WidgetNode).childSlots['children'], hasLength(1));
       },
     );
 
@@ -438,7 +440,8 @@ class App extends StatelessWidget {
 }
 ''';
         final model = parseWidgetTree(source);
-        final column = model.root.childSlots['child']!.first as WidgetNode;
+        final column =
+            (model.root as WidgetNode).childSlots['child']!.first as WidgetNode;
         final newChild = WidgetNode(
           className: 'Text',
           properties: {
@@ -637,7 +640,8 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final oldValue = model.root.properties['data']! as StringLiteralValue;
+      final oldValue =
+          (model.root as WidgetNode).properties['data']! as StringLiteralValue;
       const newValue = StringLiteralValue(value: 'world', span: _span);
 
       final edit = EditPlanner.propertyEdit(
@@ -647,8 +651,8 @@ class App extends StatelessWidget {
       final newSource = applySourceEdits(source, [edit]);
 
       final reparsed = parseWidgetTree(newSource);
-      final reparsedData =
-          reparsed.root.properties['data']! as StringLiteralValue;
+      final reparsedData = (reparsed.root as WidgetNode).properties['data']!
+          as StringLiteralValue;
       expect(reparsedData.value, equals('world'));
 
       // Minimal-diff invariant: substituting 'world' back to 'hello'
@@ -682,7 +686,7 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final column = model.root;
+      final column = model.root as WidgetNode;
       final edit = EditPlanner.insertChildEdit(
         parent: column,
         slotName: 'children',
@@ -694,10 +698,12 @@ class App extends StatelessWidget {
       expect(newSource.contains("Text('c')"), isTrue);
       // Reparses cleanly and has 3 children.
       final reparsed = parseWidgetTree(newSource);
-      expect(reparsed.root.childSlots['children'], hasLength(3));
+      expect(
+          (reparsed.root as WidgetNode).childSlots['children'], hasLength(3));
       // Reparsed last child has data 'c'.
-      final lastChild =
-          reparsed.root.childSlots['children']!.last as WidgetNode;
+      final lastChild = (reparsed.root as WidgetNode)
+          .childSlots['children']!
+          .last as WidgetNode;
       final lastData = lastChild.properties['data']! as StringLiteralValue;
       expect(lastData.value, equals('c'));
     });
@@ -717,7 +723,7 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final column = model.root;
+      final column = model.root as WidgetNode;
       final edit = EditPlanner.removeChildEdit(
         parent: column,
         slotName: 'children',
@@ -727,7 +733,8 @@ class App extends StatelessWidget {
       final newSource = applySourceEdits(source, [edit]);
       expect(newSource.contains("Text('b')"), isFalse);
       final reparsed = parseWidgetTree(newSource);
-      expect(reparsed.root.childSlots['children'], hasLength(2));
+      expect(
+          (reparsed.root as WidgetNode).childSlots['children'], hasLength(2));
     });
 
     test('removeChild on only element contracts list to empty', () {
@@ -744,14 +751,14 @@ class App extends StatelessWidget {
 ''';
       final model = parseWidgetTree(source);
       final edit = EditPlanner.removeChildEdit(
-        parent: model.root,
+        parent: model.root as WidgetNode,
         slotName: 'children',
         index: 0,
         source: source,
       );
       final newSource = applySourceEdits(source, [edit]);
       final reparsed = parseWidgetTree(newSource);
-      expect(reparsed.root.childSlots['children'], isEmpty);
+      expect((reparsed.root as WidgetNode).childSlots['children'], isEmpty);
     });
 
     test(
@@ -773,7 +780,7 @@ class App extends StatelessWidget {
 ''';
         final model = parseWidgetTree(source);
         expect(
-          model.root.childSlots['children']!.first,
+          (model.root as WidgetNode).childSlots['children']!.first,
           isA<OpaqueNode>(),
           reason: 'precondition: the entry must be opaque',
         );
@@ -813,7 +820,7 @@ class App extends StatelessWidget {
 ''';
       final model = parseWidgetTree(source);
       final edit = EditPlanner.removeChildEdit(
-        parent: model.root,
+        parent: model.root as WidgetNode,
         slotName: 'children',
         index: 0,
         source: source,
@@ -845,7 +852,7 @@ class App extends StatelessWidget {
 ''';
         final model = parseWidgetTree(source);
         final edit = EditPlanner.removeChildEdit(
-          parent: model.root,
+          parent: model.root as WidgetNode,
           slotName: 'children',
           index: 1,
           source: source,
@@ -886,7 +893,7 @@ class App extends StatelessWidget {
           styleHints: const StyleHints(),
         );
         final edit = EditPlanner.insertChildEdit(
-          parent: model.root,
+          parent: model.root as WidgetNode,
           slotName: 'children',
           index: 1,
           newChild: newChild,
@@ -922,7 +929,7 @@ class App extends StatelessWidget {
 ''';
       final model = parseWidgetTree(source);
       final edits = EditPlanner.moveChildEdits(
-        parent: model.root,
+        parent: model.root as WidgetNode,
         slotName: 'children',
         from: 0,
         to: 2,
@@ -930,7 +937,9 @@ class App extends StatelessWidget {
       );
       final newSource = applySourceEdits(source, edits);
       final reparsed = parseWidgetTree(newSource);
-      final kids = reparsed.root.childSlots['children']!.cast<WidgetNode>();
+      final kids = (reparsed.root as WidgetNode)
+          .childSlots['children']!
+          .cast<WidgetNode>();
       expect(
         kids.map((c) => (c.properties['data']! as StringLiteralValue).value),
         equals(['beta', 'gamma', 'alpha']),

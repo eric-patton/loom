@@ -102,16 +102,23 @@ String applySourceEdits(String source, List<SourceEdit> edits) {
     }
   }
 
-  // Apply in descending-offset order so each prior edit's offset stays valid.
-  final descending = <SourceEdit>[...edits]
-    ..sort((a, b) => b.offset.compareTo(a.offset));
-  var result = source;
-  for (final edit in descending) {
-    result = result.replaceRange(
-      edit.offset,
-      edit.offset + edit.length,
-      edit.replacement,
-    );
+  // Single-pass application: walk the source once with a cursor, emit
+  // pre-edit bytes, then the replacement, then advance past the edit.
+  // O(source.length + sum(replacement.length)) instead of the previous
+  // O(edits.count * source.length) that each `replaceRange` cost. The
+  // ascending list is already validated to be non-overlapping and
+  // strict-monotonic in offset, so this is straightforward.
+  final buf = StringBuffer();
+  var cursor = 0;
+  for (final edit in ascending) {
+    if (edit.offset > cursor) {
+      buf.write(source.substring(cursor, edit.offset));
+    }
+    buf.write(edit.replacement);
+    cursor = edit.offset + edit.length;
   }
-  return result;
+  if (cursor < source.length) {
+    buf.write(source.substring(cursor));
+  }
+  return buf.toString();
 }

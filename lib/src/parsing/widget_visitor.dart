@@ -130,22 +130,6 @@ class WidgetVisitor {
     );
   }
 
-  /// Converts an expression to a `WidgetNode`, throwing `ParseException`
-  /// if the expression cannot be modeled as a widget at all. Used by the
-  /// parser for the root of the build method's return expression — the
-  /// root can't be opaque if the kernel is to do anything useful with the
-  /// model.
-  WidgetNode convertWidget(Expression expr) {
-    final node = convertModelNode(expr);
-    if (node is WidgetNode) {
-      return node;
-    }
-    throw ParseException(
-      'Root expression is opaque; the model has no editable widget tree.',
-      node.sourceSpan,
-    );
-  }
-
   WidgetNode _buildWidgetNode(_CallInfo call, WidgetSpec spec) {
     final properties = <String, PropertyValue>{};
     final childSlots = <String, List<ModelNode>>{};

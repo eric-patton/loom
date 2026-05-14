@@ -55,7 +55,20 @@ int _runParse(List<String> args) {
 }
 
 void _printTree(WidgetTreeModel model, IOSink sink) {
-  sink.writeln('WidgetTreeModel(rootClass=${model.root.className})');
+  final rootDesc = switch (model.root) {
+    final WidgetNode w => 'rootClass=${w.className}',
+    final OpaqueNode _ => 'rootType=OpaqueNode',
+    final MethodReferenceNode m =>
+      'rootType=MethodReferenceNode(${m.methodName})',
+  };
+  final diagSuffix = model.diagnostics.isEmpty
+      ? ''
+      : ', ${model.diagnostics.length} diagnostic(s)';
+  sink.writeln('WidgetTreeModel($rootDesc$diagSuffix)');
+  for (final diag in model.diagnostics) {
+    sink.writeln(
+        '  ! ${diag.message} @${diag.span.offset}+${diag.span.length}');
+  }
   _printNode(model.root, sink, '  ');
 }
 

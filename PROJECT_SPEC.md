@@ -4,6 +4,15 @@ A pure Dart library and CLI that round-trips Flutter widget source code through 
 
 This document is the working spec. It defines what to build, what not to build, what "done" means at each milestone, and the invariants that govern the whole effort.
 
+> **Implementation status (read this first)**: this spec was written **before** the kernel was built. The implementation tracked it closely but diverged in some places. **`DEVLOG.md` is the canonical record of what actually shipped and why** — start there for current state, settled open questions, and milestone gates. Specific deltas you should know:
+>
+> - Package + CLI named `loom`, not `twoway_kernel` / `twoway` (Settled Decision [2026-05-13]).
+> - File consolidations: `opaque_node.dart` lives inside `widget_node.dart` (sealed-subtype requirement); `ast_equivalence.dart` → `model_equivalence.dart` (Q3 settled at the model level); `formatter.dart` deleted; `dart_style` and `glados`/`checks` dev deps dropped — none earned their keep.
+> - `WidgetTreeModel.root` widened from `WidgetNode` to `ModelNode` (M5.3), so `build() => _helper()` and bare-helper roots resolve. `WidgetTreeModel.diagnostics` carries analyzer parse errors (Q4 settled).
+> - Catalog covers 17 widgets (Column, Row, Padding, Center, SizedBox, Container, Expanded, GestureDetector, InkWell, Material, SafeArea, MaterialApp, Scaffold, AppBar, DefaultTabController, TabBar, TabBarView, Tab, Text, Icon, IconButton, FloatingActionButton). Anything else opaques.
+>
+> When this spec and `DEVLOG.md` disagree, `DEVLOG.md` is authoritative.
+
 ---
 
 ## North Star

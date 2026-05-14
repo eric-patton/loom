@@ -6,10 +6,12 @@ import 'package:test/test.dart';
 void main() {
   late String source;
   late WidgetTreeModel model;
+  late WidgetNode root;
 
   setUpAll(() {
     source = File('test/fixtures/simple_widget.dart').readAsStringSync();
     model = parseWidgetTree(source);
+    root = model.root as WidgetNode;
   });
 
   group('parseWidgetTree on simple_widget.dart', () {
@@ -19,15 +21,15 @@ void main() {
             .toList();
 
     test('root is Column', () {
-      expect(model.root.className, equals('Column'));
+      expect(root.className, equals('Column'));
     });
 
     test('Column has four children', () {
-      expect(children(model.root), hasLength(4));
+      expect(children(root), hasLength(4));
     });
 
     test('first child is const Text with the greeting', () {
-      final first = children(model.root)[0];
+      final first = children(root)[0];
       expect(first.className, equals('Text'));
       expect(first.styleHints.hasConst, isTrue);
 
@@ -39,7 +41,7 @@ void main() {
     });
 
     test('second child is const Padding with EdgeInsets.all(8.0)', () {
-      final padding = children(model.root)[1];
+      final padding = children(root)[1];
       expect(padding.className, equals('Padding'));
       expect(padding.styleHints.hasConst, isTrue);
       expect(padding.styleHints.hasTrailingComma, isTrue);
@@ -60,7 +62,7 @@ void main() {
     });
 
     test('third child uses an integer literal in EdgeInsets.all', () {
-      final padding = children(model.root)[2];
+      final padding = children(root)[2];
       expect(padding.className, equals('Padding'));
 
       final pad = padding.properties['padding'];
@@ -72,7 +74,7 @@ void main() {
     });
 
     test('last child Text has no const keyword', () {
-      final last = children(model.root).last;
+      final last = children(root).last;
       expect(last.className, equals('Text'));
       expect(last.styleHints.hasConst, isFalse);
 
@@ -84,15 +86,15 @@ void main() {
     });
 
     test('inner Text inside const Padding has no explicit const', () {
-      final padding = children(model.root)[1];
+      final padding = children(root)[1];
       final innerText = padding.childSlots['child']!.first as WidgetNode;
       expect(innerText.className, equals('Text'));
       expect(innerText.styleHints.hasConst, isFalse);
     });
 
     test('Column has a trailing comma; single-arg Text does not', () {
-      expect(model.root.styleHints.hasTrailingComma, isTrue);
-      expect(children(model.root)[0].styleHints.hasTrailingComma, isFalse);
+      expect(root.styleHints.hasTrailingComma, isTrue);
+      expect(children(root)[0].styleHints.hasTrailingComma, isFalse);
     });
 
     test('every node has a valid SourceSpan', () {
@@ -108,7 +110,7 @@ void main() {
         }
       }
 
-      collect(model.root);
+      collect(root);
       expect(allNodes, isNotEmpty);
 
       for (final node in allNodes) {
@@ -141,7 +143,7 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final data = model.root.properties['data'];
+      final data = (model.root as WidgetNode).properties['data'];
       expect(data, isA<StringLiteralValue>());
       expect((data as StringLiteralValue).value, equals('hi'));
       expect(data.usesDoubleQuotes, isTrue);
@@ -156,7 +158,7 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final data = model.root.properties['data'];
+      final data = (model.root as WidgetNode).properties['data'];
       expect(data, isA<OpaquePropertyValue>());
       expect((data as OpaquePropertyValue).sourceText, equals(r"r'C:\path'"));
     });
@@ -170,9 +172,48 @@ class App extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final data = model.root.properties['data'];
+      final data = (model.root as WidgetNode).properties['data'];
       expect(data, isA<OpaquePropertyValue>());
     });
+  });
+
+  group('Q4 parse diagnostics', () {
+    test('clean source has an empty diagnostics list', () {
+      const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return const Text('hi');
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      expect(model.diagnostics, isEmpty);
+    });
+
+    test(
+      'source with syntax errors surfaces diagnostics but the model still '
+      'represents what could be error-recovered',
+      () {
+        // Missing close paren on `Text('hi'` — analyzer error-recovers.
+        const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return const Text('hi'
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        // Diagnostics list is non-empty — UI consumers can choose to
+        // show a warning or refuse edits while errors are present.
+        expect(model.diagnostics, isNotEmpty);
+        // Each diagnostic carries a SourceSpan pointing into the
+        // problem location.
+        for (final diag in model.diagnostics) {
+          expect(diag.span.offset, greaterThanOrEqualTo(0));
+          expect(diag.message, isNotEmpty);
+        }
+      },
+    );
   });
 
   group('M5 helper-method following', () {
@@ -183,7 +224,7 @@ class App extends StatelessWidget {
       final model = parseWidgetTree(source);
 
       // Root: Column with children [MethodRef(_buildTitle), MethodRef(_buildContent)]
-      final rootChildren = model.root.childSlots['children']!;
+      final rootChildren = (model.root as WidgetNode).childSlots['children']!;
       expect(rootChildren, hasLength(2));
 
       final first = rootChildren[0];
@@ -203,8 +244,16 @@ class App extends StatelessWidget {
     });
 
     test(
-      'cyclic helper (helper calls itself) terminates with inner OpaqueNode',
+      'bare-helper-root build() => _self() now lands as an OpaqueNode '
+      'root (multi-reference defense catches self-recursion)',
       () {
+        // Pre-M5.2: `WidgetTreeModel.root: WidgetNode` rejected this
+        // shape and `parseWidgetTree` threw.
+        // M5.3: root is widened to `ModelNode`. The multi-reference
+        // defense at parse time still drops `_self` from the helper
+        // map (self-call inside the helper body counts as a second
+        // reference), so the build-root `_self()` falls through to
+        // OpaqueNode.
         const source = '''
 import 'package:flutter/material.dart';
 
@@ -222,23 +271,47 @@ class Cycle extends StatelessWidget {
 }
 ''';
         final model = parseWidgetTree(source);
-
-        // Root is the outer MethodReferenceNode for _self().
-        final root = model.root;
-        // model.root is WidgetTreeModel.root (WidgetNode), but in this
-        // fixture build() directly returns _self() — which resolves to a
-        // MethodReferenceNode, NOT a WidgetNode. Our parser requires the
-        // root to be WidgetNode (convertWidget throws if root is
-        // anything else). So we don't expect a passing model build for
-        // a build() that ONLY returns a helper call.
-        //
-        // Instead, parseWidgetTree throws. The cycle-detection check is
-        // observable when the helper is INSIDE another modelable widget.
-        // Verified by the next assertion.
-        expect(root.className, isNotEmpty);
+        expect(
+          model.root,
+          isA<OpaqueNode>(),
+          reason: '_self is multi-referenced (build calls it AND its own '
+              'body calls it), so both references fall through to opaque',
+        );
+        expect((model.root as OpaqueNode).sourceText, equals('_self()'));
       },
-      skip: 'requires a build() that wraps _self() inside a modelable widget; '
-          'see the wrapped variant below',
+    );
+
+    test(
+      'bare-helper-root build() => _h() resolves to a MethodReferenceNode '
+      'root when _h has a single reference',
+      () {
+        const source = '''
+import 'package:flutter/material.dart';
+
+class App extends StatelessWidget {
+  const App({super.key});
+
+  Widget _h() {
+    return const Text('root');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _h();
+  }
+}
+''';
+        final model = parseWidgetTree(source);
+        expect(
+          model.root,
+          isA<MethodReferenceNode>(),
+          reason: 'bare-helper-root must resolve at the root, not throw',
+        );
+        final m = model.root as MethodReferenceNode;
+        expect(m.methodName, equals('_h'));
+        expect(m.body, isA<WidgetNode>());
+        expect((m.body as WidgetNode).className, equals('Text'));
+      },
     );
 
     test(
@@ -274,7 +347,7 @@ class Cycle extends StatelessWidget {
 }
 ''';
         final model = parseWidgetTree(source);
-        final rootChildren = model.root.childSlots['children']!;
+        final rootChildren = (model.root as WidgetNode).childSlots['children']!;
         expect(rootChildren, hasLength(1));
         expect(
           rootChildren[0],
@@ -316,7 +389,7 @@ class IndirectCycle extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final rootChildren = model.root.childSlots['children']!;
+      final rootChildren = (model.root as WidgetNode).childSlots['children']!;
       expect(rootChildren, hasLength(1));
       expect(
         rootChildren[0],
@@ -351,7 +424,7 @@ class MultiRef extends StatelessWidget {
 }
 ''';
       final model = parseWidgetTree(source);
-      final rootChildren = model.root.childSlots['children']!;
+      final rootChildren = (model.root as WidgetNode).childSlots['children']!;
       expect(rootChildren, hasLength(2));
       expect(rootChildren[0], isA<OpaqueNode>());
       expect(rootChildren[1], isA<OpaqueNode>());
@@ -393,7 +466,7 @@ class App extends StatelessWidget {
 ''';
         final model = parseWidgetTree(source);
         // _h() inside Container.child is widget-position → MethodRef.
-        final inner = model.root.childSlots['child']!.first;
+        final inner = (model.root as WidgetNode).childSlots['child']!.first;
         expect(
           inner,
           isA<MethodReferenceNode>(),
@@ -432,7 +505,7 @@ class App extends StatelessWidget {
 }
 ''';
         final model = parseWidgetTree(source);
-        final children = model.root.childSlots['children']!;
+        final children = (model.root as WidgetNode).childSlots['children']!;
         expect(children, hasLength(1));
         expect(
           children[0],
@@ -454,8 +527,8 @@ class App extends StatelessWidget {
       final model = parseWidgetTree(source);
 
       // Navigate to _buildTitle().body.Padding.child.Text and edit data.
-      final titleRef =
-          model.root.childSlots['children']![0] as MethodReferenceNode;
+      final titleRef = (model.root as WidgetNode).childSlots['children']![0]
+          as MethodReferenceNode;
       final padding = titleRef.body as WidgetNode;
       final innerText = padding.childSlots['child']!.first as WidgetNode;
       final oldData = innerText.properties['data']! as StringLiteralValue;
