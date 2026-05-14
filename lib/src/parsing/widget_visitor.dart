@@ -258,7 +258,17 @@ class WidgetVisitor {
   /// `OpaquePropertyValue` (M4). Total: never throws.
   PropertyValue _convertProperty(Expression expr) {
     if (expr is SimpleStringLiteral) {
-      return StringLiteralValue(value: expr.value, span: _span(expr));
+      // Raw (`r'...'`) and triple-quoted (`'''...'''`) strings have
+      // surface forms the kernel doesn't model; route them to opaque so
+      // their bytes survive verbatim.
+      if (expr.isRaw || expr.isMultiline) {
+        return _opaqueProperty(expr);
+      }
+      return StringLiteralValue(
+        value: expr.value,
+        usesDoubleQuotes: !expr.isSingleQuoted,
+        span: _span(expr),
+      );
     }
     if (expr is IntegerLiteral) {
       final value = expr.value;

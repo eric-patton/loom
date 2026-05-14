@@ -17,19 +17,36 @@ sealed class PropertyValue {
 }
 
 class StringLiteralValue extends PropertyValue {
-  const StringLiteralValue({required this.value, required super.span});
+  const StringLiteralValue({
+    required this.value,
+    required super.span,
+    this.usesDoubleQuotes = false,
+  });
 
+  /// Decoded string content (escape sequences resolved).
   final String value;
+
+  /// `true` if the source used `"..."`, `false` for `'...'`. Preserved
+  /// for byte-faithful emission. Raw strings (`r'...'`) and triple-quoted
+  /// strings are not represented by this class — they round-trip as
+  /// `OpaquePropertyValue`.
+  final bool usesDoubleQuotes;
 
   @override
   bool operator ==(Object other) =>
-      other is StringLiteralValue && other.value == value && other.span == span;
+      other is StringLiteralValue &&
+      other.value == value &&
+      other.usesDoubleQuotes == usesDoubleQuotes &&
+      other.span == span;
 
   @override
-  int get hashCode => Object.hash(value, span);
+  int get hashCode => Object.hash(value, usesDoubleQuotes, span);
 
   @override
-  String toString() => "StringLiteralValue('$value')";
+  String toString() {
+    final q = usesDoubleQuotes ? '"' : "'";
+    return 'StringLiteralValue($q$value$q)';
+  }
 }
 
 class NumLiteralValue extends PropertyValue {

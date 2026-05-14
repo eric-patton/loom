@@ -131,6 +131,50 @@ void main() {
     });
   });
 
+  group('string fidelity', () {
+    test('double-quoted string keeps usesDoubleQuotes=true', () {
+      const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return const Text("hi");
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final data = model.root.properties['data'];
+      expect(data, isA<StringLiteralValue>());
+      expect((data as StringLiteralValue).value, equals('hi'));
+      expect(data.usesDoubleQuotes, isTrue);
+    });
+
+    test('raw string lands in OpaquePropertyValue', () {
+      const source = r'''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Text(r'C:\path');
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final data = model.root.properties['data'];
+      expect(data, isA<OpaquePropertyValue>());
+      expect((data as OpaquePropertyValue).sourceText, equals(r"r'C:\path'"));
+    });
+
+    test('triple-quoted string lands in OpaquePropertyValue', () {
+      const source = '''
+class App extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Text(\'\'\'hi\'\'\');
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final data = model.root.properties['data'];
+      expect(data, isA<OpaquePropertyValue>());
+    });
+  });
+
   group('M5 helper-method following', () {
     test('helpers resolve to MethodReferenceNode with body widget tree', () {
       final source = File(

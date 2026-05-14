@@ -34,7 +34,7 @@ class StructuralEquivalence {
   static bool propertiesEqual(PropertyValue a, PropertyValue b) =>
       switch ((a, b)) {
         (final StringLiteralValue a, final StringLiteralValue b) =>
-          a.value == b.value,
+          a.value == b.value && a.usesDoubleQuotes == b.usesDoubleQuotes,
         (final NumLiteralValue a, final NumLiteralValue b) =>
           a.value == b.value && a.isDouble == b.isDouble,
         (final BoolLiteralValue a, final BoolLiteralValue b) =>

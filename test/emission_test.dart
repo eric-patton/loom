@@ -20,6 +20,52 @@ void main() {
       expect(PropertySerializer.serialize(v), equals(r"'a\\b'"));
     });
 
+    test('string literal - escapes dollar sign', () {
+      const v = StringLiteralValue(value: r'price: $5', span: _span);
+      expect(PropertySerializer.serialize(v), equals(r"'price: \$5'"));
+    });
+
+    test('string literal - escapes newline', () {
+      const v = StringLiteralValue(value: 'line1\nline2', span: _span);
+      expect(PropertySerializer.serialize(v), equals(r"'line1\nline2'"));
+    });
+
+    test('string literal - escapes tab, carriage return, backspace', () {
+      const v = StringLiteralValue(value: '\t\r\b', span: _span);
+      expect(PropertySerializer.serialize(v), equals(r"'\t\r\b'"));
+    });
+
+    test('string literal - escapes low control chars as \\xHH', () {
+      final v = StringLiteralValue(
+        value: String.fromCharCodes(const [0x01, 0x1F]),
+        span: _span,
+      );
+      expect(PropertySerializer.serialize(v), equals(r"'\x01\x1f'"));
+    });
+
+    test('string literal - double-quoted preserves style and inverts escaping',
+        () {
+      const v = StringLiteralValue(
+        value: "she said 'hi'",
+        span: _span,
+        usesDoubleQuotes: true,
+      );
+      expect(
+        PropertySerializer.serialize(v),
+        equals('"she said \'hi\'"'),
+        reason: 'single quotes inside double-quoted string are NOT escaped',
+      );
+    });
+
+    test('string literal - double-quoted escapes inner double quotes', () {
+      const v = StringLiteralValue(
+        value: 'she said "hi"',
+        span: _span,
+        usesDoubleQuotes: true,
+      );
+      expect(PropertySerializer.serialize(v), equals(r'"she said \"hi\""'));
+    });
+
     test('integer literal', () {
       const v = NumLiteralValue(value: 42, isDouble: false, span: _span);
       expect(PropertySerializer.serialize(v), equals('42'));
