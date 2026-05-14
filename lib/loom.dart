@@ -9,6 +9,7 @@ export 'src/catalog/route_catalog.dart' show RouteCatalog, RouteSpec;
 export 'src/emission/edit_planner.dart';
 export 'src/emission/property_serializer.dart';
 export 'src/emission/route_edit_planner.dart';
+export 'src/emission/route_serializer.dart';
 export 'src/emission/source_edit.dart';
 export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
