@@ -1,4 +1,3 @@
-import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 
@@ -7,26 +6,6 @@ import '../model/source_span.dart';
 import '../model/widget_node.dart';
 import 'widget_visitor.dart';
 
-/// Experimental Dart language features we explicitly opt into when
-/// calling `parseString`. The `analyzer` package dep is pinned at
-/// `^7.3.0` (the `_macros` SDK-conflict workaround), which lags behind
-/// the bundled-SDK analyzer in some recent language additions. Without
-/// these flags, real-world Flutter source on Dart 3.10+ surfaces
-/// false-positive "this requires the X language feature" diagnostics
-/// even though the SDK's own analyzer parses them cleanly.
-///
-/// Adding a flag here is safe: the kernel falls back to `OpaqueNode`
-/// for any AST shape the visitor doesn't recognize, so new syntax that
-/// lands as a node type we don't model just round-trips its bytes
-/// verbatim. The list below is what the scout against flutter/codelabs
-/// surfaced; add to it as future scouts find more.
-const _enabledExperimentalFlags = <String>[
-  'dot-shorthands',
-  'digit-separators',
-  'null-aware-elements',
-  'wildcard-variables',
-];
-
 /// Parses a Dart source string into a `WidgetTreeModel`.
 ///
 /// M1 scope: finds the first `ClassDeclaration` containing a method named
@@ -34,13 +13,7 @@ const _enabledExperimentalFlags = <String>[
 /// expression. Imports and other top-level constructs are not modeled — see
 /// Settled Decisions Q5 in DEVLOG.md.
 WidgetTreeModel parseWidgetTree(String source) {
-  final result = parseString(
-    content: source,
-    throwIfDiagnostics: false,
-    featureSet: FeatureSet.latestLanguageVersion(
-      flags: _enabledExperimentalFlags,
-    ),
-  );
+  final result = parseString(content: source, throwIfDiagnostics: false);
   final unit = result.unit;
   final diagnostics = <ParseDiagnostic>[
     for (final error in result.errors)
@@ -60,7 +33,7 @@ WidgetTreeModel parseWidgetTree(String source) {
     // included; the visitor restricts resolution to no-arg calls.
     final classMethods = <String, MethodDeclaration>{};
     MethodDeclaration? buildMethod;
-    for (final member in declaration.members) {
+    for (final member in declaration.body.members) {
       if (member is! MethodDeclaration) {
         continue;
       }
@@ -170,14 +143,14 @@ class _ReferenceCounter {
       return;
     }
     for (final arg in call.argumentList.arguments) {
-      if (arg is! NamedExpression) {
+      if (arg is! NamedArgument) {
         continue;
       }
-      final shape = spec.childSlots[arg.name.label.name];
+      final shape = spec.childSlots[arg.name.lexeme];
       if (shape == null) {
         continue;
       }
-      _countInSlot(arg.expression, shape);
+      _countInSlot(arg.argumentExpression, shape);
     }
   }
 
@@ -202,7 +175,7 @@ class _ReferenceCounter {
   _CallShape? _extractCall(Expression expr) {
     if (expr is InstanceCreationExpression) {
       final type = expr.constructorName.type;
-      final className = type.importPrefix?.name.lexeme ?? type.name2.lexeme;
+      final className = type.importPrefix?.name.lexeme ?? type.name.lexeme;
       return _CallShape(className, expr.argumentList);
     }
     if (expr is MethodInvocation) {

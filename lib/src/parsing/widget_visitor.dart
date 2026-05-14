@@ -138,19 +138,25 @@ class WidgetVisitor {
     final args = call.argumentList.arguments;
     for (var i = 0; i < args.length; i++) {
       final arg = args[i];
-      if (arg is NamedExpression) {
-        final name = arg.name.label.name;
+      if (arg is NamedArgument) {
+        // analyzer 13+: named args wrap the inner expression. The name
+        // is a single `Token` (was `Label { label: SimpleIdentifier }`
+        // in older analyzers — flattened in the AST refactor).
+        final name = arg.name.lexeme;
         final slotShape = spec.childSlots[name];
         if (slotShape != null) {
-          final slot = _collectChildSlot(arg.expression, slotShape);
+          final slot = _collectChildSlot(arg.argumentExpression, slotShape);
           childSlots[name] = slot.children;
           if (slot.style != null) {
             childSlotStyles[name] = slot.style!;
           }
         } else {
-          properties[name] = _convertProperty(arg.expression);
+          properties[name] = _convertProperty(arg.argumentExpression);
         }
-      } else {
+      } else if (arg is Expression) {
+        // Positional: `Expression implements Argument` in analyzer 13+,
+        // so a non-`NamedArgument` arg IS the positional expression
+        // itself (no wrapper).
         final propName = spec.positionalToProperty[i];
         if (propName == null) {
           // Unmodeled positional argument: capture as an opaque property
@@ -366,7 +372,7 @@ class WidgetVisitor {
     if (expr is InstanceCreationExpression) {
       final type = expr.constructorName.type;
       final prefixToken = type.importPrefix;
-      final localName = type.name2.lexeme;
+      final localName = type.name.lexeme;
       final explicitNamedCtor = expr.constructorName.name?.name;
 
       String className;

@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M5.4 — scout pass + Dart 3.x experimental-feature opt-in
-**Last touched:** 2026-05-14 — Eric-requested scout against flutter/codelabs (1068 .dart files): **0 crashes, 0 idempotence failures**, 392 clean parses, 676 expected `ParseException` (no `build()`), and 2 files with diagnostics that turned out to be a real issue: our pinned `analyzer ^7.3.0` is older than the SDK-bundled one and doesn't enable recent experimental flags by default. Fixed by passing an explicit `featureSet` to `parseString` enabling `dot-shorthands`, `digit-separators`, `null-aware-elements`, `wildcard-variables`. Re-scout: **392 clean / 0 diagnostics / 0 crashes / 0 idempotence failures**. Also landed `tool/scout.dart` as a reusable utility for future broad real-world testing.
+**Active milestone:** M5.5 — analyzer bumped 7.7 → 13.0, visitor adapted, band-aid removed
+**Last touched:** 2026-05-14 — closed the analyzer-version-ceiling Gotcha from M5.4. Bumped `analyzer: ^7.3.0` → `^13.0.0` (now matching what the Dart 3.11.5 SDK ships) and adapted the visitor + reference counter to analyzer 13's renamed AST: `ClassDeclaration.body.members` (was `.members`), `NamedArgument` with `Token name` + `argumentExpression` (was `NamedExpression` with `Label.label` + `expression`), `NamedType.name` (was `.name2`). Dropped the `_enabledExperimentalFlags` band-aid — analyzer 13 has all the previously-experimental features (dot-shorthand, digit-separators, etc.) stable by default. Combined scout against flutter/codelabs + flutter/samples: **1551 .dart files, 0 crashes, 0 diagnostics, 0 idempotence failures, 587 clean parses**. 114 tests + perf gates still green. The high-iteration round-trip property test slowed (25s → 156s at 10k per fixture) because analyzer 13's parser is heavier per call; per-call still well within spec gates (parse <100ms, emit <10ms).
 **Blockers:** none
-**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3 + M5.4.** Every spec Open Question is settled; the kernel has been validated against 1000+ real Flutter files in addition to the 20-fixture pinned corpus. Long-term TODO (deliberately deferred, not blocking review): bump `analyzer` past 13.0.0 once the visitor adapts to its renamed AST API (`NamedExpression` → `Argument`, `members` getter rename, etc.). The experimental-flags list is a band-aid that grows as future scouts find more features; the proper fix is matching the SDK-bundled analyzer.
+**Next action:** **Eric review gate for M5 + M5.1 + M5.2 + M5.3 + M5.4 + M5.5.** Every spec Open Question is settled, every deferred item is closed, the kernel is on the same analyzer the SDK ships, and it's been validated against 1551 real Flutter files (plus the pinned 20-fixture corpus). No remaining open items.
 
 ---
 
@@ -192,6 +192,35 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M5.5 — analyzer 7.7 → 13.0, visitor adapted, experimental-flags band-aid removed
+**Worked on:** Closed the long-term TODO documented in M5.4: bump `analyzer` past 13.0.0 and adapt the visitor to its renamed AST API. The pinned `^7.3.0` was the `_macros` SDK-conflict workaround from M1 scaffolding; moving past it was non-trivial because of breaking AST changes.
+
+**Migration map (analyzer 7.7 → 13.0):**
+- `ClassDeclaration.members` is now `ClassDeclaration.body.members`. A new `ClassBody` node wraps the member list.
+- `NamedExpression` → `NamedArgument`. The arg-list element type changed from `NodeList<Expression>` to `NodeList<Argument>`, where `Argument` is a sealed type with two subtypes: `NamedArgument` for named args, and `Expression` (which `implements Argument`) for positional. The `NamedArgument` shape is also flatter — `Token name` directly, plus `argumentExpression` (was `Label { label: SimpleIdentifier }` + `expression` in 7.x).
+- `NamedType.name2` → `NamedType.name`. Token. The `name2` name in older analyzers was a transition-period accommodation; analyzer 13 drops the suffix.
+
+**Touched files:**
+- `widget_visitor.dart`: positional-vs-named arg dispatch in `_buildWidgetNode`. Old code's `if (arg is NamedExpression) {...} else {...}` became `if (arg is NamedArgument) {...} else if (arg is Expression) {...}`. Properties of `NamedArgument` were renamed inline. `_tryExtractCall`'s `NamedType.name2` → `name`.
+- `widget_tree_parser.dart`: `declaration.members` → `declaration.body.members`. `_ReferenceCounter._countAtWidgetPosition` got the same NamedExpression → NamedArgument migration. `_extractCall`'s `name2` → `name`. Dropped `import 'package:analyzer/dart/analysis/features.dart';` and the `_enabledExperimentalFlags` constant — no longer needed.
+- `pubspec.yaml`: `analyzer: ^7.3.0` → `^13.0.0`. Pub resolved cleanly (the `_macros` SDK conflict that motivated the original 7.3 pin is long gone).
+
+**Combined scout (post-bump) against two repos:**
+- `flutter/codelabs` (1068 files): 392 clean / 0 diagnostics / 0 crashes / 0 idempotence failures, 676 expected `ParseException`.
+- `flutter/samples` (483 files): 195 clean / 0 diagnostics / 0 crashes / 0 idempotence failures, 288 expected `ParseException`.
+- Combined: **1551 .dart files, 587 clean parses, 0 diagnostics, 0 crashes, 0 idempotence failures**. The dot-shorthand files that needed experimental-flag opt-in on analyzer 7.7 now parse clean by default — analyzer 13 has all those features stable.
+
+**Performance note:** 10k-iterations-per-fixture round-trip test went from ~25s to ~156s. The per-call performance benchmark (Global Acceptance #5: parse <100ms, emit <10ms) is still well green, so the per-iteration cost is higher but the spec gates are unchanged. The 6× slowdown comes from analyzer 13's bigger AST walk and validation surface. Acceptable.
+
+**Learned:**
+- **The AST migration was smaller than I'd feared.** Six error sites, four of them mechanical renames, two slightly more involved (the named/positional split via the new `Argument` type). Total diff: ~15 lines across two files. The visitor's existing structure (an `_extractCall` helper that normalizes the two constructor-call AST shapes) absorbed the change cleanly.
+- **`Expression implements Argument` is a clever bit of design.** It means positional arguments don't need a wrapper — the `ArgumentList.arguments: NodeList<Argument>` can hold raw Expression objects directly. Named args get the `NamedArgument` wrapper because they carry the extra `name: Token` field. Source code looks identical to the old shape at the call-site (`for (final arg in args.arguments)`), only the `is NamedExpression` test pattern changes.
+- **Once analyzer matched the SDK, the experimental-flags band-aid vanished.** The `_enabledExperimentalFlags` list from M5.4 became dead code. Removed. The Gotcha entry documenting the version ceiling is no longer load-bearing — kept as historical context but marked superseded.
+
+**Headline numbers:** 114 tests + 1551-file scout, all green. Per-call performance gates still met. Kernel runs on the same analyzer the SDK 3.11.5 ships, removing a class of future Dart-version-drift risk.
+
+**Next:** Eric reviews M5 + M5.1 + M5.2 + M5.3 + M5.4 + M5.5. The kernel is feature-complete, hardened across two review rounds, validated against real-world code at scale, and now on the same analyzer the Dart SDK ships. Nothing left to defer.
 
 ### [2026-05-14] M5.4 — scout against flutter/codelabs + Dart 3.x feature-flag fix
 **Worked on:** Eric asked for a "real-world scout" — point the kernel at every `.dart` file in a popular modern Flutter repo and see what breaks. Picked flutter/codelabs (1068 .dart files; modern Dart 3.x, actively maintained).
@@ -465,7 +494,7 @@ The 2 diagnostic files (`google-maps-in-flutter/step_3/lib/main.dart` and `webvi
 
 Running list of non-obvious things discovered along the way. Reference these in code comments where applicable. Newest at the top.
 
-- **The kernel's pinned `analyzer ^7.3.0` lags the SDK-bundled analyzer.** The Dart SDK (3.11.5 as of writing) ships analyzer 13.0.0 internally, which has many recent language features stable by default (e.g., dot-shorthand `.fromSeed(...)`). Our package's pinned analyzer (resolves to 7.7.1) still treats those as experimental flags. Symptom: real-world files surface false-positive "this requires the X language feature" diagnostics even though the SDK's own analyzer parses them clean. Workaround in `widget_tree_parser.dart`: `_enabledExperimentalFlags` constant lists known-needed flags and gets passed via `FeatureSet` to `parseString`. Long-term fix: bump analyzer to the same major version the SDK ships, which requires adapting the visitor to renamed AST APIs (`NamedExpression` → `Argument`, `ClassDeclaration.members` renamed, `NamedType.name2` renamed) — non-trivial but ultimately the right call.
+- **[Superseded 2026-05-14 in M5.5]** The kernel's pinned `analyzer ^7.3.0` lagged the SDK-bundled analyzer; M5.5 bumped to `^13.0.0` and adapted the visitor to the new AST. The migration map (`ClassDeclaration.members` → `.body.members`, `NamedExpression` → `NamedArgument`, `NamedType.name2` → `.name`, `Expression implements Argument`) is in the M5.5 Session Log entry. Keep here as historical context — if a future analyzer version brings another breaking AST change, the same pattern applies.
 - **Multi-reference helpers aren't supported by the property tests** as a soft constraint. If the same helper is called from two places, two in-memory `MethodReferenceNode`s point at structurally-equivalent but distinct `body` trees. The expected model from `withProperty(path_through_one_ref, …)` only updates that path's body; the reparsed model picks up the helper-source change in BOTH call sites. The two models would diverge, and the property test would fail. M5's `helper_methods.dart` fixture has each helper called exactly once; adding multi-reference fixtures requires either propagating the in-memory edit to all references with the same name, or weakening the equivalence comparator. Out of scope for M5.
 - **`MethodReferenceNode` requires path navigation through a *virtual* slot named `body`.** It's not a real `childSlots` entry — `MethodReferenceNode` doesn't have `childSlots` — but `nodeAt`, `walk`, `_withProperty`, and `_modifySlot` all special-case it. New ModelNode subtypes need this same audit.
 - **`const Prefix.Name(args)` and `Prefix.Name(args)` produce different analyzer ASTs.** Non-const: `MethodInvocation(target=Prefix, methodName=Name)`. Const: `InstanceCreationExpression` with `NamedType.importPrefix = Prefix` and `NamedType.name2 = Name` (the analyzer treats `Prefix` as a possible import prefix, since without resolution that's a valid reading). The visitor's `_tryExtractCall` reads `importPrefix` and re-interprets it as the class name. Without this, `const EdgeInsets.all(8)` falls through to `OpaquePropertyValue` despite being a fully modelable expression.
