@@ -8,10 +8,10 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M6.0 — non-Flutter Dart layer (first slice: route DSL)
-**Last touched:** 2026-05-14 — M6.0 hardening: pinned a canonical real-world route fixture from `flutter/packages` @ `0ffbde8f`, the official go_router example (`packages/go_router/example/lib/main.dart`). 5 new tests targeting it (parse correctness, opaque function-literal handling, typed-list `<RouteBase>[...]` style capture). Updated CLI + scout to try **both** parsers independently per file — was previously falling back from widget→route, which masked the common real-world shape where a file has both a `build()` method (opaque MaterialApp.router) AND a top-level GoRouter declaration. Scout against `flutter/packages/go_router` (117 files): 0 crashes, 0 idempotence failures, **8 route trees detected** (vs 0 in the M6.0 baseline). 143 tests, all green. Identified a real-world gap: 10 of 18 example files use `late final GoRouter _router = GoRouter(...)` as a **class-field initializer**, which the parser's entry-point detection doesn't yet handle (covers top-level vars + class-method-returns; field initializers fall through to "no tree found"). Documented as M6.0.1 — small extension, ~20-line change in `route_tree_parser.dart`. M6.0 prior state — 4 fixtures, 23 tests, 137 tests total — remains intact.
+**Active milestone:** M6.0.1 — class-field GoRouter entry-point support
+**Last touched:** 2026-05-14 — closed the M6.0 gap surfaced by the real-world fixture work. Extended `route_tree_parser.dart`'s class-walking loop to scan `FieldDeclaration` initializers alongside method returns; tightened `RouteCatalog.rootClassNames()` from `{GoRouter, GoRoute, ShellRoute}` to `{GoRouter}` (tree-root semantics: GoRoute and ShellRoute are tree-internal, never standalone roots). Pinned a second real-world fixture: `real_world_go_router_named_routes.dart` (flutter/packages @ `0ffbde8f`, `packages/go_router/example/lib/named_routes.dart`) — exercises `late final GoRouter _router = GoRouter(...)` class-field shape with triple-nested routes. **Scout coverage on flutter/packages/go_router lifted from 8 → 30 route clean parses** (out of 117 files). 147 tests, all green. M6.0 + M6.0.1 together cover the three real-world entry-point shapes: top-level var, class-method return, class-field initializer.
 **Blockers:** none
-**Next action:** **Decide on M6.0.1** (extend parser to detect class-field GoRouter initializers — 10/18 example files use this shape) **before Eric's review gate**, OR proceed to review with the gap explicitly documented. Then M6.1 — extract `loom_core` (the language-general machinery), now informed by the actual seam between widget- and route-side code. See the M6 roadmap section.
+**Next action:** **Eric review gate for M6.0 + M6.0.1.** Then M6.1 — extract `loom_core` (the language-general machinery), now informed by the actual seam between widget- and route-side code. See the M6 roadmap section.
 
 ---
 
@@ -213,7 +213,7 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_text_input.dart` | flutter/website @ `e927ec21`, `examples/cookbook/forms/text_input/lib/main.dart` | 50 | MaterialApp → Scaffold → opaque MyCustomForm; second class MyCustomForm uses Column with multiple Paddings around opaque TextField/TextFormField |
 | `test/fixtures/real_world_long_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/long_lists/lib/main.dart` | 32 | MyApp with non-const constructor and `final List<String> items` field; MaterialApp → Scaffold → opaque ListView.builder with closures |
 
-### Route fixtures (M6.0)
+### Route fixtures (M6.0 / M6.0.1)
 
 A separate corpus for the route-DSL upper layer. Each exercises the route parser + visitor + edit planner.
 
@@ -224,6 +224,7 @@ A separate corpus for the route-DSL upper layer. Each exercises the route parser
 | `test/fixtures/route_shell.dart` | hand-crafted | 13 | ShellRoute wrapping two GoRoutes; sibling top-level GoRoute. |
 | `test/fixtures/route_with_helper.dart` | hand-crafted | 16 | Class-method fallback entry point + `routes: [_homeRoute()]` resolving to `RouteMethodReferenceNode`. |
 | `test/fixtures/real_world_go_router_main.dart` | flutter/packages @ `0ffbde8f`, `packages/go_router/example/lib/main.dart` | 86 | Canonical go_router example: top-level `final GoRouter _router = GoRouter(...)`, typed list literal `<RouteBase>[...]`, nested GoRoute with `builder:` function literals (→ opaque), MaterialApp.router widget tree alongside. |
+| `test/fixtures/real_world_go_router_named_routes.dart` | flutter/packages @ `0ffbde8f`, `packages/go_router/example/lib/named_routes.dart` | 190 | M6.0.1 class-field entry-point: `late final GoRouter _router = GoRouter(...)` inside `class App`. Triple-nested GoRoutes; `name:` properties; `debugLogDiagnostics: true` (BoolLiteralValue); typed list literals `<GoRoute>[...]`. |
 
 ---
 
@@ -240,6 +241,27 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M6.0.1 — class-field GoRouter entry-point + named_routes fixture
+**Worked on:** Closed the M6.0 hardening gap (class-field initializers, 10/18 example files) before the review gate. Extended `route_tree_parser.dart`'s class-walking loop to scan `FieldDeclaration` initializers alongside method returns. Tightened `RouteCatalog.rootClassNames()` from all-catalog-entries to `{GoRouter}` — `GoRoute` and `ShellRoute` are tree-internal, not standalone tree roots, and the looser set was a latent bug for any class that also exposed a `GoRoute` returning helper. Pinned `real_world_go_router_named_routes.dart` (190 LOC) as a second real-world fixture exercising the class-field shape with triple-nested routes.
+
+**Coverage delta (scout on flutter/packages/go_router, 117 files):**
+- Before M6.0.1: 8 route clean parses
+- After M6.0.1: **30 route clean parses**
+- The 22-file jump comes from class-field-initializer files now being detected — including most of the canonical example/ tree and subdirectory variants (books/main.dart, state_restoration/main.dart, etc.).
+
+**Tightening rationale (rootClassNames → {GoRouter}):** Before this change, any class that defined `GoRoute _helper() => GoRoute(...)` would have its helper picked as the route-tree root if it was declared before the actual `GoRouter`. Lucky-ordering accident. The new semantics — `GoRouter` is the only tree root, `GoRoute`/`ShellRoute` are tree-internal — makes the parser pick the right root deterministically and lets helpers returning non-root catalog types fall into `classMethods` for `RouteMethodReferenceNode` resolution. The existing `route_with_helper.dart` fixture covers this exact pattern; tests still pass.
+
+**Validation:**
+- 147 tests green (143 + 4 new on the named_routes.dart fixture).
+- `dart analyze` clean, `dart format` clean (both fixtures formatted).
+- Scout against flutter/packages/go_router: 0 crashes, 0 idempotence failures.
+
+**Learned:**
+- **"Catalog entry" and "tree root" are different concepts.** The full catalog includes everything the visitor recognizes mid-tree; the tree-root set is a strict subset (just the things that anchor a parseable tree). M6.0 conflated them. This will matter more as M6.2 adds catalogs with mixed-shape entries (e.g., the `test` framework has `group` as both a root and a tree-internal element).
+- **Class-field initializers are arguably the more common shape than class-method returns** for routes in real go_router code (10 vs 2 of the 12 class-based examples). Worth knowing as a default expectation for any future "model X declared inside a class" case.
+
+**Next:** Eric reviews M6.0 + M6.0 hardening + M6.0.1. Then M6.1 — extract `loom_core` (the language-general machinery) into its own sub-namespace, informed by the diff between widget- and route-side scaffolding.
 
 ### [2026-05-14] M6.0 hardening — real-world go_router fixture + dual-parser detection
 **Worked on:** Eric asked to "add a real GoRouter-using real-world fixture" to tighten M6.0's validation surface (the M6.0 commit had only 4 hand-crafted fixtures, no broad-scout route coverage). Cloned `flutter/packages` from GitHub at HEAD `0ffbde8f622b8dc61e4608483dc4f80f7fab027b`, pinned `packages/go_router/example/lib/main.dart` as `test/fixtures/real_world_go_router_main.dart`. Added 5 parsing tests targeting it (parse correctness, opaque `builder:` function-literal handling, typed list-literal `<RouteBase>[...]` style capture).

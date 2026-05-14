@@ -222,6 +222,47 @@ void main() {
     });
   });
 
+  group('parseRouteTree on real_world_go_router_named_routes.dart', () {
+    // Source: flutter/packages @ 0ffbde8f622b8dc61e4608483dc4f80f7fab027b,
+    // packages/go_router/example/lib/named_routes.dart. Exercises the
+    // M6.0.1 class-field-initializer entry-point path:
+    // `late final GoRouter _router = GoRouter(...)` inside a class.
+    late RouteTreeModel model;
+    late RouteNode root;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/real_world_go_router_named_routes.dart')
+              .readAsStringSync();
+      model = parseRouteTree(source);
+      root = model.root as RouteNode;
+    });
+
+    test('class-field initializer is detected as the route root', () {
+      expect(root.className, equals('GoRouter'));
+    });
+
+    test('triple-nested routes resolve', () {
+      final top = root.childSlots['routes']!.first as RouteNode;
+      final family = (top.childSlots['routes']!.first as RouteNode);
+      final person = (family.childSlots['routes']!.first as RouteNode);
+      expect(
+          (top.properties['name'] as StringLiteralValue).value, equals('home'));
+      expect((family.properties['name'] as StringLiteralValue).value,
+          equals('family'));
+      expect((person.properties['name'] as StringLiteralValue).value,
+          equals('person'));
+      expect((person.properties['path'] as StringLiteralValue).value,
+          equals('person/:pid'));
+    });
+
+    test('debugLogDiagnostics: true captured as bool literal', () {
+      final debug = root.properties['debugLogDiagnostics'];
+      expect(debug, isA<BoolLiteralValue>());
+      expect((debug! as BoolLiteralValue).value, isTrue);
+    });
+  });
+
   group('parseRouteTree rejection', () {
     test('throws on a widget file', () {
       final source =

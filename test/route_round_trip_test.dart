@@ -18,6 +18,9 @@ const _routeFixtures = <String>[
   'route_with_helper.dart',
   // Real-world: flutter/packages @ 0ffbde8f, packages/go_router/example/lib/main.dart
   'real_world_go_router_main.dart',
+  // Real-world: flutter/packages @ 0ffbde8f, packages/go_router/example/lib/named_routes.dart
+  // Exercises M6.0.1 class-field initializer path (`late final GoRouter _router = ...`).
+  'real_world_go_router_named_routes.dart',
 ];
 
 String _loadFixture(String name) =>

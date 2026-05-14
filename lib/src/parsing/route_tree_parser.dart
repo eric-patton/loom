@@ -13,8 +13,12 @@ import 'widget_visitor.dart' show ParseException, extractMethodReturnExpression;
 ///   1. Top-level variable initializer that's a constructor call to a name
 ///      in `RouteCatalog.rootClassNames()` — the common shape:
 ///      `final router = GoRouter(routes: [...]);`
-///   2. Class declaration with a method or getter whose return expression
-///      is such a call — handles `GoRouter get router => GoRouter(...)` and
+///   2. Class member: field initializer (`late final GoRouter _router =
+///      GoRouter(...);`) — covered in M6.0.1 after the canonical go_router
+///      examples revealed this is the more common shape than (3) in real
+///      code (10 of 18 example files).
+///   3. Class member: method or getter whose return expression is such a
+///      call — handles `GoRouter get router => GoRouter(...)` and
 ///      `GoRouter buildRouter() { return GoRouter(...); }`.
 ///
 /// If no route tree is found, throws `ParseException`.
@@ -56,31 +60,56 @@ RouteTreeModel parseRouteTree(String source) {
       continue;
     }
 
+    // Two parallel candidates: a method whose return expression is a
+    // route root, or a field whose initializer is one. First match wins.
+    // Either way, every other in-class method gets stashed in classMethods
+    // so the visitor can resolve `_homeRoute()`-style helper calls.
     final classMethods = <String, MethodDeclaration>{};
     MethodDeclaration? rootMethod;
+    Expression? rootFieldInitializer;
+
     for (final member in declaration.body.members) {
-      if (member is! MethodDeclaration) {
-        continue;
-      }
-      final returnExpr = extractMethodReturnExpression(member);
-      if (returnExpr != null &&
+      if (member is MethodDeclaration) {
+        final returnExpr = extractMethodReturnExpression(member);
+        if (returnExpr != null &&
+            rootMethod == null &&
+            rootFieldInitializer == null &&
+            _isRouteRoot(returnExpr, rootClassNames)) {
+          rootMethod = member;
+        } else {
+          classMethods[member.name.lexeme] = member;
+        }
+      } else if (member is FieldDeclaration &&
           rootMethod == null &&
-          _isRouteRoot(returnExpr, rootClassNames)) {
-        rootMethod = member;
-      } else {
-        classMethods[member.name.lexeme] = member;
+          rootFieldInitializer == null) {
+        for (final variable in member.fields.variables) {
+          final initializer = variable.initializer;
+          if (initializer != null &&
+              _isRouteRoot(initializer, rootClassNames)) {
+            rootFieldInitializer = initializer;
+            break;
+          }
+        }
       }
     }
-    if (rootMethod == null) {
+
+    if (rootMethod == null && rootFieldInitializer == null) {
       continue;
     }
 
-    final rootExpr = extractMethodReturnExpression(rootMethod);
-    if (rootExpr == null) {
-      throw const ParseException(
-        'Route root method has no return expression',
-      );
+    final Expression rootExpr;
+    if (rootMethod != null) {
+      final methodReturn = extractMethodReturnExpression(rootMethod);
+      if (methodReturn == null) {
+        throw const ParseException(
+          'Route root method has no return expression',
+        );
+      }
+      rootExpr = methodReturn;
+    } else {
+      rootExpr = rootFieldInitializer!;
     }
+
     final visitor = RouteVisitor(source, classMethods: classMethods);
     return RouteTreeModel(
       root: visitor.convertRouteTreeNode(rootExpr),

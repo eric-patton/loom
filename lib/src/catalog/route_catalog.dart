@@ -43,14 +43,21 @@ class RouteCatalog {
     ),
   };
 
+  /// Class names that can appear as the **root** of a route tree.
+  /// `GoRoute` and `ShellRoute` are tree-internal — they nest inside a
+  /// `GoRouter`'s `routes:` list, never standing alone as the config root.
+  /// The parser uses this to discriminate "is this top-level variable or
+  /// class-field initializer a route tree?" from "is it some other
+  /// catalog-known constructor invocation?"
+  static const Set<String> _treeRootClassNames = <String>{'GoRouter'};
+
   static RouteSpec? specFor(String className) => _known[className];
 
   static bool isKnown(String className) => _known.containsKey(className);
 
-  /// Returns the set of class names treated as "route root" candidates
-  /// when scanning a compilation unit for `parseRouteTree`. Currently the
-  /// catalog's full key set; the parser uses this to decide whether a
-  /// top-level variable's initializer is a route tree root or just an
-  /// ordinary expression.
-  static Set<String> rootClassNames() => _known.keys.toSet();
+  /// Returns the set of class names treated as route-tree roots when
+  /// scanning a compilation unit for `parseRouteTree`. The visitor still
+  /// recognizes the full catalog for in-tree nodes; this set is narrower
+  /// because non-root catalog entries can't anchor a parseable tree.
+  static Set<String> rootClassNames() => _treeRootClassNames;
 }
