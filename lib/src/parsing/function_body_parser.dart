@@ -88,6 +88,22 @@ StatementNode _convertStatement(Statement stmt, String source) {
   }
   if (stmt is ExpressionStatement) {
     final expr = stmt.expression;
+    if (expr is ThrowExpression) {
+      final thrown = expr.expression;
+      return ThrowStatementNode(
+        throwKeywordSpan: SourceSpan(
+          offset: expr.throwKeyword.offset,
+          length: expr.throwKeyword.length,
+        ),
+        expressionSource: source.substring(
+          thrown.offset,
+          thrown.offset + thrown.length,
+        ),
+        expressionSpan:
+            SourceSpan(offset: thrown.offset, length: thrown.length),
+        sourceSpan: span,
+      );
+    }
     final exprSpan = SourceSpan(offset: expr.offset, length: expr.length);
     return ExpressionStatementNode(
       expressionSource: source.substring(
@@ -130,7 +146,15 @@ StatementNode _convertStatement(Statement stmt, String source) {
     final asWhile = _tryConvertWhileStatement(stmt, source, span);
     if (asWhile != null) return asWhile;
   }
-  // Anything else (try/switch/do-while/...) or an unsupported control-flow
+  if (stmt is DoStatement) {
+    final asDo = _tryConvertDoStatement(stmt, source, span);
+    if (asDo != null) return asDo;
+  }
+  if (stmt is TryStatement) {
+    final asTry = _tryConvertTryStatement(stmt, source, span);
+    if (asTry != null) return asTry;
+  }
+  // Anything else (switch/...) or an unsupported control-flow
   // shape — preserve verbatim.
   return OpaqueStatementNode(
     sourceText: source.substring(stmt.offset, stmt.offset + stmt.length),
@@ -245,6 +269,139 @@ ForStatementNode? _tryConvertForStatement(
     headerSpan: headerSpan,
     body: _convertBlock(body, source),
     sourceSpan: span,
+  );
+}
+
+/// Attempts to convert a `DoStatement` into a `DoStatementNode`.
+/// Returns null when the body isn't a `Block`.
+DoStatementNode? _tryConvertDoStatement(
+  DoStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final body = stmt.body;
+  if (body is! Block) return null;
+
+  final condition = stmt.condition;
+  final conditionSpan =
+      SourceSpan(offset: condition.offset, length: condition.length);
+  final conditionSource = source.substring(
+    condition.offset,
+    condition.offset + condition.length,
+  );
+
+  return DoStatementNode(
+    doKeywordSpan: SourceSpan(
+      offset: stmt.doKeyword.offset,
+      length: stmt.doKeyword.length,
+    ),
+    body: _convertBlock(body, source),
+    whileKeywordSpan: SourceSpan(
+      offset: stmt.whileKeyword.offset,
+      length: stmt.whileKeyword.length,
+    ),
+    conditionSource: conditionSource,
+    conditionSpan: conditionSpan,
+    sourceSpan: span,
+  );
+}
+
+/// Attempts to convert a `TryStatement` into a `TryStatementNode`.
+/// Returns null when the try body, any catch body, or the finally body
+/// isn't a `Block` (the grammar guarantees blocks today, but the check
+/// is defensive so any future shape extension falls through to opaque).
+TryStatementNode? _tryConvertTryStatement(
+  TryStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final tryBody = stmt.body;
+  // (Per grammar, `tryBody` is always a Block — but check defensively
+  // in case the grammar evolves.)
+  // ignore: unnecessary_type_check
+  if (tryBody is! Block) return null;
+
+  final catchClauses = <CatchClauseNode>[];
+  for (final clause in stmt.catchClauses) {
+    final converted = _convertCatchClause(clause, source);
+    if (converted == null) return null;
+    catchClauses.add(converted);
+  }
+
+  final finallyBlock = stmt.finallyBlock;
+  StatementBlock? convertedFinally;
+  if (finallyBlock != null) {
+    convertedFinally = _convertBlock(finallyBlock, source);
+  }
+
+  return TryStatementNode(
+    tryKeywordSpan: SourceSpan(
+      offset: stmt.tryKeyword.offset,
+      length: stmt.tryKeyword.length,
+    ),
+    tryBlock: _convertBlock(tryBody, source),
+    catchClauses: catchClauses,
+    finallyKeywordSpan: stmt.finallyKeyword == null
+        ? null
+        : SourceSpan(
+            offset: stmt.finallyKeyword!.offset,
+            length: stmt.finallyKeyword!.length,
+          ),
+    finallyBlock: convertedFinally,
+    sourceSpan: span,
+  );
+}
+
+CatchClauseNode? _convertCatchClause(CatchClause clause, String source) {
+  final body = clause.body;
+  // ignore: unnecessary_type_check
+  if (body is! Block) return null;
+
+  final exceptionType = clause.exceptionType;
+  final exceptionParameter = clause.exceptionParameter;
+  final stackTraceParameter = clause.stackTraceParameter;
+
+  return CatchClauseNode(
+    onKeywordSpan: clause.onKeyword == null
+        ? null
+        : SourceSpan(
+            offset: clause.onKeyword!.offset,
+            length: clause.onKeyword!.length,
+          ),
+    exceptionTypeSource: exceptionType == null
+        ? null
+        : source.substring(
+            exceptionType.offset,
+            exceptionType.offset + exceptionType.length,
+          ),
+    exceptionTypeSpan: exceptionType == null
+        ? null
+        : SourceSpan(
+            offset: exceptionType.offset,
+            length: exceptionType.length,
+          ),
+    catchKeywordSpan: clause.catchKeyword == null
+        ? null
+        : SourceSpan(
+            offset: clause.catchKeyword!.offset,
+            length: clause.catchKeyword!.length,
+          ),
+    exceptionParameterName: exceptionParameter?.name.lexeme,
+    exceptionParameterSpan: exceptionParameter == null
+        ? null
+        : SourceSpan(
+            offset: exceptionParameter.name.offset,
+            length: exceptionParameter.name.length,
+          ),
+    stackTraceParameterName: stackTraceParameter?.name.lexeme,
+    stackTraceParameterSpan: stackTraceParameter == null
+        ? null
+        : SourceSpan(
+            offset: stackTraceParameter.name.offset,
+            length: stackTraceParameter.name.length,
+          ),
+    body: _convertBlock(body, source),
+    sourceSpan: SourceSpan(offset: clause.offset, length: clause.length),
   );
 }
 

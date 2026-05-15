@@ -27,22 +27,31 @@ import 'source_edit.dart';
 ///   * Then/else/else-if block edits work via the `StatementBlock`-
 ///     taking ops above (`addStatement`, `removeStatement`, etc.).
 ///
-/// Loop operations (M8.0c):
+/// Loop operations (M8.0c/d):
 ///   * `changeWhileCondition` — replace the condition expression of a
 ///     `WhileStatementNode`.
+///   * `changeDoWhileCondition` — replace the condition of a
+///     `DoStatementNode`.
 ///   * `ForStatementNode.headerSource` is currently opaque (the parser
 ///     captures the parenthesized header as raw text), so dedicated
 ///     header-editing ops are deferred until a node-level model exists.
 ///   * Loop body edits use the statement-list ops with the loop's
 ///     `body` block.
 ///
+/// Try/throw operations (M8.0d):
+///   * `changeThrownExpression` — replace the expression of a
+///     `ThrowStatementNode`.
+///   * Try-block, catch-clause body, and finally-block edits all reuse
+///     the `StatementBlock`-taking statement-list ops above.
+///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
 ///     `for (x in xs) f(x);`) — opaqued.
-///   * Other control flow: do-while, switch (with patterns), try/catch/
-///     finally, throw, yield.
+///   * Other control flow: switch (with patterns), yield, break,
+///     continue, labeled statements.
 ///   * Modeling the c-style/for-each structure inside
 ///     `ForStatementNode.headerSource`.
+///   * Adding/removing/reordering catch clauses on a try statement.
 ///   * Editing inside `ExpressionStatement.expressionSource` —
 ///     requires modeling expression structure.
 ///   * Adding type annotation to an untyped variable declaration.
@@ -234,6 +243,35 @@ class FunctionBodyEditPlanner {
       offset: statement.conditionSpan.offset,
       length: statement.conditionSpan.length,
       replacement: newConditionSource,
+    );
+  }
+
+  // ----------------------- Do-while ops (M8.0d) ------------------
+
+  /// Replaces the trailing condition expression of a
+  /// `do { ... } while (cond);` statement.
+  static SourceEdit changeDoWhileCondition({
+    required DoStatementNode statement,
+    required String newConditionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.conditionSpan.offset,
+      length: statement.conditionSpan.length,
+      replacement: newConditionSource,
+    );
+  }
+
+  // ----------------------- Throw-statement ops (M8.0d) -----------
+
+  /// Replaces the expression of a `throw expr;` statement.
+  static SourceEdit changeThrownExpression({
+    required ThrowStatementNode statement,
+    required String newExpressionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.expressionSpan.offset,
+      length: statement.expressionSpan.length,
+      replacement: newExpressionSource,
     );
   }
 

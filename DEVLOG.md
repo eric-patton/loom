@@ -8,38 +8,40 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0c — control flow: else-if chains + for-loops + while-loops
-**Last touched:** 2026-05-14 — extended function-body modeling with else-if chains, for-loops (c-style + for-each + await-for), and while-loops. All three reuse `StatementBlock` for recursive body editing — no new statement-list ops needed.
+**Active milestone:** M8.0d — control flow: do-while + try/catch/finally + throw
+**Last touched:** 2026-05-15 — extended function-body modeling with do-while loops, try/catch/finally statements (multi-clause), and top-level throw statements. Two new edit ops; try-clause bodies + finally block reuse the `StatementBlock` foundation.
 
-**M8.0c surface added (just now):** extends M8.0b. Three new statement kinds + one new edit op + parser handling.
+**M8.0d surface added (just now):** extends M8.0c. Three new statement kinds + two new edit ops.
 
-**`IfStatementNode` extended** with `elseIf: IfStatementNode?`. For `if A {} else if B {} else if C {} else {}`, the outer node's `elseIf` is the second branch's `IfStatementNode`, whose own `elseIf` is the third, whose `elseBlock` holds the terminal else. Invariant: at most one of `elseIf` / `elseBlock` is non-null on a given node. Backward-compatible — M8.0b code that only consulted `elseBlock` still sees null when there's no terminal else.
+**`DoStatementNode` added** — `do { body } while (cond);`. Captures `doKeywordSpan`, `body: StatementBlock`, `whileKeywordSpan`, condition source + span. Only fully-braced bodies are modeled.
 
-**`ForStatementNode` added** — `for (header) { body }`. Captures `forKeywordSpan`, optional `awaitKeywordSpan` (for `await for (...)`), `headerSource` + `headerSpan` for the parenthesized header (raw — c-style triple vs for-each vs pattern-for shape not yet modeled), and `body: StatementBlock`. Only braced bodies are modeled.
+**`TryStatementNode` added** — `try { body } [on T] [catch (e [, s])] { ... }* [finally { ... }]?`. Captures `tryKeywordSpan`, `tryBlock: StatementBlock`, an ordered `catchClauses: List<CatchClauseNode>`, and an optional `finallyKeywordSpan` + `finallyBlock`. Per Dart grammar, every try statement has at least one catch clause OR a finally clause.
 
-**`WhileStatementNode` added** — `while (cond) { body }`. Same shape as `IfStatementNode` minus then/else: keyword span, condition source + span, body block.
+**`CatchClauseNode` added** — captures `onKeywordSpan` (optional), `exceptionTypeSource` + `exceptionTypeSpan` (optional), `catchKeywordSpan` (optional), `exceptionParameterName` + span (optional), `stackTraceParameterName` + span (optional, the second `catch` param), and the handler `body: StatementBlock`. Models all four Dart shapes: bare `on T`, `catch (e)`, `catch (e, s)`, and `on T catch (e [, s])`.
 
-**Parser scope:** else-if chains recursively convert via `_tryConvertIfStatement` calling itself; a bare-body branch anywhere in the chain rejects the whole chain back to opaque. For/while only model fully-braced bodies; bare bodies fall through to opaque. `do { } while (...);` is currently opaque (different shape, deferred).
+**`ThrowStatementNode` added** — detected when an `ExpressionStatement`'s expression is a `ThrowExpression`. Mirrors `ReturnStatementNode` shape. Captures `throwKeywordSpan` + expression source + span. A `throw` buried inside a larger expression (e.g. `cond ? value : throw Foo()`) stays opaque inside the host `ExpressionStatementNode.expressionSource` — only top-level throws get their own node.
 
-**New edit op:**
-- `changeWhileCondition(statement, newConditionSource)` — mirrors `changeIfCondition`.
-- Loop body edits use the existing `addStatement` / `removeStatement` / `replaceStatement` against the loop's `body` block — no new ops needed (the `StatementBlock` foundation from M8.0b carries through).
-- `changeIfCondition` already works on any branch of an else-if chain (each branch has its own `conditionSpan`).
+**Parser scope:** do-while and try statements only model fully-braced bodies (and braced catch/finally blocks). Switch statements still fall through to `OpaqueStatementNode` — pattern matching is a multi-milestone surface deferred to M8.0e.
 
-**Validation:** 291 tests green (was 274, +17 new across parsing + round-trip). New fixtures: `function_body_with_else_if.dart` (4-tier grade classifier) and `function_body_with_loops.dart` (for-loop + while-loop). Tests include `changeIfCondition` on an inner else-if branch, `addStatement` recursing into a deep else-if then-block, `changeWhileCondition`, `addStatement` into a for-loop body, and `removeStatement` from a while-loop body.
+**New edit ops:**
+- `changeDoWhileCondition(statement, newConditionSource)` — replaces the trailing condition of a `do { } while (cond);`.
+- `changeThrownExpression(statement, newExpressionSource)` — replaces the expression of a `throw expr;`.
+- Try-block, catch-clause body, and finally-block edits all reuse the `StatementBlock`-taking ops: `addStatement` / `removeStatement` / `replaceStatement`. No new try-specific ops were needed.
 
-**Deliberately deferred (M8.0d+):**
-- `do { } while (cond);` — different shape, modest implementation.
-- `switch` (with patterns) — large surface; multi-milestone.
-- `try` / `catch` / `finally` — multi-clause structure.
-- `throw` / `yield` / `break` / `continue`.
+**Validation:** 314 tests green (was 291, +23 new across parsing + round-trip). New fixtures: `function_body_with_do_while.dart` (countdown loop), `function_body_with_try.dart` (parseOrDefault with `on FormatException catch (e)` + `catch (e, s)` + finally), and `function_body_with_throw.dart` (requirePositive guard). Tests cover bare-body do-while → opaque, throw-buried-in-expression staying as `VariableDeclarationStatementNode`, addStatement recursing into try body / finally block, removeStatement from a catch-clause body, and changeThrownExpression.
+
+**Deliberately deferred (M8.0e+):**
+- `switch` (with patterns) — large surface; gets its own milestone. Most consequential for OutSystems multi-way decisions.
+- `yield` / `break` / `continue` / labeled statements.
 - Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource` — currently opaque.
+- Adding/removing/reordering catch clauses on an existing try statement.
+- Editing inside catch-clause parameters (rename `e` → `error`, change exception type).
 - Bare-statement control-flow bodies — opaque.
 - Expression-internal structure inside `ExpressionStatementNode`.
 - Statement reordering (use add + remove for now).
 
 **Blockers:** none
-**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c series (19 commits total). Then M8.0d — `do-while`, `switch`, or `try/catch/finally` as fixtures demand.
+**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d series (20 commits total). Then M8.0e — `switch` with pattern matching (the OutSystems-relevant one).
 
 ---
 
@@ -304,7 +306,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0a** (shipped 2026-05-14) | Function-body modeling, first slice. Sealed `StatementNode = VariableDeclarationStatementNode | ExpressionStatementNode | ReturnStatementNode | OpaqueStatementNode`. `parseFunctionBody` finds a function body by default or by explicit span. `FunctionBodyEditPlanner` — 7 ops covering statement list, variable decls, return expression. ~700 LOC. | Sequential business logic — `do A; do B; return X`. Most OutSystems-style flows are sequential procedural code. |
 | **M8.0b** (shipped 2026-05-14) | Control flow: `if (cond) { ... } else { ... }`. Extracted `StatementBlock` so statement-list ops (addStatement/removeStatement/replaceStatement) work recursively on nested then/else bodies. Bare-statement bodies and `else if` chains fall through to OpaqueStatementNode (M8.0c). | Basic conditional logic — most OutSystems "decision" nodes map to an if/else. |
 | **M8.0c** (shipped 2026-05-14) | Else-if chains (recursive `IfStatementNode.elseIf`), for-loops (c-style + for-each + await-for, header captured opaque), while-loops with `changeWhileCondition`. All reuse `StatementBlock` for recursive body editing — no new statement-list ops needed. Bare-body branches anywhere in an else-if chain reject the whole chain to opaque. | Common loop + multi-way decision shapes — most OutSystems flows that aren't a simple if/else are a chain of conditions or an iteration. |
-| M8.0d+ | Remaining control flow: do-while, switch (with patterns), try/catch/finally, throw/yield/break/continue. Plus expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0d** (shipped 2026-05-15) | `do { } while (cond);` (`DoStatementNode` + `changeDoWhileCondition`), `try / on T / catch (e, s) / finally` (`TryStatementNode` + `CatchClauseNode`; bodies are `StatementBlock`s — no new ops needed), and top-level `throw expr;` (`ThrowStatementNode` + `changeThrownExpression`). All four catch-clause shapes covered: bare `on T`, `catch (e)`, `catch (e, s)`, `on T catch (e [, s])`. | Completes imperative control-flow basics. Error handling (try/catch/finally) is foundational for any real Dart code; throw closes the symmetric `return`-shaped surface. |
+| M8.0e+ | `switch` with pattern matching — most consequential for OutSystems multi-way decisions, deferred as its own milestone because the pattern surface is large (constant patterns, `||` alternatives, `when` guards, object/record/list/map patterns, switch expressions, etc.). Plus `yield`/`break`/`continue`/labels, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses, and editing catch-clause parameters. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -387,6 +390,45 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.0d — control flow: do-while + try/catch/finally + throw
+**Worked on:** Third control-flow slice. Added three new statement kinds — `DoStatementNode`, `TryStatementNode`, `ThrowStatementNode` — plus a supporting `CatchClauseNode` class. Two new edit ops; try-block + catch-clause + finally-block edits all reuse the `StatementBlock` foundation.
+
+**`DoStatementNode`** — `do { body } while (cond);`. Same fields as `WhileStatementNode` but with the keyword + condition at the trailing position. Only braced bodies are modeled (bare `do f(); while (...);` → opaque). The `_tryConvertDoStatement` function returns null on bare bodies, falling through to opaque cleanly — same pattern as for/while.
+
+**`TryStatementNode` + `CatchClauseNode`.** Multi-clause structure: `tryBlock` is always a `StatementBlock`; `catchClauses` is an ordered list of `CatchClauseNode`s; `finallyBlock` is an optional `StatementBlock`. Each `CatchClauseNode` captures all four Dart shapes:
+- `on T { ... }` — type only, no `catch` clause.
+- `catch (e) { ... }` — variable only, no type.
+- `catch (e, s) { ... }` — exception + stack trace variables.
+- `on T catch (e [, s]) { ... }` — both type and variables.
+
+The exception type is captured as raw source (no expression-internal structure modeled), and the variable names + spans are captured separately for future rename ops. Body is a `StatementBlock` so existing statement-list edits Just Work.
+
+**`ThrowStatementNode`** — detected by inspecting `ExpressionStatement.expression` for `ThrowExpression`. If so, emit a `ThrowStatementNode`; otherwise the existing `ExpressionStatementNode` path. A `throw` buried inside a larger expression (e.g. `n ?? throw StateError('null')`) stays opaque inside the host expression's raw source — only top-level throws get their own node. This keeps the model surface focused on the common case without modeling all the places throw can appear as an expression.
+
+**New edit ops:**
+- `changeDoWhileCondition` — mirrors `changeWhileCondition`.
+- `changeThrownExpression` — mirrors `changeReturnExpression`.
+- Try, catch, and finally body edits all reuse `addStatement` / `removeStatement` / `replaceStatement` against the relevant `StatementBlock`. The `StatementBlock` foundation continues to pay off.
+
+**Fixtures added:**
+- `function_body_with_do_while.dart` — `countDownTo(start, floor)` with a `do { n--; } while (n > floor);`.
+- `function_body_with_try.dart` — `parseOrDefault(text, fallback)` exercising `try { } on FormatException catch (e) { } catch (e, s) { } finally { }`.
+- `function_body_with_throw.dart` — `requirePositive(n)` with `if (n <= 0) { throw ArgumentError(...); }` — also exercises a `ThrowStatementNode` nested inside an `IfStatementNode.thenBlock`.
+
+**Test changes:**
+- The M8.0c "do-while still opaque" negative test was flipped to assert `DoStatementNode` (M8.0d now models it).
+- New parsing groups for all three fixtures covering: 3-statement structure, do-while bare body still opaque, try-only-with-finally (no catches), buried-throw staying as a variable decl.
+- New round-trip group: 9 tests covering idempotence on all three fixtures, `changeDoWhileCondition`, `addStatement` recursing into a do-while body, `addStatement` into a try block, `removeStatement` from a catch-clause body, `addStatement` into a finally block, `changeThrownExpression`.
+
+**Validation:** 314 tests green (was 291, +23 new). `dart analyze` clean. `dart format` clean.
+
+**Learned:**
+- **Throw-as-statement vs throw-as-expression.** Dart's grammar treats `throw` as an expression, so `throw expr;` is technically an `ExpressionStatement` containing a `ThrowExpression`. Modeling it as its own statement kind required a single check at the top of the `ExpressionStatement` branch — small intrusion for a meaningful semantic separation. Buried throws (in `??`, ternaries) stay opaque inside the host expression's raw source, which is the right call: modeling expression internals is a separate (large) milestone.
+- **`CatchClauseNode` shape captures four variants in one class.** Initially I considered a sealed hierarchy with `OnClauseNode`, `CatchClauseNode`, `OnCatchClauseNode`. But all four variants share the same body-block shape and most fields are optional anyway — collapsing into one class with nullable fields is simpler and matches how the analyzer itself represents them. The pattern-match on which of `onKeywordSpan` / `catchKeywordSpan` is non-null tells you the variant.
+- **The `StatementBlock` foundation continues to scale.** This is the third milestone in a row that adds new control-flow shapes WITHOUT new statement-list ops. Try's three different body positions (try, each catch, finally) all reuse `addStatement`. The single architectural decision in M8.0b keeps paying compound interest.
+
+**Next:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d series (20 commits total). Then M8.0e — `switch` with pattern matching. This is the OutSystems-relevant one and deserves its own milestone because the pattern surface is large (constant patterns, `||` alternatives, `when` guards, object/record/list/map patterns, switch expressions, exhaustiveness).
 
 ### [2026-05-14] M8.0c — control flow: else-if + for + while
 **Worked on:** Second control-flow slice. Extended `IfStatementNode` to model else-if chains, and added two new statement kinds (`ForStatementNode`, `WhileStatementNode`). All three reuse the `StatementBlock` foundation from M8.0b — no new statement-list ops needed, just three new parser conversion functions and one new edit op.

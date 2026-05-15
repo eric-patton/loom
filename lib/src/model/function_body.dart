@@ -376,11 +376,195 @@ class WhileStatementNode extends StatementNode {
       '${body.statements.length} body-stmt(s))';
 }
 
-/// A statement kind not yet modeled — `switch`, `try`, `do/while`, etc.
-/// (and `if`/`for`/`while` with bare-statement bodies, which the M8.0c
-/// parser punts on). Preserves the source verbatim through
-/// any edit to surrounding statements; the kernel makes no guarantees
-/// about edits that would target opaque content.
+/// A modeled `do { body } while (cond);` statement.
+///
+/// Shape mirrors `WhileStatementNode` but with the condition evaluated
+/// AFTER the body. Only fully-braced bodies are modeled; a bare-statement
+/// body falls through to `OpaqueStatementNode`.
+class DoStatementNode extends StatementNode {
+  const DoStatementNode({
+    required this.doKeywordSpan,
+    required this.body,
+    required this.whileKeywordSpan,
+    required this.conditionSource,
+    required this.conditionSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `do` keyword token.
+  final SourceSpan doKeywordSpan;
+
+  /// The `{ ... }` block of the loop body.
+  final StatementBlock body;
+
+  /// Span of the trailing `while` keyword token.
+  final SourceSpan whileKeywordSpan;
+
+  /// The condition expression as raw source text (without surrounding
+  /// parens).
+  final String conditionSource;
+
+  /// Span of just the condition expression (excluding the `(` and `)`).
+  final SourceSpan conditionSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'DoStatementNode('
+      '${body.statements.length} body-stmt(s), '
+      'cond=$conditionSource)';
+}
+
+/// A modeled `try { body } [on T] [catch (e, s)] { handler } [finally { cleanup }]`
+/// statement.
+///
+/// Multi-clause: a `tryBlock`, zero or more `CatchClauseNode`s, and an
+/// optional `finallyBlock`. Per the Dart grammar, every try statement
+/// has at least one catch clause OR a finally clause.
+///
+/// Each block (try body, each catch handler, finally) is a full
+/// `StatementBlock` so the existing statement-list ops apply
+/// recursively without special-casing.
+class TryStatementNode extends StatementNode {
+  TryStatementNode({
+    required this.tryKeywordSpan,
+    required this.tryBlock,
+    required List<CatchClauseNode> catchClauses,
+    required this.finallyKeywordSpan,
+    required this.finallyBlock,
+    required this.sourceSpan,
+  }) : catchClauses = List.unmodifiable(catchClauses);
+
+  /// Span of the `try` keyword token.
+  final SourceSpan tryKeywordSpan;
+
+  /// The `{ ... }` block executed inside the try.
+  final StatementBlock tryBlock;
+
+  /// Each `on T` / `catch (e [, s])` clause in source order. May be
+  /// empty when only a `finally` clause is present.
+  final List<CatchClauseNode> catchClauses;
+
+  /// Span of the `finally` keyword token when present, null otherwise.
+  final SourceSpan? finallyKeywordSpan;
+
+  /// The `{ ... }` block for the `finally` clause, or null when absent.
+  final StatementBlock? finallyBlock;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'TryStatementNode('
+      '${tryBlock.statements.length} try-stmt(s), '
+      '${catchClauses.length} catch-clause(s)'
+      '${finallyBlock == null ? '' : ', finally'})';
+}
+
+/// A single `on T` / `catch (e [, s])` clause within a `TryStatementNode`.
+///
+/// Dart catch clauses come in three shapes:
+///   * `on SomeType { ... }` — type-only, no exception variable.
+///   * `catch (e) { ... }` — variable, no type.
+///   * `catch (e, s) { ... }` — exception + stack trace variables.
+///   * `on SomeType catch (e) { ... }` (and `... catch (e, s)`) — both.
+///
+/// The exception type is captured as raw source (no expression-internal
+/// structure modeled). Either or both of `exceptionType` / the catch
+/// variables may be absent.
+class CatchClauseNode {
+  const CatchClauseNode({
+    required this.onKeywordSpan,
+    required this.exceptionTypeSource,
+    required this.exceptionTypeSpan,
+    required this.catchKeywordSpan,
+    required this.exceptionParameterName,
+    required this.exceptionParameterSpan,
+    required this.stackTraceParameterName,
+    required this.stackTraceParameterSpan,
+    required this.body,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `on` keyword when present (type-typed catch clauses).
+  final SourceSpan? onKeywordSpan;
+
+  /// Raw source of the exception type (e.g. `FormatException`,
+  /// `MyError<int>`); null when the clause has no `on T` part.
+  final String? exceptionTypeSource;
+  final SourceSpan? exceptionTypeSpan;
+
+  /// Span of the `catch` keyword when present.
+  final SourceSpan? catchKeywordSpan;
+
+  /// Name of the exception variable (e.g. `e` in `catch (e, s)`), or
+  /// null when the clause has no `catch (...)` part.
+  final String? exceptionParameterName;
+  final SourceSpan? exceptionParameterSpan;
+
+  /// Name of the stack trace variable (the second `catch` parameter),
+  /// or null when absent.
+  final String? stackTraceParameterName;
+  final SourceSpan? stackTraceParameterSpan;
+
+  /// The `{ ... }` block for this catch's handler.
+  final StatementBlock body;
+
+  /// Full span of this catch clause from `on` / `catch` through its
+  /// closing brace.
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final parts = <String>[
+      if (exceptionTypeSource != null) 'on $exceptionTypeSource',
+      if (exceptionParameterName != null)
+        'catch ($exceptionParameterName'
+            '${stackTraceParameterName == null ? '' : ', '
+                '$stackTraceParameterName'})',
+    ];
+    return 'CatchClauseNode(${parts.join(' ')}, '
+        '${body.statements.length} stmt(s))';
+  }
+}
+
+/// A modeled `throw expr;` statement.
+///
+/// Detected when an `ExpressionStatement`'s expression is a
+/// `ThrowExpression`. A `throw` buried inside a larger expression
+/// (e.g. `cond ? value : throw Foo()`) stays opaque within the host
+/// `ExpressionStatementNode`'s `expressionSource`.
+class ThrowStatementNode extends StatementNode {
+  const ThrowStatementNode({
+    required this.throwKeywordSpan,
+    required this.expressionSource,
+    required this.expressionSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `throw` keyword token.
+  final SourceSpan throwKeywordSpan;
+
+  /// Raw source of the thrown expression (no surrounding semicolon).
+  /// Unlike `return`, throw always has an expression — the grammar
+  /// requires it.
+  final String expressionSource;
+  final SourceSpan expressionSpan;
+
+  /// Span of the full statement including `throw` and `;`.
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ThrowStatementNode($expressionSource)';
+}
+
+/// A statement kind not yet modeled — `switch`, etc. (and `if`/`for`/
+/// `while`/`do`/`try` with bare-statement bodies, which the M8.0d parser
+/// punts on). Preserves the source verbatim through any edit to
+/// surrounding statements; the kernel makes no guarantees about edits
+/// that would target opaque content.
 class OpaqueStatementNode extends StatementNode {
   const OpaqueStatementNode({
     required this.sourceText,

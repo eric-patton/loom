@@ -270,7 +270,7 @@ void use(int x) {}
       expect(forStmt.headerSource, equals('(final value in stream)'));
     });
 
-    test('do-while still falls through to opaque', () {
+    test('do-while is modeled in M8.0d (no longer opaque)', () {
       const source = '''
 void f() {
   var i = 0;
@@ -281,7 +281,164 @@ void f() {
 ''';
       final body = parseFunctionBody(source);
       expect(body.statements, hasLength(2));
+      expect(body.statements[1], isA<DoStatementNode>());
+    });
+  });
+
+  group('parseFunctionBody on function_body_with_do_while.dart (M8.0d)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File('test/fixtures/function_body_with_do_while.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('top-level body has 3 statements (var, do-while, return)', () {
+      expect(body.statements, hasLength(3));
+      expect(body.statements[0], isA<VariableDeclarationStatementNode>());
+      expect(body.statements[1], isA<DoStatementNode>());
+      expect(body.statements[2], isA<ReturnStatementNode>());
+    });
+
+    test('do-while body has one statement', () {
+      final doStmt = body.statements[1] as DoStatementNode;
+      expect(doStmt.body.statements, hasLength(1));
+      expect(doStmt.body.statements.first, isA<ExpressionStatementNode>());
+    });
+
+    test('do-while condition captured without parens', () {
+      final doStmt = body.statements[1] as DoStatementNode;
+      expect(doStmt.conditionSource, equals('n > floor'));
+    });
+
+    test('do-while bare body falls through to opaque', () {
+      const source = '''
+void f() {
+  var i = 0;
+  do i++; while (i < 3);
+}
+''';
+      final body = parseFunctionBody(source);
       expect(body.statements[1], isA<OpaqueStatementNode>());
+    });
+  });
+
+  group('parseFunctionBody on function_body_with_try.dart (M8.0d)', () {
+    late String source;
+    late FunctionBodyModel body;
+    late TryStatementNode tryStmt;
+
+    setUpAll(() {
+      source =
+          File('test/fixtures/function_body_with_try.dart').readAsStringSync();
+      body = parseFunctionBody(source);
+      tryStmt = body.statements[1] as TryStatementNode;
+    });
+
+    test('top-level body has 3 statements (var, try, return)', () {
+      expect(body.statements, hasLength(3));
+      expect(body.statements[0], isA<VariableDeclarationStatementNode>());
+      expect(body.statements[1], isA<TryStatementNode>());
+      expect(body.statements[2], isA<ReturnStatementNode>());
+    });
+
+    test('try block has one statement', () {
+      expect(tryStmt.tryBlock.statements, hasLength(1));
+      expect(tryStmt.tryBlock.statements.first, isA<ExpressionStatementNode>());
+    });
+
+    test('two catch clauses + a finally block', () {
+      expect(tryStmt.catchClauses, hasLength(2));
+      expect(tryStmt.finallyBlock, isNotNull);
+      expect(tryStmt.finallyBlock!.statements, hasLength(1));
+    });
+
+    test('first catch is on FormatException catch (e)', () {
+      final c0 = tryStmt.catchClauses[0];
+      expect(c0.exceptionTypeSource, equals('FormatException'));
+      expect(c0.exceptionParameterName, equals('e'));
+      expect(c0.stackTraceParameterName, isNull);
+    });
+
+    test('second catch is catch (e, s) without type', () {
+      final c1 = tryStmt.catchClauses[1];
+      expect(c1.exceptionTypeSource, isNull);
+      expect(c1.exceptionParameterName, equals('e'));
+      expect(c1.stackTraceParameterName, equals('s'));
+    });
+
+    test('try keyword + finally keyword spans line up with source', () {
+      final tryText = source.substring(
+        tryStmt.tryKeywordSpan.offset,
+        tryStmt.tryKeywordSpan.offset + tryStmt.tryKeywordSpan.length,
+      );
+      expect(tryText, equals('try'));
+      final finallyText = source.substring(
+        tryStmt.finallyKeywordSpan!.offset,
+        tryStmt.finallyKeywordSpan!.offset + tryStmt.finallyKeywordSpan!.length,
+      );
+      expect(finallyText, equals('finally'));
+    });
+
+    test('try-only (no catch, just finally) parses cleanly', () {
+      const fSource = '''
+void f() {
+  try {
+    work();
+  } finally {
+    cleanup();
+  }
+}
+void work() {}
+void cleanup() {}
+''';
+      final body = parseFunctionBody(fSource);
+      final t = body.statements.first as TryStatementNode;
+      expect(t.catchClauses, isEmpty);
+      expect(t.finallyBlock, isNotNull);
+    });
+  });
+
+  group('parseFunctionBody on function_body_with_throw.dart (M8.0d)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File('test/fixtures/function_body_with_throw.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('top-level body has 2 statements (if, return)', () {
+      expect(body.statements, hasLength(2));
+      expect(body.statements[0], isA<IfStatementNode>());
+      expect(body.statements[1], isA<ReturnStatementNode>());
+    });
+
+    test('throw inside the if then-block is a ThrowStatementNode', () {
+      final ifStmt = body.statements[0] as IfStatementNode;
+      expect(ifStmt.thenBlock.statements, hasLength(1));
+      final thrown = ifStmt.thenBlock.statements.first as ThrowStatementNode;
+      expect(
+        thrown.expressionSource,
+        equals("ArgumentError('n must be positive')"),
+      );
+    });
+
+    test('buried throw inside an expression stays an ExpressionStatement', () {
+      const source = '''
+void f(int? n) {
+  final v = n ?? (throw StateError('null'));
+  use(v);
+}
+void use(int x) {}
+''';
+      final body = parseFunctionBody(source);
+      // First statement: var v = ... (a variable decl, not a throw stmt).
+      expect(
+        body.statements.first,
+        isA<VariableDeclarationStatementNode>(),
+      );
     });
   });
 

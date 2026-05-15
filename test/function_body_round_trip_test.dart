@@ -379,4 +379,149 @@ void main() {
       expect(reparsedStmt.expressionSource, startsWith('persist('));
     });
   });
+
+  group('do-while + try + throw edits (M8.0d)', () {
+    test('idempotence on function_body_with_do_while.dart', () {
+      final source = _loadFixture('function_body_with_do_while.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(3));
+    });
+
+    test('idempotence on function_body_with_try.dart', () {
+      final source = _loadFixture('function_body_with_try.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(3));
+    });
+
+    test('idempotence on function_body_with_throw.dart', () {
+      final source = _loadFixture('function_body_with_throw.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(2));
+    });
+
+    test('changeDoWhileCondition rewrites the trailing condition', () {
+      final source = _loadFixture('function_body_with_do_while.dart');
+      final body = parseFunctionBody(source);
+      final doStmt = body.statements[1] as DoStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeDoWhileCondition(
+        statement: doStmt,
+        newConditionSource: 'n >= floor',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedDo = reparsed.statements[1] as DoStatementNode;
+      expect(reparsedDo.conditionSource, equals('n >= floor'));
+      // Body unchanged.
+      expect(reparsedDo.body.statements, hasLength(1));
+    });
+
+    test('addStatement recurses into a do-while body', () {
+      final source = _loadFixture('function_body_with_do_while.dart');
+      final body = parseFunctionBody(source);
+      final doStmt = body.statements[1] as DoStatementNode;
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: doStmt.body,
+        index: doStmt.body.statements.length,
+        newStatementSource: 'log(n);',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedDo = reparsed.statements[1] as DoStatementNode;
+      expect(reparsedDo.body.statements, hasLength(2));
+      expect(
+        reparsedDo.body.statements.last,
+        isA<ExpressionStatementNode>(),
+      );
+    });
+
+    test('addStatement recurses into a try block', () {
+      final source = _loadFixture('function_body_with_try.dart');
+      final body = parseFunctionBody(source);
+      final tryStmt = body.statements[1] as TryStatementNode;
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: tryStmt.tryBlock,
+        index: 0,
+        newStatementSource: 'log("attempting");',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedTry = reparsed.statements[1] as TryStatementNode;
+      expect(reparsedTry.tryBlock.statements, hasLength(2));
+      expect(
+        reparsedTry.tryBlock.statements.first,
+        isA<ExpressionStatementNode>(),
+      );
+    });
+
+    test('removeStatement removes a line from a catch clause body', () {
+      final source = _loadFixture('function_body_with_try.dart');
+      final body = parseFunctionBody(source);
+      final tryStmt = body.statements[1] as TryStatementNode;
+      final firstCatch = tryStmt.catchClauses[0];
+      expect(firstCatch.body.statements, hasLength(2));
+
+      // Drop the trailing `result = fallback;` assignment.
+      final lastStmt = firstCatch.body.statements.last;
+      final edit = FunctionBodyEditPlanner.removeStatement(
+        statement: lastStmt,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedTry = reparsed.statements[1] as TryStatementNode;
+      expect(reparsedTry.catchClauses[0].body.statements, hasLength(1));
+    });
+
+    test(
+        'changeWhileCondition-style edit on the finally block reuses '
+        'addStatement', () {
+      final source = _loadFixture('function_body_with_try.dart');
+      final body = parseFunctionBody(source);
+      final tryStmt = body.statements[1] as TryStatementNode;
+      expect(tryStmt.finallyBlock, isNotNull);
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: tryStmt.finallyBlock!,
+        index: tryStmt.finallyBlock!.statements.length,
+        newStatementSource: 'log("really done");',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedTry = reparsed.statements[1] as TryStatementNode;
+      expect(reparsedTry.finallyBlock!.statements, hasLength(2));
+    });
+
+    test('changeThrownExpression rewrites the thrown expression', () {
+      final source = _loadFixture('function_body_with_throw.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[0] as IfStatementNode;
+      final thrown = ifStmt.thenBlock.statements.first as ThrowStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeThrownExpression(
+        statement: thrown,
+        newExpressionSource: "StateError('non-positive: \$n')",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedIf = reparsed.statements[0] as IfStatementNode;
+      final reparsedThrow =
+          reparsedIf.thenBlock.statements.first as ThrowStatementNode;
+      expect(reparsedThrow.expressionSource, startsWith('StateError'));
+    });
+  });
 }
