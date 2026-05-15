@@ -1,5 +1,6 @@
 import '../parsing/directives_parser.dart';
 import 'directives.dart';
+import 'package_config.dart';
 
 /// A modeled view of a Dart project — multiple files and the import
 /// graph between them.
@@ -23,13 +24,21 @@ import 'directives.dart';
 class ProjectModel {
   ProjectModel._({
     required Map<String, ProjectFile> files,
+    required this.packageConfig,
   }) : files = Map.unmodifiable(files);
 
   /// Builds a `ProjectModel` from a map of file paths to source strings.
   ///
   /// Each file's directives are parsed at construction time. Parse
   /// diagnostics live on each `ProjectFile.directives.diagnostics`.
-  factory ProjectModel.fromSources(Map<String, String> sources) {
+  ///
+  /// Optionally pass a [packageConfig] to enable `package:` URI
+  /// resolution via `resolveImportUri`. Without one, `package:` URIs
+  /// can't be resolved (relative URIs still work).
+  factory ProjectModel.fromSources(
+    Map<String, String> sources, {
+    PackageConfig? packageConfig,
+  }) {
     final files = <String, ProjectFile>{};
     for (final entry in sources.entries) {
       files[entry.key] = ProjectFile(
@@ -38,11 +47,18 @@ class ProjectModel {
         directives: parseDirectives(entry.value),
       );
     }
-    return ProjectModel._(files: files);
+    return ProjectModel._(
+      files: files,
+      packageConfig: packageConfig ?? PackageConfig.empty(),
+    );
   }
 
   /// All files in the project keyed by path.
   final Map<String, ProjectFile> files;
+
+  /// Package configuration for `package:` URI resolution. Defaults
+  /// to `PackageConfig.empty()`.
+  final PackageConfig packageConfig;
 
   /// All files as an unordered iterable. Convenience.
   Iterable<ProjectFile> get allFiles => files.values;
@@ -89,6 +105,52 @@ class ProjectModel {
   /// has syntax errors the analyzer reported).
   Iterable<ProjectFile> get filesWithDiagnostics =>
       files.values.where((f) => f.directives.diagnostics.isNotEmpty);
+
+  /// Resolves an import URI string to its target URI.
+  ///
+  /// Resolution rules:
+  ///   * `dart:foo` URIs (SDK) — returned as-is.
+  ///   * `package:foo/bar.dart` URIs — looked up via [packageConfig].
+  ///     Returns null when the package is not in the config.
+  ///   * Relative URIs (e.g. `helper.dart`, `../utils.dart`) —
+  ///     resolved against [fromFile]'s URI. [fromFile] must be a
+  ///     valid URI string (the kernel's file paths SHOULD be).
+  ///   * Absolute URIs (e.g. `file:///...`) — returned as-is.
+  ///
+  /// Returns null when resolution fails (unknown package, malformed
+  /// URI). Throws nothing — failure is silent so callers can decide
+  /// how to handle missing dependencies.
+  Uri? resolveImportUri(String uriString, {required String fromFile}) {
+    final Uri uri;
+    try {
+      uri = Uri.parse(uriString);
+    } catch (_) {
+      return null;
+    }
+
+    if (uri.scheme == 'dart') {
+      // SDK URI — return as-is. No resolution to a file.
+      return uri;
+    }
+
+    if (uri.scheme == 'package') {
+      return packageConfig.resolvePackageUri(uri);
+    }
+
+    if (uri.hasAbsolutePath || uri.scheme.isNotEmpty) {
+      // Already absolute (`/foo/bar.dart` or `file:///...`).
+      return uri;
+    }
+
+    // Relative URI — resolve against fromFile.
+    final Uri fromUri;
+    try {
+      fromUri = Uri.parse(fromFile);
+    } catch (_) {
+      return null;
+    }
+    return fromUri.resolveUri(uri);
+  }
 
   @override
   String toString() => 'ProjectModel(${files.length} file(s))';
