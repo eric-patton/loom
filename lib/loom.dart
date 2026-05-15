@@ -29,6 +29,7 @@ export 'src/model/list_slot_style.dart';
 // RouteTreeModel + ParseDiagnostic + kPositionalOpaqueKeyPrefix.
 export 'src/model/node.dart';
 export 'src/model/node_path.dart';
+export 'src/model/project.dart';
 export 'src/model/property_value.dart';
 export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';
