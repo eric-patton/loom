@@ -8,8 +8,53 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.2 — for-loop header structure + expression internals (first slice)
-**Last touched:** 2026-05-15 — two bundled additions: (1) `ForStatementNode.header` now exposes the parenthesized for-header as a structured `ForLoopHeader` (sealed: `CStyleForHeader`, `ForEachHeader`, `OpaqueForLoopHeader` for pattern-for); (2) `ExpressionStatementNode.expression` exposes the expression as a structured `ExpressionNode` (sealed: `IdentifierExpression`, `LiteralExpression`, `MethodInvocationExpression`, `BinaryExpressionNode`, `OpaqueExpression`). 9 new edit ops.
+**Active milestone:** M8.3 — expressions everywhere + 6 new expression kinds
+**Last touched:** 2026-05-15 — two bundled extensions to M8.2's expression-internal start: (1) structured `ExpressionNode` views now surface in 6 more statement positions (variable initializer, return, throw, yield, if/while/do conditions); (2) 6 new expression kinds promoted out of opaque (assignment, conditional, await, prefix, postfix, property access). Renamed all expression node classes to use the `*Node` suffix for naming consistency.
+
+**M8.3 surface added (just now):**
+
+**Surfaced expression positions.** Structured `ExpressionNode` is now available at 6 more places alongside the existing raw-source fields:
+- `DeclaredVariable.initializerExpression` — `final x = expr;`.
+- `ReturnStatementNode.returnedExpression` — `return expr;`.
+- `ThrowStatementNode.thrownExpression` — `throw expr;`.
+- `YieldStatementNode.yieldedExpression` — `yield expr;` / `yield* expr;`.
+- `IfStatementNode.condition` — the if's parenthesized condition.
+- `WhileStatementNode.condition` / `DoStatementNode.condition` — loop conditions.
+
+Combined with M8.2's `ExpressionStatementNode.expression`, the kernel now exposes structured expressions in **7 of the most common expression-bearing positions**. Remaining positions (c-style for-header init/cond/updaters, pattern operands, switch subject, map keys) stay raw source — deferred to M8.4+.
+
+**Promoted 6 expression kinds.** Added to the sealed `ExpressionNode` hierarchy:
+- `AssignmentExpressionNode` — `a = b`, `a += b`, `a ??= b`, etc.
+- `ConditionalExpressionNode` — `cond ? then : else` (ternary).
+- `AwaitExpressionNode` — `await expr`.
+- `PrefixExpressionNode` — `!x`, `-x`, `~x`, `++x`, `--x`.
+- `PostfixExpressionNode` — `x++`, `x--`.
+- `PropertyAccessExpressionNode` — `target.property` (without invocation parens). Note: `x.y` where `x` is a simple identifier is analyzed as `PrefixedIdentifier` and stays opaque in M8.3.
+
+**Naming convention update.** All `ExpressionNode` subtypes now end in `*ExpressionNode`. Renamed M8.2's `IdentifierExpression` → `IdentifierExpressionNode`, `LiteralExpression` → `LiteralExpressionNode`, `MethodInvocationExpression` → `MethodInvocationExpressionNode`, `OpaqueExpression` → `OpaqueExpressionNode`. `BinaryExpressionNode` already had the suffix. Consistent with `*StatementNode`, `*PatternNode` elsewhere in the kernel and avoids clashes with analyzer types (analyzer has `BinaryExpression`, `AssignmentExpression`, `ConditionalExpression`, etc.).
+
+**Three new edit ops:**
+- `changeAssignmentOperator` — `=` → `+=`, etc.
+- `changePrefixOperator` — `!` → `-`, etc.
+- `renamePropertyAccess` — rename the property part of `target.property`.
+
+Existing M8.2 ops (`renameIdentifierExpression`, `changeBinaryOperator`, etc.) automatically work on the new positions since they take `ExpressionNode` arguments.
+
+**Validation:** 466 tests green (was 444, +22 new). New fixture `function_body_with_more_expressions.dart` exercises all 6 new positions and all 6 new expression kinds in realistic combinations (async function with await, ternary initializer, compound assignment, postfix in loop body, etc.).
+
+**Deliberately deferred (M8.4+ / M9+):**
+- More expression kinds: index (`a[b]`), instance creation (`Foo(args)`), cascade (`x..y..z`), list/set/map/record literals, function expressions (`() => x`), string interpolation, `as`/`is`, `throw` as expression, `PrefixedIdentifier`.
+- Argument list internals (currently `argumentsSource` is opaque text).
+- More positions: c-style for-header pieces, pattern operands, switch subject, map pattern keys, catch-clause type, etc.
+- Modeling pattern-for binding.
+- Symbol-aware rename for non-pattern locals + labels.
+- Bare-statement control-flow bodies.
+- Cross-file modeling (M9).
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a–h + M8.1 + M8.2 + M8.3 series (27 commits total). Expression coverage is now substantially deeper — most common positions and most common kinds are structured. M8.4+ would keep promoting expression kinds (index, instance creation, cascade) and surface more positions. M9 would pivot to cross-file modeling.
+
+**Note:** the M8.2 entry below is preserved.
 
 **M8.2 surface added (just now):**
 
@@ -451,7 +496,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0h** (shipped 2026-05-15) | Close pattern surface (14/14). 8 new pattern kinds: `ListPatternNode` (with rest elements), `MapPatternNode`, `RelationalPatternNode`, `NullCheckPatternNode`, `NullAssertPatternNode`, `CastPatternNode`, `ParenthesizedPatternNode`, `LogicalAndPatternNode` (flattened). Plus switch **expressions** surfaced on variable initializers and return expressions. Plus symbol-aware rename (`renameDeclaredPatternVariableWithReferences`) that rewrites pattern variable references across the case's guard + body via AST walking. 5 new edit ops. | Dart 3 pattern matching is now feature-complete at the structural level. Switch-expression decisions (value-producing multi-way matches) and symbol-aware pattern variable renames are first-class. |
 | **M8.1** (shipped 2026-05-15) | Close statement surface. 4 new statement kinds: `YieldStatementNode` (with `yield*` form), `BreakStatementNode`, `ContinueStatementNode`, `LabeledStatementNode` (+ `LabelNode`). Plus `moveStatement(block, fromIndex, toIndex)` — long-deferred reordering op that single-edit replaces the affected sub-range with the reordered content (inter-statement gaps preserved). 4 targeted edit ops: `changeYieldExpression`, `changeBreakLabel`, `changeContinueLabel`, `renameStatementLabel`. | Function-body **statement** surface is now feature-complete. Generators (`sync*`/`async*`) and explicit loop control are first-class; statement reordering closes the basic structural-edit toolkit. |
 | **M8.2** (shipped 2026-05-15) | For-loop header structure + expression internals (first slice). `ForStatementNode.header` exposes structured `ForLoopHeader` (c-style, for-each, opaque catch-all for pattern-for). `ExpressionStatementNode.expression` exposes 5 expression kinds (identifier, literal, method-invocation, binary, opaque). 9 new edit ops. | For-loop pieces (cond, updater, iterable, loop variable) are first-class. Expression-statement editing (rename calls, swap operators, etc.) starts to work for common shapes. |
-| M8.3+ | Expand expression modeling to OTHER positions (variable initializers, return expressions, if/while conditions, pattern operands, etc.). Promote more expression kinds out of opaque (assignment, conditional, await, cast, is, property access, instance creation, collection literals, function expressions). Argument-list internals. Symbol-aware rename for non-pattern locals + labels. Modeling pattern-for binding. Adding/removing/reordering pattern fields, list/map entries, logical-or/logical-and operands. Bare-statement control-flow bodies. Switch expressions deeply nested in other expressions. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.3** (shipped 2026-05-15) | Structured `ExpressionNode` surfaced at 6 more positions (variable initializer, return, throw, yield, if/while/do conditions) — 7 total combined with M8.2. Plus 6 new expression kinds: assignment, conditional, await, prefix, postfix, property access. Naming convention: all expression subtypes now use `*ExpressionNode` suffix. 3 new edit ops. | Most common expression-bearing positions are now structured. Common edits (rename function call, swap operator, change return expression, edit ternary branch) all flow through the same `ExpressionNode` API. |
+| M8.4+ | More expression kinds (index, instance creation, cascade, list/set/map/record literals, function expressions, string interpolation, `as`/`is`, `throw` as expression, prefixed identifier). Argument-list internals. More positions: c-style for-header pieces, pattern operands, switch subject, map pattern keys, catch-clause type. Modeling pattern-for binding. Symbol-aware rename for non-pattern locals + labels. Adding/removing/reordering pattern fields, list/map entries, logical-or/logical-and operands. Bare-statement control-flow bodies. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -534,6 +580,61 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.3 — expressions everywhere + 6 new expression kinds
+**Worked on:** Extended M8.2's expression-internal slice on two axes — surface the structured `ExpressionNode` view in more statement positions AND promote more expression kinds out of opaque. Plus a kernel-wide naming cleanup: all expression subtypes now use the `*ExpressionNode` suffix consistently.
+
+**Naming cleanup first.** M8.2 shipped with inconsistent naming — `BinaryExpressionNode` had the suffix (to avoid clashing with analyzer's `BinaryExpression`) but `IdentifierExpression`, `LiteralExpression`, `MethodInvocationExpression`, `OpaqueExpression` didn't. With M8.3 adding 5 more kinds that DO clash with analyzer types (`AssignmentExpression`, `ConditionalExpression`, `AwaitExpression`, `PrefixExpression`, `PostfixExpression`), the inconsistency would have gotten worse. Bulk-renamed all expression subtypes to use `*ExpressionNode`. PowerShell regex did the heavy lifting on the test files; the planner needed a small manual fix where `renameIdentifierExpression` (the method) got incorrectly renamed to `renameIdentifierExpressionNode`. Easy spot-fix.
+
+**Six positions surfaced.** Added `*Expression` fields alongside the existing `*Source` raw text on:
+- `DeclaredVariable.initializerExpression`
+- `ReturnStatementNode.returnedExpression`
+- `ThrowStatementNode.thrownExpression`
+- `YieldStatementNode.yieldedExpression`
+- `IfStatementNode.condition`
+- `WhileStatementNode.condition`
+- `DoStatementNode.condition`
+
+The backward-compat pattern continues: existing callers using `expressionSource` / `conditionSource` keep working; new callers walk the structured view. M7.2's `parameters` + `parametersSource` was the original template; this is the 6th time it's been applied.
+
+**Six expression kinds promoted.** Each is a small structural addition:
+- `AssignmentExpressionNode` — `a = b`, `a += b`. Recursive LHS and RHS.
+- `ConditionalExpressionNode` — ternary `cond ? then : else`. Three recursive sub-expressions.
+- `AwaitExpressionNode` — keyword span + recursive expression.
+- `PrefixExpressionNode` — operator + recursive operand.
+- `PostfixExpressionNode` — recursive operand + operator.
+- `PropertyAccessExpressionNode` — target + operator + property name.
+
+Analyzer trivia: `x.y` where `x` is a simple identifier is analyzed as `PrefixedIdentifier`, NOT `PropertyAccess`. The kernel only models `PropertyAccess` (used for `f().y`, `x.method().y`, etc.). `PrefixedIdentifier` stays opaque — modeling it would require a 7th expression kind, deferred to M8.4+.
+
+**Why these 6, not others?** They're the most common in real Dart code:
+- Assignment is everywhere
+- Ternary is the most common conditional expression
+- Await is heavy in async code
+- Prefix `-x` / `!x` are common
+- Postfix `i++` is universal in for-loops
+- PropertyAccess covers method chains
+
+Index (`a[b]`), instance creation (`Foo(args)`), cascade (`x..y..z`), collection literals, string interpolation — all are common but deferred to keep M8.3 bounded.
+
+**Three new edit ops.** Just the ones that need dedicated logic — `changeAssignmentOperator`, `changePrefixOperator`, `renamePropertyAccess`. The rest of the new expression kinds compose with existing ops (`changeBinaryOperator` works on the right-hand side of an assignment; `renameIdentifierExpression` works on any identifier including inside an await or ternary; etc.).
+
+**Validation:** 466 tests green (was 444, +22 new). The new fixture `function_body_with_more_expressions.dart` is a 15-statement async function exercising all 6 new positions AND all 6 new expression kinds in combinations.
+
+**Learned:**
+- **Backward-compat field-addition pattern is now load-bearing.** Six times in a row I've added a structured field alongside an existing `*Source` field. The pattern is stable: `*Source: String` for verbatim text, `*Expression: ExpressionNode` (or similar) for structured. Callers pick which they need. Should consider documenting this as a kernel-wide convention.
+- **Naming consistency matters more after several milestones.** M8.2's split naming (`*ExpressionNode` for clashes, `*Expression` for non-clashes) created friction in M8.3 — adding 5 new clashing kinds would have left only `IdentifierExpression`, `LiteralExpression`, `MethodInvocationExpression`, `OpaqueExpression` unsuffixed. Cleaner to rename everything to `*ExpressionNode` once. Bulk regex + manual spot-fix did the work in minutes.
+- **PowerShell's `-replace` with `\b` word boundary is sufficient for these renames.** I worried that `IdentifierExpression\b` would match in too many places (e.g. inside `IdentifierExpressionNode`), but `\b` correctly anchors at word boundaries — `IdentifierExpressionNode` doesn't have a word boundary BEFORE `Node`. The few false positives I caught manually (the method `renameIdentifierExpression`) were easy.
+
+**Expression coverage so far:**
+- Modeled (11): identifier, literal, method invocation, binary, opaque + assignment, conditional, await, prefix, postfix, property access.
+- Opaque: prefixed identifier, index, instance creation, cascade, list/set/map/record literals, function expressions, string interpolation, `as`, `is`, `throw` expression, etc.
+
+**Surfaced positions (7):** expression statement, variable initializer, return, throw, yield, if/while/do conditions.
+
+**Unsurfaced positions:** c-style for-header pieces, switch subject, pattern operands, map pattern keys, catch-clause type. (All still raw source.)
+
+**Next:** Eric review of M6 + M7 + M8.0a–h + M8.1 + M8.2 + M8.3 series (27 commits total). M8.4 would keep promoting expression kinds and surfacing positions. M9 would pivot to cross-file modeling (imports/exports/multi-file). The choice depends on what unlocks more value for the OutSystems trajectory — deeper expression modeling vs. higher-level whole-app visibility.
 
 ### [2026-05-15] M8.2 — for-loop header + expression internals (first slice)
 **Worked on:** Two opaque-text surfaces inside function bodies converted to structured views. (1) For-loop header — the parenthesized `(...)` after `for` was raw text in M8.0c; M8.2 surfaces a sealed `ForLoopHeader` covering c-style and for-each shapes. (2) Expression internals — the contents of `expressionSource` on expression statements were raw text from M8.0a onward; M8.2 surfaces a sealed `ExpressionNode` covering five common kinds.

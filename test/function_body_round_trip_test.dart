@@ -1278,7 +1278,7 @@ String f(Object o) {
       final source = _loadFixture('function_body_with_expressions.dart');
       final body = parseFunctionBody(source);
       final stmt = body.statements[0] as ExpressionStatementNode;
-      final m = stmt.expression as MethodInvocationExpression;
+      final m = stmt.expression as MethodInvocationExpressionNode;
 
       final edit = FunctionBodyEditPlanner.changeMethodInvocationName(
         expression: m,
@@ -1288,7 +1288,8 @@ String f(Object o) {
 
       final reparsed = parseFunctionBody(newSource);
       final reparsedStmt = reparsed.statements[0] as ExpressionStatementNode;
-      final reparsedM = reparsedStmt.expression as MethodInvocationExpression;
+      final reparsedM =
+          reparsedStmt.expression as MethodInvocationExpressionNode;
       expect(reparsedM.methodName, equals('log'));
     });
 
@@ -1296,7 +1297,7 @@ String f(Object o) {
       final source = _loadFixture('function_body_with_expressions.dart');
       final body = parseFunctionBody(source);
       final stmt = body.statements[0] as ExpressionStatementNode;
-      final m = stmt.expression as MethodInvocationExpression;
+      final m = stmt.expression as MethodInvocationExpressionNode;
 
       final edit = FunctionBodyEditPlanner.changeMethodInvocationArguments(
         expression: m,
@@ -1306,15 +1307,16 @@ String f(Object o) {
 
       final reparsed = parseFunctionBody(newSource);
       final reparsedStmt = reparsed.statements[0] as ExpressionStatementNode;
-      final reparsedM = reparsedStmt.expression as MethodInvocationExpression;
+      final reparsedM =
+          reparsedStmt.expression as MethodInvocationExpressionNode;
       expect(reparsedM.argumentsSource, equals('(x, 42)'));
     });
 
-    test('renameIdentifierExpression: bare `x;` → bare `value;`', () {
+    test('renameIdentifierExpressionNode: bare `x;` → bare `value;`', () {
       final source = _loadFixture('function_body_with_expressions.dart');
       final body = parseFunctionBody(source);
       final stmt = body.statements[4] as ExpressionStatementNode;
-      final id = stmt.expression as IdentifierExpression;
+      final id = stmt.expression as IdentifierExpressionNode;
 
       final edit = FunctionBodyEditPlanner.renameIdentifierExpression(
         expression: id,
@@ -1326,7 +1328,7 @@ String f(Object o) {
       final reparsed = parseFunctionBody(newSource);
       final reparsedStmt = reparsed.statements[4] as ExpressionStatementNode;
       expect(
-        (reparsedStmt.expression as IdentifierExpression).name,
+        (reparsedStmt.expression as IdentifierExpressionNode).name,
         equals('value'),
       );
     });
@@ -1374,6 +1376,150 @@ void f(int x) {
       expect(reparsedOuter.operator, equals('+'));
       final reparsedInner = reparsedOuter.leftOperand as BinaryExpressionNode;
       expect(reparsedInner.operator, equals('*'));
+    });
+  });
+
+  group('M8.3 — new expression kind edits + structured positions', () {
+    test('idempotence on function_body_with_more_expressions.dart', () {
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('changeAssignmentOperator: += → -=', () {
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[1] as IfStatementNode;
+      final inner = ifStmt.thenBlock.statements[0] as ExpressionStatementNode;
+      final asn = inner.expression as AssignmentExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeAssignmentOperator(
+        expression: asn,
+        newOperator: '-=',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedAsn = ((reparsed.statements[1] as IfStatementNode)
+              .thenBlock
+              .statements[0] as ExpressionStatementNode)
+          .expression as AssignmentExpressionNode;
+      expect(reparsedAsn.operator, equals('-='));
+    });
+
+    test('changePrefixOperator: - → ~', () {
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[6] as VariableDeclarationStatementNode;
+      final pre =
+          v.variables.first.initializerExpression! as PrefixExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changePrefixOperator(
+        expression: pre,
+        newOperator: '~',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedV =
+          reparsed.statements[6] as VariableDeclarationStatementNode;
+      final reparsedPre = reparsedV.variables.first.initializerExpression!
+          as PrefixExpressionNode;
+      expect(reparsedPre.operator, equals('~'));
+    });
+
+    test('renamePropertyAccess rewrites the property name', () {
+      // Analyzer represents `x.y` where x is a SimpleIdentifier as
+      // PrefixedIdentifier, not PropertyAccess. To get a real
+      // PropertyAccess we need a non-identifier target.
+      const source = '''
+void f() {
+  build().foo;
+  print(0);
+}
+Box build() => Box();
+class Box {
+  int foo = 0;
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final pa = stmt.expression as PropertyAccessExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.renamePropertyAccess(
+        expression: pa,
+        newPropertyName: 'bar',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      expect(newSource, contains('build().bar;'));
+    });
+
+    test('changeBinaryOperator works on a structured if-condition', () {
+      // The if-statement's condition is now structurally accessible
+      // via IfStatementNode.condition. We can edit it directly.
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[1] as IfStatementNode;
+      final cond = ifStmt.condition as BinaryExpressionNode;
+      expect(cond.operator, equals('>'));
+
+      final edit = FunctionBodyEditPlanner.changeBinaryOperator(
+        expression: cond,
+        newOperator: '>=',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedIf = reparsed.statements[1] as IfStatementNode;
+      final reparsedCond = reparsedIf.condition as BinaryExpressionNode;
+      expect(reparsedCond.operator, equals('>='));
+    });
+
+    test('renameIdentifierExpression works on a return expression', () {
+      const source = '''
+int f(int x) {
+  return x;
+}
+''';
+      final body = parseFunctionBody(source);
+      final ret = body.statements[0] as ReturnStatementNode;
+      final id = ret.returnedExpression! as IdentifierExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.renameIdentifierExpression(
+        expression: id,
+        newName: 'value',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('return value;'));
+    });
+
+    test('conditional thenExpression accessible via structured init', () {
+      // `final tag = n > 0 ? 'pos' : 'neg';`
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final cond =
+          v.variables.first.initializerExpression! as ConditionalExpressionNode;
+      final then = cond.thenExpression as LiteralExpressionNode;
+      expect(then.source, equals("'pos'"));
+    });
+
+    test('await expression: inner method-invocation is structurally edited',
+        () {
+      // `final result = await fetch();` — rename `fetch` to `pull`.
+      final source = _loadFixture('function_body_with_more_expressions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[5] as VariableDeclarationStatementNode;
+      final aw =
+          v.variables.first.initializerExpression! as AwaitExpressionNode;
+      final m = aw.expression as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeMethodInvocationName(
+        expression: m,
+        newMethodName: 'pull',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('await pull();'));
     });
   });
 

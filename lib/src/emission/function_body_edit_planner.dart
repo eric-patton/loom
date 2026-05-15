@@ -943,11 +943,11 @@ class FunctionBodyEditPlanner {
 
   // ----------------------- Expression ops (M8.2) -----------------
 
-  /// Renames a simple `IdentifierExpression` — e.g. `x` → `value`.
+  /// Renames a simple `IdentifierExpressionNode` — e.g. `x` → `value`.
   /// Use `renameDeclaredPatternVariableWithReferences` (M8.0h) for
   /// the symbol-aware variant inside switch cases.
   static SourceEdit renameIdentifierExpression({
-    required IdentifierExpression expression,
+    required IdentifierExpressionNode expression,
     required String newName,
   }) {
     return SourceEdit(
@@ -972,11 +972,11 @@ class FunctionBodyEditPlanner {
     );
   }
 
-  /// Renames the called method on a `MethodInvocationExpression` —
+  /// Renames the called method on a `MethodInvocationExpressionNode` —
   /// e.g. `print(x)` → `log(x)`, `x.foo(y)` → `x.bar(y)`. The target
   /// (if any) and arguments are preserved verbatim.
   static SourceEdit changeMethodInvocationName({
-    required MethodInvocationExpression expression,
+    required MethodInvocationExpressionNode expression,
     required String newMethodName,
   }) {
     return SourceEdit(
@@ -986,17 +986,60 @@ class FunctionBodyEditPlanner {
     );
   }
 
-  /// Replaces the argument list of a `MethodInvocationExpression` —
+  /// Replaces the argument list of a `MethodInvocationExpressionNode` —
   /// e.g. `print(x)` → `print(x, y)`. The new source MUST include
   /// the surrounding parens.
   static SourceEdit changeMethodInvocationArguments({
-    required MethodInvocationExpression expression,
+    required MethodInvocationExpressionNode expression,
     required String newArgumentsSource,
   }) {
     return SourceEdit(
       offset: expression.argumentsSpan.offset,
       length: expression.argumentsSpan.length,
       replacement: newArgumentsSource,
+    );
+  }
+
+  // ----------------------- Expression ops (M8.3) -----------------
+
+  /// Changes the operator of an `AssignmentExpressionNode` — e.g.
+  /// `a = b` → `a += b`. Operator must be a valid Dart assignment
+  /// operator (`=`, `+=`, `-=`, `*=`, `??=`, etc.).
+  static SourceEdit changeAssignmentOperator({
+    required AssignmentExpressionNode expression,
+    required String newOperator,
+  }) {
+    return SourceEdit(
+      offset: expression.operatorSpan.offset,
+      length: expression.operatorSpan.length,
+      replacement: newOperator,
+    );
+  }
+
+  /// Changes the operator of a `PrefixExpressionNode` — e.g.
+  /// `!x` → `-x`. Operator must be a valid Dart prefix operator
+  /// (`!`, `-`, `~`, `++`, `--`).
+  static SourceEdit changePrefixOperator({
+    required PrefixExpressionNode expression,
+    required String newOperator,
+  }) {
+    return SourceEdit(
+      offset: expression.operatorSpan.offset,
+      length: expression.operatorSpan.length,
+      replacement: newOperator,
+    );
+  }
+
+  /// Renames the property of a `PropertyAccessExpressionNode` —
+  /// e.g. `x.foo` → `x.bar`. The target and operator are preserved.
+  static SourceEdit renamePropertyAccess({
+    required PropertyAccessExpressionNode expression,
+    required String newPropertyName,
+  }) {
+    return SourceEdit(
+      offset: expression.propertyNameSpan.offset,
+      length: expression.propertyNameSpan.length,
+      replacement: newPropertyName,
     );
   }
 

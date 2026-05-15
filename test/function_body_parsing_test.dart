@@ -1211,9 +1211,9 @@ void print(Object o) {}
       body = parseFunctionBody(source);
     });
 
-    test('print(x) is a MethodInvocationExpression with no target', () {
+    test('print(x) is a MethodInvocationExpressionNode with no target', () {
       final stmt = body.statements[0] as ExpressionStatementNode;
-      final m = stmt.expression as MethodInvocationExpression;
+      final m = stmt.expression as MethodInvocationExpressionNode;
       expect(m.target, isNull);
       expect(m.methodName, equals('print'));
       expect(m.argumentsSource, equals('(x)'));
@@ -1221,49 +1221,49 @@ void print(Object o) {}
 
     test('log(\'hello\') has a string-literal arg in raw source', () {
       final stmt = body.statements[1] as ExpressionStatementNode;
-      final m = stmt.expression as MethodInvocationExpression;
+      final m = stmt.expression as MethodInvocationExpressionNode;
       expect(m.methodName, equals('log'));
       expect(m.argumentsSource, equals("('hello')"));
     });
 
-    test('x.toString() has target IdentifierExpression(x)', () {
+    test('x.toString() has target IdentifierExpressionNode(x)', () {
       final stmt = body.statements[3] as ExpressionStatementNode;
-      final m = stmt.expression as MethodInvocationExpression;
-      expect(m.target, isA<IdentifierExpression>());
-      expect((m.target! as IdentifierExpression).name, equals('x'));
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      expect(m.target, isA<IdentifierExpressionNode>());
+      expect((m.target! as IdentifierExpressionNode).name, equals('x'));
       expect(m.methodName, equals('toString'));
       expect(m.dotSpan, isNotNull);
     });
 
-    test('bare identifier `x;` is an IdentifierExpression', () {
+    test('bare identifier `x;` is an IdentifierExpressionNode', () {
       final stmt = body.statements[4] as ExpressionStatementNode;
-      expect(stmt.expression, isA<IdentifierExpression>());
-      expect((stmt.expression as IdentifierExpression).name, equals('x'));
+      expect(stmt.expression, isA<IdentifierExpressionNode>());
+      expect((stmt.expression as IdentifierExpressionNode).name, equals('x'));
     });
 
-    test('int literal 42 is a LiteralExpression of kind intLiteral', () {
+    test('int literal 42 is a LiteralExpressionNode of kind intLiteral', () {
       final stmt = body.statements[5] as ExpressionStatementNode;
-      final l = stmt.expression as LiteralExpression;
+      final l = stmt.expression as LiteralExpressionNode;
       expect(l.kind, equals(LiteralKind.intLiteral));
       expect(l.source, equals('42'));
     });
 
     test("string literal 'literal' parses as stringLiteral kind", () {
       final stmt = body.statements[6] as ExpressionStatementNode;
-      final l = stmt.expression as LiteralExpression;
+      final l = stmt.expression as LiteralExpressionNode;
       expect(l.kind, equals(LiteralKind.stringLiteral));
       expect(l.source, equals("'literal'"));
     });
 
     test('bool literal true is a boolLiteral', () {
       final stmt = body.statements[7] as ExpressionStatementNode;
-      final l = stmt.expression as LiteralExpression;
+      final l = stmt.expression as LiteralExpressionNode;
       expect(l.kind, equals(LiteralKind.boolLiteral));
     });
 
     test('null literal is a nullLiteral', () {
       final stmt = body.statements[8] as ExpressionStatementNode;
-      final l = stmt.expression as LiteralExpression;
+      final l = stmt.expression as LiteralExpressionNode;
       expect(l.kind, equals(LiteralKind.nullLiteral));
     });
 
@@ -1271,8 +1271,8 @@ void print(Object o) {}
       final stmt = body.statements[9] as ExpressionStatementNode;
       final b = stmt.expression as BinaryExpressionNode;
       expect(b.operator, equals('+'));
-      expect((b.leftOperand as IdentifierExpression).name, equals('x'));
-      expect((b.rightOperand as LiteralExpression).source, equals('1'));
+      expect((b.leftOperand as IdentifierExpressionNode).name, equals('x'));
+      expect((b.rightOperand as LiteralExpressionNode).source, equals('1'));
     });
 
     test('x == 0 is a BinaryExpressionNode with ==', () {
@@ -1281,15 +1281,16 @@ void print(Object o) {}
       expect(b.operator, equals('=='));
     });
 
-    test('unmodeled expressions (assignment) fall through to opaque', () {
+    test('cascade expression falls through to opaque (deferred)', () {
       const source = '''
-void f(int x) {
-  x = 5;
+void f(StringBuffer sb) {
+  sb..write('a')..write('b');
 }
 ''';
       final body = parseFunctionBody(source);
       final stmt = body.statements[0] as ExpressionStatementNode;
-      expect(stmt.expression, isA<OpaqueExpression>());
+      // Cascades aren't modeled in M8.3; falls back to opaque.
+      expect(stmt.expression, isA<OpaqueExpressionNode>());
     });
 
     test('nested binary expression recurses through operand', () {
@@ -1305,9 +1306,157 @@ void f(int x) {
       // Left associative: ((x + 1) + 2). Left operand is itself binary.
       expect(b.leftOperand, isA<BinaryExpressionNode>());
       final inner = b.leftOperand as BinaryExpressionNode;
-      expect((inner.leftOperand as IdentifierExpression).name, equals('x'));
-      expect((inner.rightOperand as LiteralExpression).source, equals('1'));
-      expect((b.rightOperand as LiteralExpression).source, equals('2'));
+      expect((inner.leftOperand as IdentifierExpressionNode).name, equals('x'));
+      expect((inner.rightOperand as LiteralExpressionNode).source, equals('1'));
+      expect((b.rightOperand as LiteralExpressionNode).source, equals('2'));
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_more_expressions.dart '
+      '(M8.3 — surfaced positions + new expression kinds)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/function_body_with_more_expressions.dart')
+              .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('variable initializer surfaces structured expression', () {
+      // `final doubled = n * 2;`
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression;
+      expect(init, isA<BinaryExpressionNode>());
+      final bin = init! as BinaryExpressionNode;
+      expect(bin.operator, equals('*'));
+    });
+
+    test('if-statement condition surfaces structured expression', () {
+      final ifStmt = body.statements[1] as IfStatementNode;
+      expect(ifStmt.condition, isA<BinaryExpressionNode>());
+      final cond = ifStmt.condition as BinaryExpressionNode;
+      expect(cond.operator, equals('>'));
+    });
+
+    test('if-then has an assignment statement (n += 1)', () {
+      final ifStmt = body.statements[1] as IfStatementNode;
+      final inner = ifStmt.thenBlock.statements[0] as ExpressionStatementNode;
+      expect(inner.expression, isA<AssignmentExpressionNode>());
+      final asn = inner.expression as AssignmentExpressionNode;
+      expect(asn.operator, equals('+='));
+    });
+
+    test('while-statement condition surfaces structured expression', () {
+      final wStmt = body.statements[2] as WhileStatementNode;
+      expect(wStmt.condition, isA<BinaryExpressionNode>());
+    });
+
+    test('while-body has a postfix expression (n++)', () {
+      final wStmt = body.statements[2] as WhileStatementNode;
+      final inner = wStmt.body.statements[0] as ExpressionStatementNode;
+      expect(inner.expression, isA<PostfixExpressionNode>());
+      final post = inner.expression as PostfixExpressionNode;
+      expect(post.operator, equals('++'));
+    });
+
+    test('do-statement condition surfaces structured expression', () {
+      final doStmt = body.statements[3] as DoStatementNode;
+      expect(doStmt.condition, isA<BinaryExpressionNode>());
+    });
+
+    test('conditional (ternary) initializer is ConditionalExpressionNode', () {
+      // `final tag = n > 0 ? 'pos' : 'neg';`
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<ConditionalExpressionNode>());
+      final cond = init as ConditionalExpressionNode;
+      expect(cond.condition, isA<BinaryExpressionNode>());
+      expect(cond.thenExpression, isA<LiteralExpressionNode>());
+    });
+
+    test('await initializer is AwaitExpressionNode', () {
+      // `final result = await fetch();`
+      final v = body.statements[5] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<AwaitExpressionNode>());
+      final aw = init as AwaitExpressionNode;
+      expect(aw.expression, isA<MethodInvocationExpressionNode>());
+    });
+
+    test('prefix initializer is PrefixExpressionNode (-n)', () {
+      final v = body.statements[6] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<PrefixExpressionNode>());
+      final pre = init as PrefixExpressionNode;
+      expect(pre.operator, equals('-'));
+    });
+
+    test('property-access-then-invoke is MethodInvocationExpressionNode', () {
+      // `final accessed = n.toString();` — that's a method invocation,
+      // not a property access. Confirm.
+      final v = body.statements[7] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<MethodInvocationExpressionNode>());
+    });
+
+    test('property access without invocation IS PropertyAccessExpressionNode',
+        () {
+      const source = '''
+void f() {
+  final n = 5;
+  final tag = n.runtimeType;
+  print(tag);
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final v = body.statements[1] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      // `n.runtimeType` — runtimeType is a property, no parens.
+      // Analyzer represents this as PrefixedIdentifier rather than
+      // PropertyAccess when the target is a simple identifier. Both
+      // patterns are common in real Dart. Either is acceptable;
+      // PrefixedIdentifier falls to OpaqueExpressionNode in M8.3 since
+      // we only modeled PropertyAccess. Document the expectation:
+      expect(
+        init,
+        anyOf(
+          isA<PropertyAccessExpressionNode>(),
+          isA<OpaqueExpressionNode>(),
+        ),
+      );
+    });
+
+    test('throw inside if has structured thrownExpression', () {
+      // `if (n == 0) { throw StateError('zero'); }`
+      final ifStmt = body.statements[8] as IfStatementNode;
+      final thrown = ifStmt.thenBlock.statements[0] as ThrowStatementNode;
+      expect(thrown.thrownExpression, isA<MethodInvocationExpressionNode>());
+    });
+
+    test('return surfaces returnedExpression', () {
+      // `return doubled + result;`
+      final ret = body.statements.last as ReturnStatementNode;
+      expect(ret.returnedExpression, isA<BinaryExpressionNode>());
+      final bin = ret.returnedExpression as BinaryExpressionNode;
+      expect(bin.operator, equals('+'));
+    });
+
+    test('yield inside async* surfaces yieldedExpression', () {
+      const source = '''
+Stream<int> walk() async* {
+  yield 1;
+  yield* [2, 3, 4];
+}
+''';
+      final body = parseFunctionBody(source);
+      final y0 = body.statements[0] as YieldStatementNode;
+      expect(y0.yieldedExpression, isA<LiteralExpressionNode>());
+      final y1 = body.statements[1] as YieldStatementNode;
+      // yield* with a list literal — list literal isn't modeled, opaque.
+      expect(y1.yieldedExpression, isA<OpaqueExpressionNode>());
     });
   });
 

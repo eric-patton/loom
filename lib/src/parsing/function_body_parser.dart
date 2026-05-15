@@ -105,6 +105,7 @@ StatementNode _convertStatement(Statement stmt, String source) {
         expressionSpan:
             SourceSpan(offset: thrown.offset, length: thrown.length),
         sourceSpan: span,
+        thrownExpression: _convertExpression(thrown, source),
       );
     }
     final exprSpan = SourceSpan(offset: expr.offset, length: expr.length);
@@ -137,6 +138,7 @@ StatementNode _convertStatement(Statement stmt, String source) {
       ),
       expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
       sourceSpan: span,
+      returnedExpression: _convertExpression(expr, source),
       switchExpression: expr is SwitchExpression
           ? _convertSwitchExpression(expr, source)
           : null,
@@ -187,6 +189,7 @@ StatementNode _convertStatement(Statement stmt, String source) {
       ),
       expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
       sourceSpan: span,
+      yieldedExpression: _convertExpression(expr, source),
     );
   }
   if (stmt is BreakStatement) {
@@ -307,6 +310,7 @@ IfStatementNode? _tryConvertIfStatement(
     ),
     conditionSource: conditionSource,
     conditionSpan: conditionSpan,
+    condition: _convertExpression(condition, source),
     thenBlock: _convertBlock(thenStmt, source),
     elseKeywordSpan: stmt.elseKeyword == null
         ? null
@@ -543,6 +547,7 @@ DoStatementNode? _tryConvertDoStatement(
     ),
     conditionSource: conditionSource,
     conditionSpan: conditionSpan,
+    condition: _convertExpression(condition, source),
     sourceSpan: span,
   );
 }
@@ -836,6 +841,7 @@ WhileStatementNode? _tryConvertWhileStatement(
     ),
     conditionSource: conditionSource,
     conditionSpan: conditionSpan,
+    condition: _convertExpression(condition, source),
     body: _convertBlock(body, source),
     sourceSpan: span,
   );
@@ -870,6 +876,9 @@ VariableDeclarationStatementNode _convertVariableDeclarationStatement(
                 offset: v.initializer!.offset,
                 length: v.initializer!.length,
               ),
+        initializerExpression: v.initializer == null
+            ? null
+            : _convertExpression(v.initializer!, source),
         initializerSwitchExpression: v.initializer is SwitchExpression
             ? _convertSwitchExpression(
                 v.initializer! as SwitchExpression, source)
@@ -1409,48 +1418,46 @@ SwitchExpressionNode _convertSwitchExpression(
 }
 
 /// Converts an analyzer `Expression` into a kernel `ExpressionNode`.
-/// Total: returns `OpaqueExpression` for kinds not modeled in M8.2.
+/// Total: returns `OpaqueExpressionNode` for kinds not modeled in
+/// M8.2/M8.3.
 ExpressionNode _convertExpression(Expression expr, String source) {
   final span = SourceSpan(offset: expr.offset, length: expr.length);
   final raw = source.substring(expr.offset, expr.offset + expr.length);
 
   if (expr is SimpleIdentifier) {
-    return IdentifierExpression(
-      name: expr.name,
-      sourceSpan: span,
-    );
+    return IdentifierExpressionNode(name: expr.name, sourceSpan: span);
   }
 
   if (expr is IntegerLiteral) {
-    return LiteralExpression(
+    return LiteralExpressionNode(
       kind: LiteralKind.intLiteral,
       source: raw,
       sourceSpan: span,
     );
   }
   if (expr is DoubleLiteral) {
-    return LiteralExpression(
+    return LiteralExpressionNode(
       kind: LiteralKind.doubleLiteral,
       source: raw,
       sourceSpan: span,
     );
   }
   if (expr is StringLiteral) {
-    return LiteralExpression(
+    return LiteralExpressionNode(
       kind: LiteralKind.stringLiteral,
       source: raw,
       sourceSpan: span,
     );
   }
   if (expr is BooleanLiteral) {
-    return LiteralExpression(
+    return LiteralExpressionNode(
       kind: LiteralKind.boolLiteral,
       source: raw,
       sourceSpan: span,
     );
   }
   if (expr is NullLiteral) {
-    return LiteralExpression(
+    return LiteralExpressionNode(
       kind: LiteralKind.nullLiteral,
       source: raw,
       sourceSpan: span,
@@ -1460,7 +1467,7 @@ ExpressionNode _convertExpression(Expression expr, String source) {
   if (expr is MethodInvocation) {
     final target = expr.target;
     final args = expr.argumentList;
-    return MethodInvocationExpression(
+    return MethodInvocationExpressionNode(
       target: target == null ? null : _convertExpression(target, source),
       dotSpan: expr.operator == null
           ? null
@@ -1495,7 +1502,90 @@ ExpressionNode _convertExpression(Expression expr, String source) {
     );
   }
 
-  return OpaqueExpression(sourceText: raw, sourceSpan: span);
+  if (expr is AssignmentExpression) {
+    return AssignmentExpressionNode(
+      leftHandSide: _convertExpression(expr.leftHandSide, source),
+      operator: expr.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: expr.operator.offset,
+        length: expr.operator.length,
+      ),
+      rightHandSide: _convertExpression(expr.rightHandSide, source),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is ConditionalExpression) {
+    return ConditionalExpressionNode(
+      condition: _convertExpression(expr.condition, source),
+      questionSpan: SourceSpan(
+        offset: expr.question.offset,
+        length: expr.question.length,
+      ),
+      thenExpression: _convertExpression(expr.thenExpression, source),
+      colonSpan: SourceSpan(
+        offset: expr.colon.offset,
+        length: expr.colon.length,
+      ),
+      elseExpression: _convertExpression(expr.elseExpression, source),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is AwaitExpression) {
+    return AwaitExpressionNode(
+      awaitKeywordSpan: SourceSpan(
+        offset: expr.awaitKeyword.offset,
+        length: expr.awaitKeyword.length,
+      ),
+      expression: _convertExpression(expr.expression, source),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is PrefixExpression) {
+    return PrefixExpressionNode(
+      operator: expr.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: expr.operator.offset,
+        length: expr.operator.length,
+      ),
+      operand: _convertExpression(expr.operand, source),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is PostfixExpression) {
+    return PostfixExpressionNode(
+      operand: _convertExpression(expr.operand, source),
+      operator: expr.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: expr.operator.offset,
+        length: expr.operator.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is PropertyAccess) {
+    final target = expr.target;
+    return PropertyAccessExpressionNode(
+      target: target == null ? null : _convertExpression(target, source),
+      operator: expr.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: expr.operator.offset,
+        length: expr.operator.length,
+      ),
+      propertyName: expr.propertyName.name,
+      propertyNameSpan: SourceSpan(
+        offset: expr.propertyName.offset,
+        length: expr.propertyName.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  return OpaqueExpressionNode(sourceText: raw, sourceSpan: span);
 }
 
 /// AST visitor that locates the first (or matching) block function body

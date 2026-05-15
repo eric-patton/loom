@@ -160,13 +160,16 @@ class VariableDeclarationStatementNode extends StatementNode {
 /// A single variable within a `VariableDeclarationStatementNode`.
 ///
 /// Mirrors what `ClassFieldNode` captures for class fields, minus the
-/// class-only `isStatic` flag. Init expressions are raw source text.
+/// class-only `isStatic` flag. Init expressions are raw source text;
+/// M8.3 adds a structured `initializerExpression: ExpressionNode?`
+/// alongside.
 class DeclaredVariable {
   const DeclaredVariable({
     required this.name,
     required this.nameSpan,
     required this.initializerSource,
     required this.initializerSpan,
+    this.initializerExpression,
     this.initializerSwitchExpression,
   });
 
@@ -174,6 +177,11 @@ class DeclaredVariable {
   final SourceSpan nameSpan;
   final String? initializerSource;
   final SourceSpan? initializerSpan;
+
+  /// Structured expression view of the initializer (M8.3). Non-null
+  /// whenever [initializerSource] is non-null; falls back to
+  /// `OpaqueExpressionNode` for kinds not yet modeled.
+  final ExpressionNode? initializerExpression;
 
   /// Structured view when the initializer IS a top-level switch
   /// expression. Null otherwise. The raw `initializerSource` is always
@@ -235,13 +243,17 @@ class ExpressionStatementNode extends StatementNode {
 }
 
 /// A `return [expr];` statement. The expression is optional (bare
-/// `return;` in `void` functions). Like `ExpressionStatement`, the
-/// expression's internal structure is opaque.
+/// `return;` in `void` functions).
+///
+/// M8.3 adds a structured `returnedExpression: ExpressionNode?`
+/// alongside the raw `expressionSource`. Non-null whenever
+/// `expressionSource` is non-null.
 class ReturnStatementNode extends StatementNode {
   const ReturnStatementNode({
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    this.returnedExpression,
     this.switchExpression,
   });
 
@@ -252,6 +264,11 @@ class ReturnStatementNode extends StatementNode {
   /// Span of the full statement including `return` and `;`.
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured expression view of the returned expression (M8.3).
+  /// Non-null whenever [expressionSource] is non-null; falls back to
+  /// `OpaqueExpressionNode` for kinds not yet modeled.
+  final ExpressionNode? returnedExpression;
 
   /// Structured view when the returned expression IS a top-level
   /// switch expression. Null otherwise. (M8.0h)
@@ -283,6 +300,7 @@ class IfStatementNode extends StatementNode {
     required this.ifKeywordSpan,
     required this.conditionSource,
     required this.conditionSpan,
+    required this.condition,
     required this.thenBlock,
     required this.elseKeywordSpan,
     required this.elseBlock,
@@ -299,6 +317,11 @@ class IfStatementNode extends StatementNode {
 
   /// Span of just the condition expression (excluding the `(` and `)`).
   final SourceSpan conditionSpan;
+
+  /// Structured expression view of the condition (M8.3). Always
+  /// non-null; falls back to `OpaqueExpressionNode` for kinds not yet
+  /// modeled.
+  final ExpressionNode condition;
 
   /// The `{ ... }` block executed when the condition is true.
   final StatementBlock thenBlock;
@@ -403,6 +426,7 @@ class WhileStatementNode extends StatementNode {
     required this.whileKeywordSpan,
     required this.conditionSource,
     required this.conditionSpan,
+    required this.condition,
     required this.body,
     required this.sourceSpan,
   });
@@ -416,6 +440,10 @@ class WhileStatementNode extends StatementNode {
 
   /// Span of just the condition expression (excluding the `(` and `)`).
   final SourceSpan conditionSpan;
+
+  /// Structured expression view of the condition (M8.3). Always
+  /// non-null.
+  final ExpressionNode condition;
 
   /// The `{ ... }` block of the loop body.
   final StatementBlock body;
@@ -441,6 +469,7 @@ class DoStatementNode extends StatementNode {
     required this.whileKeywordSpan,
     required this.conditionSource,
     required this.conditionSpan,
+    required this.condition,
     required this.sourceSpan,
   });
 
@@ -456,6 +485,10 @@ class DoStatementNode extends StatementNode {
   /// The condition expression as raw source text (without surrounding
   /// parens).
   final String conditionSource;
+
+  /// Structured expression view of the condition (M8.3). Always
+  /// non-null.
+  final ExpressionNode condition;
 
   /// Span of just the condition expression (excluding the `(` and `)`).
   final SourceSpan conditionSpan;
@@ -594,6 +627,7 @@ class ThrowStatementNode extends StatementNode {
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    required this.thrownExpression,
   });
 
   /// Span of the `throw` keyword token.
@@ -608,6 +642,11 @@ class ThrowStatementNode extends StatementNode {
   /// Span of the full statement including `throw` and `;`.
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured expression view of the thrown expression (M8.3).
+  /// Always non-null; falls back to `OpaqueExpressionNode` for kinds
+  /// not yet modeled.
+  final ExpressionNode thrownExpression;
 
   @override
   String toString() => 'ThrowStatementNode($expressionSource)';
@@ -791,6 +830,7 @@ class YieldStatementNode extends StatementNode {
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    required this.yieldedExpression,
   });
 
   final SourceSpan yieldKeywordSpan;
@@ -804,6 +844,11 @@ class YieldStatementNode extends StatementNode {
 
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured expression view of the yielded expression (M8.3).
+  /// Always non-null; falls back to `OpaqueExpressionNode` for kinds
+  /// not yet modeled.
+  final ExpressionNode yieldedExpression;
 
   /// True when this is a `yield*` (delegating yield).
   bool get isDelegating => starSpan != null;
@@ -1777,16 +1822,29 @@ class OpaqueForLoopHeader extends ForLoopHeader {
 /// etc.) still use raw source. Surfacing structured expressions
 /// everywhere is a separate, larger surface.
 ///
-/// **Modeled kinds:**
-///   * `IdentifierExpression` — `x`, `print` (a bare reference).
-///   * `LiteralExpression` — `42`, `'hello'`, `true`, `false`, `null`,
-///     `3.14`.
-///   * `MethodInvocationExpression` — `f(args)` or `target.method(args)`.
-///   * `BinaryExpression` — `a + b`, `a == b`, etc.
-///   * `OpaqueExpression` — catch-all for unary, conditional, await,
-///     assignment, cascade, function expressions, index, property
-///     access (without invocation), instance creation, list/set/map/
-///     record literals, string interpolation, throw, cast, is, etc.
+/// **Modeled kinds (M8.2/M8.3):**
+///   * `IdentifierExpressionNode` — `x`, `print` (a bare reference).
+///   * `LiteralExpressionNode` — `42`, `'hello'`, `true`, `false`,
+///     `null`, `3.14`.
+///   * `MethodInvocationExpressionNode` — `f(args)` or
+///     `target.method(args)`.
+///   * `BinaryExpressionNode` — `a + b`, `a == b`, etc.
+///   * `AssignmentExpressionNode` (M8.3) — `a = b`, `a += b`.
+///   * `ConditionalExpressionNode` (M8.3) — `cond ? then : else`.
+///   * `AwaitExpressionNode` (M8.3) — `await expr`.
+///   * `PrefixExpressionNode` (M8.3) — `!x`, `-x`, `++x`.
+///   * `PostfixExpressionNode` (M8.3) — `x++`, `x--`.
+///   * `PropertyAccessExpressionNode` (M8.3) — `target.property`
+///     (without invocation parens).
+///   * `OpaqueExpressionNode` — catch-all for cascade, index,
+///     instance creation, list/set/map/record literals, string
+///     interpolation, function expressions, throw-expressions, cast,
+///     is, etc.
+///
+/// Every subtype ends in `*ExpressionNode` for consistency with the
+/// rest of the kernel's sealed-hierarchy naming and to avoid clashing
+/// with analyzer types of the same root name (e.g. analyzer's
+/// `BinaryExpression`, `AssignmentExpression`, etc.).
 sealed class ExpressionNode {
   const ExpressionNode();
 
@@ -1795,9 +1853,9 @@ sealed class ExpressionNode {
 }
 
 /// A simple identifier reference — `x`, `print`, `myVar`. A property
-/// access like `foo.bar` is NOT this (it's opaque for M8.2).
-class IdentifierExpression extends ExpressionNode {
-  const IdentifierExpression({
+/// access like `foo.bar` is `PropertyAccessExpressionNode`, not this.
+class IdentifierExpressionNode extends ExpressionNode {
+  const IdentifierExpressionNode({
     required this.name,
     required this.sourceSpan,
   });
@@ -1808,15 +1866,15 @@ class IdentifierExpression extends ExpressionNode {
   final SourceSpan sourceSpan;
 
   @override
-  String toString() => 'IdentifierExpression($name)';
+  String toString() => 'IdentifierExpressionNode($name)';
 }
 
 /// A literal value — int, double, string, boolean, null. The literal's
 /// raw source is preserved verbatim (e.g. `0xFF`, `1_000_000`,
 /// `'it\'s'`, `"""triple"""`) — the kernel doesn't normalize literal
 /// representations.
-class LiteralExpression extends ExpressionNode {
-  const LiteralExpression({
+class LiteralExpressionNode extends ExpressionNode {
+  const LiteralExpressionNode({
     required this.kind,
     required this.source,
     required this.sourceSpan,
@@ -1829,10 +1887,10 @@ class LiteralExpression extends ExpressionNode {
   final SourceSpan sourceSpan;
 
   @override
-  String toString() => 'LiteralExpression(${kind.name}: $source)';
+  String toString() => 'LiteralExpressionNode(${kind.name}: $source)';
 }
 
-/// Kinds of `LiteralExpression`. String literals INCLUDE adjacent-
+/// Kinds of `LiteralExpressionNode`. String literals INCLUDE adjacent-
 /// concatenation forms (`'a' 'b'`) — they're a single string literal
 /// in the analyzer AST.
 enum LiteralKind {
@@ -1846,12 +1904,12 @@ enum LiteralKind {
 /// A method invocation — `print(x)`, `x.method(y)`, `Foo.bar(z)`.
 ///
 /// `target` is null for top-level invocations (`print(x)`). For
-/// `x.method(y)`, target is `IdentifierExpression(x)` and methodName
-/// is `method`. The arguments list is captured as raw source
-/// (`(x, y)`) including the surrounding parens — modeling individual
-/// arguments structurally is deferred.
-class MethodInvocationExpression extends ExpressionNode {
-  const MethodInvocationExpression({
+/// `x.method(y)`, target is `IdentifierExpressionNode(x)` and
+/// methodName is `method`. The arguments list is captured as raw
+/// source (`(x, y)`) including the surrounding parens — modeling
+/// individual arguments structurally is deferred.
+class MethodInvocationExpressionNode extends ExpressionNode {
+  const MethodInvocationExpressionNode({
     required this.target,
     required this.dotSpan,
     required this.methodName,
@@ -1881,8 +1939,9 @@ class MethodInvocationExpression extends ExpressionNode {
 
   @override
   String toString() => target == null
-      ? 'MethodInvocationExpression($methodName$argumentsSource)'
-      : 'MethodInvocationExpression($target.$methodName$argumentsSource)';
+      ? 'MethodInvocationExpressionNode($methodName$argumentsSource)'
+      : 'MethodInvocationExpressionNode'
+          '($target.$methodName$argumentsSource)';
 }
 
 /// A binary expression — `a + b`, `a == b`, `a && b`, `a ?? b`, etc.
@@ -1922,10 +1981,159 @@ class BinaryExpressionNode extends ExpressionNode {
       'BinaryExpressionNode($leftOperand $operator $rightOperand)';
 }
 
+/// An assignment expression — `a = b`, `a += b`, `a ??= b`, etc.
+/// Both sides are recursive `ExpressionNode`s.
+class AssignmentExpressionNode extends ExpressionNode {
+  const AssignmentExpressionNode({
+    required this.leftHandSide,
+    required this.operator,
+    required this.operatorSpan,
+    required this.rightHandSide,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode leftHandSide;
+
+  /// The operator lexeme: `=`, `+=`, `-=`, `*=`, `/=`, `~/=`, `%=`,
+  /// `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`, `??=`.
+  final String operator;
+  final SourceSpan operatorSpan;
+
+  final ExpressionNode rightHandSide;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() =>
+      'AssignmentExpressionNode($leftHandSide $operator $rightHandSide)';
+}
+
+/// A conditional (ternary) expression — `cond ? then : else`.
+class ConditionalExpressionNode extends ExpressionNode {
+  const ConditionalExpressionNode({
+    required this.condition,
+    required this.questionSpan,
+    required this.thenExpression,
+    required this.colonSpan,
+    required this.elseExpression,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode condition;
+  final SourceSpan questionSpan;
+  final ExpressionNode thenExpression;
+  final SourceSpan colonSpan;
+  final ExpressionNode elseExpression;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ConditionalExpressionNode('
+      '$condition ? $thenExpression : $elseExpression)';
+}
+
+/// An `await expr` expression. Only valid inside `async` / `async*`
+/// function bodies.
+class AwaitExpressionNode extends ExpressionNode {
+  const AwaitExpressionNode({
+    required this.awaitKeywordSpan,
+    required this.expression,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan awaitKeywordSpan;
+  final ExpressionNode expression;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'AwaitExpressionNode(await $expression)';
+}
+
+/// A prefix expression — `!x`, `-x`, `~x`, `++x`, `--x`. The operator
+/// is captured as its lexeme; the operand is recursive.
+class PrefixExpressionNode extends ExpressionNode {
+  const PrefixExpressionNode({
+    required this.operator,
+    required this.operatorSpan,
+    required this.operand,
+    required this.sourceSpan,
+  });
+
+  /// The operator lexeme: `!`, `-`, `~`, `++`, `--`.
+  final String operator;
+  final SourceSpan operatorSpan;
+  final ExpressionNode operand;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'PrefixExpressionNode($operator$operand)';
+}
+
+/// A postfix expression — `x++`, `x--`. Less common forms than prefix.
+class PostfixExpressionNode extends ExpressionNode {
+  const PostfixExpressionNode({
+    required this.operand,
+    required this.operator,
+    required this.operatorSpan,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode operand;
+
+  /// The operator lexeme: `++`, `--`, `!` (null-assert postfix).
+  final String operator;
+  final SourceSpan operatorSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'PostfixExpressionNode($operand$operator)';
+}
+
+/// A property access — `x.y`, `foo?.bar`. Does NOT include the
+/// invocation parens — `x.y(z)` is a `MethodInvocationExpressionNode`,
+/// not this.
+class PropertyAccessExpressionNode extends ExpressionNode {
+  const PropertyAccessExpressionNode({
+    required this.target,
+    required this.operator,
+    required this.operatorSpan,
+    required this.propertyName,
+    required this.propertyNameSpan,
+    required this.sourceSpan,
+  });
+
+  /// The target expression. May be null in rare cascade-property
+  /// contexts (`..y` in a cascade).
+  final ExpressionNode? target;
+
+  /// The operator lexeme: `.`, `?.`, or `..` (cascade prop access).
+  final String operator;
+  final SourceSpan operatorSpan;
+
+  final String propertyName;
+  final SourceSpan propertyNameSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => target == null
+      ? 'PropertyAccessExpressionNode($operator$propertyName)'
+      : 'PropertyAccessExpressionNode($target$operator$propertyName)';
+}
+
 /// An expression kind not yet modeled. Preserves the raw source.
 /// Future milestones can promote individual kinds.
-class OpaqueExpression extends ExpressionNode {
-  const OpaqueExpression({
+class OpaqueExpressionNode extends ExpressionNode {
+  const OpaqueExpressionNode({
     required this.sourceText,
     required this.sourceSpan,
   });
@@ -1940,6 +2148,6 @@ class OpaqueExpression extends ExpressionNode {
     final preview = sourceText.length > 40
         ? '${sourceText.substring(0, 40).replaceAll('\n', '\\n')}...'
         : sourceText.replaceAll('\n', '\\n');
-    return 'OpaqueExpression("$preview")';
+    return 'OpaqueExpressionNode("$preview")';
   }
 }
