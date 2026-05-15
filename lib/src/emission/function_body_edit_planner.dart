@@ -20,16 +20,29 @@ import 'source_edit.dart';
 ///     (requires existing expression; bare `return;` adds need a
 ///     separate operation, deferred).
 ///
-/// If-statement operations (M8.0b):
-///   * `changeIfCondition` — replace the condition expression.
-///   * Then/else block edits work via the `StatementBlock`-taking
-///     ops above (`addStatement`, `removeStatement`, etc.) —
-///     `IfStatementNode.thenBlock` / `elseBlock` plug right in.
+/// If-statement operations (M8.0b/c):
+///   * `changeIfCondition` — replace the condition expression of any
+///     `IfStatementNode` (including the head of an else-if chain or any
+///     inner branch via `IfStatementNode.elseIf`).
+///   * Then/else/else-if block edits work via the `StatementBlock`-
+///     taking ops above (`addStatement`, `removeStatement`, etc.).
 ///
-/// Deliberately deferred (M8.0c / M8.1+):
-///   * `else if` chains — currently opaqued by the parser.
-///   * Bare-statement if bodies (`if (cond) doIt();`) — opaqued.
-///   * Other control flow: for, while, switch, try.
+/// Loop operations (M8.0c):
+///   * `changeWhileCondition` — replace the condition expression of a
+///     `WhileStatementNode`.
+///   * `ForStatementNode.headerSource` is currently opaque (the parser
+///     captures the parenthesized header as raw text), so dedicated
+///     header-editing ops are deferred until a node-level model exists.
+///   * Loop body edits use the statement-list ops with the loop's
+///     `body` block.
+///
+/// Deliberately deferred (M8.1+):
+///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
+///     `for (x in xs) f(x);`) — opaqued.
+///   * Other control flow: do-while, switch (with patterns), try/catch/
+///     finally, throw, yield.
+///   * Modeling the c-style/for-each structure inside
+///     `ForStatementNode.headerSource`.
 ///   * Editing inside `ExpressionStatement.expressionSource` —
 ///     requires modeling expression structure.
 ///   * Adding type annotation to an untyped variable declaration.
@@ -194,8 +207,27 @@ class FunctionBodyEditPlanner {
   /// Replaces the condition expression of an `if (cond) { ... }`
   /// statement with `newConditionSource`. The new source should NOT
   /// include the surrounding parentheses — they're preserved verbatim.
+  ///
+  /// For else-if chains (M8.0c), pass any branch's `IfStatementNode` —
+  /// each branch has its own `conditionSpan`.
   static SourceEdit changeIfCondition({
     required IfStatementNode statement,
+    required String newConditionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.conditionSpan.offset,
+      length: statement.conditionSpan.length,
+      replacement: newConditionSource,
+    );
+  }
+
+  // ----------------------- While-statement ops (M8.0c) -----------
+
+  /// Replaces the condition expression of a `while (cond) { ... }`
+  /// statement with `newConditionSource`. The new source should NOT
+  /// include the surrounding parentheses — they're preserved verbatim.
+  static SourceEdit changeWhileCondition({
+    required WhileStatementNode statement,
     required String newConditionSource,
   }) {
     return SourceEdit(

@@ -8,8 +8,42 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0b — control flow: if/else (with recursive block editing)
-**Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
+**Active milestone:** M8.0c — control flow: else-if chains + for-loops + while-loops
+**Last touched:** 2026-05-14 — extended function-body modeling with else-if chains, for-loops (c-style + for-each + await-for), and while-loops. All three reuse `StatementBlock` for recursive body editing — no new statement-list ops needed.
+
+**M8.0c surface added (just now):** extends M8.0b. Three new statement kinds + one new edit op + parser handling.
+
+**`IfStatementNode` extended** with `elseIf: IfStatementNode?`. For `if A {} else if B {} else if C {} else {}`, the outer node's `elseIf` is the second branch's `IfStatementNode`, whose own `elseIf` is the third, whose `elseBlock` holds the terminal else. Invariant: at most one of `elseIf` / `elseBlock` is non-null on a given node. Backward-compatible — M8.0b code that only consulted `elseBlock` still sees null when there's no terminal else.
+
+**`ForStatementNode` added** — `for (header) { body }`. Captures `forKeywordSpan`, optional `awaitKeywordSpan` (for `await for (...)`), `headerSource` + `headerSpan` for the parenthesized header (raw — c-style triple vs for-each vs pattern-for shape not yet modeled), and `body: StatementBlock`. Only braced bodies are modeled.
+
+**`WhileStatementNode` added** — `while (cond) { body }`. Same shape as `IfStatementNode` minus then/else: keyword span, condition source + span, body block.
+
+**Parser scope:** else-if chains recursively convert via `_tryConvertIfStatement` calling itself; a bare-body branch anywhere in the chain rejects the whole chain back to opaque. For/while only model fully-braced bodies; bare bodies fall through to opaque. `do { } while (...);` is currently opaque (different shape, deferred).
+
+**New edit op:**
+- `changeWhileCondition(statement, newConditionSource)` — mirrors `changeIfCondition`.
+- Loop body edits use the existing `addStatement` / `removeStatement` / `replaceStatement` against the loop's `body` block — no new ops needed (the `StatementBlock` foundation from M8.0b carries through).
+- `changeIfCondition` already works on any branch of an else-if chain (each branch has its own `conditionSpan`).
+
+**Validation:** 291 tests green (was 274, +17 new across parsing + round-trip). New fixtures: `function_body_with_else_if.dart` (4-tier grade classifier) and `function_body_with_loops.dart` (for-loop + while-loop). Tests include `changeIfCondition` on an inner else-if branch, `addStatement` recursing into a deep else-if then-block, `changeWhileCondition`, `addStatement` into a for-loop body, and `removeStatement` from a while-loop body.
+
+**Deliberately deferred (M8.0d+):**
+- `do { } while (cond);` — different shape, modest implementation.
+- `switch` (with patterns) — large surface; multi-milestone.
+- `try` / `catch` / `finally` — multi-clause structure.
+- `throw` / `yield` / `break` / `continue`.
+- Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource` — currently opaque.
+- Bare-statement control-flow bodies — opaque.
+- Expression-internal structure inside `ExpressionStatementNode`.
+- Statement reordering (use add + remove for now).
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c series (19 commits total). Then M8.0d — `do-while`, `switch`, or `try/catch/finally` as fixtures demand.
+
+---
+
+**Prior summary block (M8.0b — preserved for context):** extended M8.0a with `if (cond) { ... } else { ... }` modeling and the `StatementBlock` extraction that makes statement-list operations recursive into nested blocks.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
 - `ClassParameterNode` — name, type, default value (each with span), `isRequired` / `isNamed` / `isPositional` / `isOptional` / `isThis` / `isSuper` / `isFinal` / `isConst` flags, plus the parameter's own annotations.
@@ -269,7 +303,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | Future M7.x | Ad-hoc additions only if real fixtures demand: adding type to untyped fields/params, adding initializer to bare fields, adding default to bare params, unnamed→named ctor conversion, multi-variable field decls beyond best-effort, member reordering. | Long-tail edge cases. |
 | **M8.0a** (shipped 2026-05-14) | Function-body modeling, first slice. Sealed `StatementNode = VariableDeclarationStatementNode | ExpressionStatementNode | ReturnStatementNode | OpaqueStatementNode`. `parseFunctionBody` finds a function body by default or by explicit span. `FunctionBodyEditPlanner` — 7 ops covering statement list, variable decls, return expression. ~700 LOC. | Sequential business logic — `do A; do B; return X`. Most OutSystems-style flows are sequential procedural code. |
 | **M8.0b** (shipped 2026-05-14) | Control flow: `if (cond) { ... } else { ... }`. Extracted `StatementBlock` so statement-list ops (addStatement/removeStatement/replaceStatement) work recursively on nested then/else bodies. Bare-statement bodies and `else if` chains fall through to OpaqueStatementNode (M8.0c). | Basic conditional logic — most OutSystems "decision" nodes map to an if/else. |
-| M8.0c+ | Remaining control flow: else-if chains, for/while/do, switch (with patterns), try/catch/finally, throw/yield. Plus expression-internal structure, qualifier editing for local vars, statement reordering. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0c** (shipped 2026-05-14) | Else-if chains (recursive `IfStatementNode.elseIf`), for-loops (c-style + for-each + await-for, header captured opaque), while-loops with `changeWhileCondition`. All reuse `StatementBlock` for recursive body editing — no new statement-list ops needed. Bare-body branches anywhere in an else-if chain reject the whole chain to opaque. | Common loop + multi-way decision shapes — most OutSystems flows that aren't a simple if/else are a chain of conditions or an iteration. |
+| M8.0d+ | Remaining control flow: do-while, switch (with patterns), try/catch/finally, throw/yield/break/continue. Plus expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -352,6 +387,41 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M8.0c — control flow: else-if + for + while
+**Worked on:** Second control-flow slice. Extended `IfStatementNode` to model else-if chains, and added two new statement kinds (`ForStatementNode`, `WhileStatementNode`). All three reuse the `StatementBlock` foundation from M8.0b — no new statement-list ops needed, just three new parser conversion functions and one new edit op.
+
+**`IfStatementNode.elseIf: IfStatementNode?`.** For `if A {} else if B {} else if C {} else {}`, the outer node's `elseIf` is B's `IfStatementNode`; B's `elseIf` is C's; C's `elseBlock` holds the terminal else. Invariant: at most one of (`elseIf`, `elseBlock`) is non-null. Backward-compat: M8.0b callers that read only `elseBlock` see `null` when there's no terminal else (instead of getting an opaque statement at the outer level, which they did before).
+
+**Parser: recursive else-if conversion.** `_tryConvertIfStatement` now accepts an else clause that's another `IfStatement` — recurses into itself. If the inner conversion returns null (e.g. a bare-body branch deep in the chain), the WHOLE chain rejects back to opaque. That's important: partial modeling of a chain would leave inconsistent state where some branches are structured and others are opaque text — confusing for callers. All-or-nothing keeps the model coherent.
+
+**`ForStatementNode`** — `for ([await] (header) { body })`. The parenthesized header is captured as raw source plus span; the three header shapes (c-style triple, for-each declared variable, for-each expression variable, pattern-for) are not yet differentiated. Modeling them would require three new sub-node kinds and explicit choice of when each applies — deferred until concrete fixtures demand it. The `awaitKeywordSpan` is optional and present for `await for (...)` (async for-each). Only braced bodies are modeled.
+
+**`WhileStatementNode`** — straightforward analog of `IfStatementNode` without then/else: keyword span, condition source + span, body block. Only braced bodies.
+
+**New edit op:** `changeWhileCondition(statement, newConditionSource)` — mirrors `changeIfCondition`. That's the only new op M8.0c needed:
+- For else-if chain edits: `changeIfCondition` already operates on any `IfStatementNode`'s `conditionSpan`, so an else-if branch is just another node it accepts.
+- For loop body edits: `addStatement`/`removeStatement`/`replaceStatement` already take a `StatementBlock`. The loop's `body` field plugs right in.
+
+This is the M8.0b architecture paying off — adding three new control-flow shapes added one edit op, not nine.
+
+**Fixtures added:**
+- `function_body_with_else_if.dart` — `tier(score)` returning grade letters via a four-branch else-if chain.
+- `function_body_with_loops.dart` — `sumUpTo(n)` with a c-style for-loop and a while-loop.
+
+**Test changes:**
+- The M8.0b negative test asserting else-if becomes opaque was removed (it's now positively modeled). A new negative test (bare-body branch *inside* an else-if chain) verifies the all-or-nothing rejection path.
+- New parsing groups for both fixtures plus targeted shape tests: await-for header capture, do-while still opaque, header span surrounds parens.
+- New round-trip group: 7 tests covering idempotence on both fixtures, `changeIfCondition` on an inner else-if branch, `addStatement` recursing into a deep else-if then-block, `changeWhileCondition`, `addStatement` into a for-loop body, `removeStatement` from a while-loop body.
+
+**Validation:** 291 tests green (was 274, +17 new). `dart analyze` clean. `dart format` clean.
+
+**Learned:**
+- **The "reject the whole chain on partial-unsupported" rule is right for else-if.** The first attempt I considered was: model the supported prefix, opaque-suffix the rest. Bad — it leaves the IfStatementNode's `elseIf` pointing into a half-structured tree where downstream branches are missing. Cleaner to reject and let the caller emit one opaque statement for the entire chain — exactly the same pattern the parser already uses elsewhere.
+- **Recursive parser methods reuse beautifully here.** `_tryConvertIfStatement` calling itself for the else-if case is half a dozen lines added to the function — it Just Works because the conversion is total over the supported shape.
+- **Capturing for-headers as opaque source is fine for now.** It defers a three-way model decision (init/cond/update vs declared-each vs expression-each) until we see real edit needs. Most "edit the loop" use cases will be "change the body" — which works without modeling the header.
+
+**Next:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c series (19 commits total). Then M8.0d — `do-while`, `switch` (with patterns), or `try`/`catch`/`finally`. Switch is the most consequential since OutSystems-style decision nodes often map to multi-way switch.
 
 ### [2026-05-14] M8.0b — control flow: if/else with recursive block editing
 **Worked on:** First control-flow slice on top of M8.0a's sequential-statement model. Added `IfStatementNode` plus a refactor that makes statement-list editing work uniformly on function bodies and nested if-then/if-else blocks.

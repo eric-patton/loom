@@ -212,17 +212,22 @@ class ReturnStatementNode extends StatementNode {
       '${expressionSource ?? ''})';
 }
 
-/// A modeled `if (cond) { ... } [else { ... }]` statement.
+/// A modeled `if (cond) { ... } [else if (...) { ... }]* [else { ... }]?`
+/// statement.
 ///
-/// **Scope (M8.0b first slice):** only fully-braced if/else are
-/// modeled. Bare-statement bodies (`if (cond) doIt();`) and `else if`
-/// chains fall through to `OpaqueStatementNode`. Most real-world Dart
-/// uses braces; `else if` ships as M8.0c.
+/// **Scope:** fully-braced if/else-if/else chains. Bare-statement bodies
+/// (`if (cond) doIt();`) fall through to `OpaqueStatementNode` — most
+/// real-world Dart uses braces.
 ///
-/// The condition is captured as raw source — M8.0b doesn't model
-/// expression structure. The then/else bodies are full `StatementBlock`s
-/// so existing statement-list ops (`addStatement`, `removeStatement`,
+/// The condition is captured as raw source — expression structure is
+/// not modeled. The then/else bodies are full `StatementBlock`s so
+/// existing statement-list ops (`addStatement`, `removeStatement`,
 /// etc.) work recursively on them.
+///
+/// **Else-if representation (M8.0c):** for `if A {} else if B {} else {}`,
+/// the outer node has `elseIf` set to a nested `IfStatementNode` whose
+/// own `elseBlock` holds the terminal `else { ... }`. At most one of
+/// `elseIf` / `elseBlock` is non-null on any given node.
 class IfStatementNode extends StatementNode {
   const IfStatementNode({
     required this.ifKeywordSpan,
@@ -231,6 +236,7 @@ class IfStatementNode extends StatementNode {
     required this.thenBlock,
     required this.elseKeywordSpan,
     required this.elseBlock,
+    required this.elseIf,
     required this.sourceSpan,
   });
 
@@ -247,29 +253,132 @@ class IfStatementNode extends StatementNode {
   /// The `{ ... }` block executed when the condition is true.
   final StatementBlock thenBlock;
 
-  /// Span of the `else` keyword token, when an `else` clause is present.
-  /// Null otherwise.
+  /// Span of the `else` keyword token, when an `else` clause is present
+  /// (either `else { ... }` OR `else if (...) { ... }`). Null otherwise.
   final SourceSpan? elseKeywordSpan;
 
-  /// The `else { ... }` block, or null if there's no `else` clause.
-  /// (For `else if` — not modeled in M8.0b — the entire if-statement
-  /// falls through to `OpaqueStatementNode`, so this never wraps a
-  /// nested if.)
+  /// The terminal `else { ... }` block, or null if there's no terminal
+  /// `else` clause (no else at all, or the chain ends with an `else if`
+  /// without a final else).
+  ///
+  /// Invariant: at most one of `elseBlock` / `elseIf` is non-null.
   final StatementBlock? elseBlock;
+
+  /// The next `else if (...) { ... }` branch in the chain, or null. When
+  /// non-null, this `IfStatementNode` is the "else-if subordinate" of the
+  /// outer if-statement; its `sourceSpan` starts at its own `if` keyword,
+  /// NOT at the `else` keyword that introduces it.
+  ///
+  /// Invariant: at most one of `elseBlock` / `elseIf` is non-null.
+  final IfStatementNode? elseIf;
 
   @override
   final SourceSpan sourceSpan;
 
   @override
-  String toString() => 'IfStatementNode('
-      'cond=$conditionSource, '
-      '${thenBlock.statements.length} then-stmt(s)'
-      '${elseBlock == null ? '' : ', ${elseBlock!.statements.length} else-stmt(s)'})';
+  String toString() {
+    final tail = elseIf != null
+        ? ', elseIf=$elseIf'
+        : elseBlock != null
+            ? ', ${elseBlock!.statements.length} else-stmt(s)'
+            : '';
+    return 'IfStatementNode('
+        'cond=$conditionSource, '
+        '${thenBlock.statements.length} then-stmt(s)'
+        '$tail)';
+  }
 }
 
-/// A statement kind not yet modeled — `for`, `while`, `switch`, `try`,
-/// etc. (and `if` with bare-statement body or `else if` chain, which
-/// M8.0b explicitly punts on). Preserves the source verbatim through
+/// A modeled `for (header) { body }` statement.
+///
+/// Covers c-style `for (var i = 0; i < n; i++)`, for-each
+/// `for (var x in iter)`, `for (final T x in iter)`, and pattern-for
+/// forms — the entire parenthesized header is preserved as raw source.
+/// Only fully-braced bodies are modeled; a bare-statement body
+/// (`for (x in xs) f(x);`) falls through to `OpaqueStatementNode`.
+///
+/// **Why opaque header:** the header has three structurally different
+/// shapes (init/cond/update triple, declared for-each, expression
+/// for-each) plus optional `await` and pattern variants. Modeling them
+/// requires three new node kinds — deferred until concrete fixtures
+/// demand it. For now, edits to the body work via `StatementBlock`
+/// without needing to understand the header.
+class ForStatementNode extends StatementNode {
+  const ForStatementNode({
+    required this.forKeywordSpan,
+    required this.awaitKeywordSpan,
+    required this.headerSource,
+    required this.headerSpan,
+    required this.body,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `for` keyword token.
+  final SourceSpan forKeywordSpan;
+
+  /// Span of the `await` keyword when this is an `await for (...)`
+  /// (asynchronous for-each); null otherwise.
+  final SourceSpan? awaitKeywordSpan;
+
+  /// Raw source of the header, INCLUDING the surrounding `(` and `)`.
+  /// E.g. `(var i = 0; i < n; i++)`, `(final user in users)`.
+  final String headerSource;
+
+  /// Span covering the parenthesized header.
+  final SourceSpan headerSpan;
+
+  /// The `{ ... }` block of the loop body.
+  final StatementBlock body;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ForStatementNode('
+      'header=$headerSource, '
+      '${body.statements.length} body-stmt(s))';
+}
+
+/// A modeled `while (cond) { body }` statement.
+///
+/// Only fully-braced bodies are modeled; a bare-statement body
+/// (`while (cond) f();`) falls through to `OpaqueStatementNode`.
+/// The condition is captured as raw source. `do { } while (cond);`
+/// is currently opaque — different shape, deferred.
+class WhileStatementNode extends StatementNode {
+  const WhileStatementNode({
+    required this.whileKeywordSpan,
+    required this.conditionSource,
+    required this.conditionSpan,
+    required this.body,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `while` keyword token.
+  final SourceSpan whileKeywordSpan;
+
+  /// The condition expression as raw source text (without surrounding
+  /// parens).
+  final String conditionSource;
+
+  /// Span of just the condition expression (excluding the `(` and `)`).
+  final SourceSpan conditionSpan;
+
+  /// The `{ ... }` block of the loop body.
+  final StatementBlock body;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'WhileStatementNode('
+      'cond=$conditionSource, '
+      '${body.statements.length} body-stmt(s))';
+}
+
+/// A statement kind not yet modeled — `switch`, `try`, `do/while`, etc.
+/// (and `if`/`for`/`while` with bare-statement bodies, which the M8.0c
+/// parser punts on). Preserves the source verbatim through
 /// any edit to surrounding statements; the kernel makes no guarantees
 /// about edits that would target opaque content.
 class OpaqueStatementNode extends StatementNode {

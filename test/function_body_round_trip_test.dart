@@ -227,6 +227,140 @@ void main() {
     });
   });
 
+  group('else-if + loop edits (M8.0c)', () {
+    test('idempotence on function_body_with_else_if.dart', () {
+      final source = _loadFixture('function_body_with_else_if.dart');
+      final body = parseFunctionBody(source);
+      final result = applySourceEdits(source, const <SourceEdit>[]);
+      expect(result, equals(source));
+      expect(body.statements, isNotEmpty);
+    });
+
+    test('idempotence on function_body_with_loops.dart', () {
+      final source = _loadFixture('function_body_with_loops.dart');
+      final body = parseFunctionBody(source);
+      final result = applySourceEdits(source, const <SourceEdit>[]);
+      expect(result, equals(source));
+      expect(body.statements, isNotEmpty);
+    });
+
+    test('changeIfCondition on an inner else-if branch', () {
+      final source = _loadFixture('function_body_with_else_if.dart');
+      final body = parseFunctionBody(source);
+      final head = body.statements[1] as IfStatementNode;
+      // Edit the middle branch's condition.
+      final middle = head.elseIf!;
+      expect(middle.conditionSource, equals('clamped >= 80'));
+
+      final edit = FunctionBodyEditPlanner.changeIfCondition(
+        statement: middle,
+        newConditionSource: 'clamped >= 85',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reHead = reparsed.statements[1] as IfStatementNode;
+      expect(reHead.elseIf!.conditionSource, equals('clamped >= 85'));
+      // Head and tail branches untouched.
+      expect(reHead.conditionSource, equals('clamped >= 90'));
+      expect(reHead.elseIf!.elseIf!.conditionSource, equals('clamped >= 70'));
+    });
+
+    test('addStatement into a deep else-if branch (recursive)', () {
+      final source = _loadFixture('function_body_with_else_if.dart');
+      final body = parseFunctionBody(source);
+      final head = body.statements[1] as IfStatementNode;
+      // Reach the second else-if (C-tier) branch and prepend a log call.
+      final second = head.elseIf!;
+      final third = second.elseIf!;
+      expect(third.thenBlock.statements, hasLength(1));
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: third.thenBlock,
+        index: 0,
+        newStatementSource: "log('grade C');",
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reHead = reparsed.statements[1] as IfStatementNode;
+      final reThird = reHead.elseIf!.elseIf!;
+      expect(reThird.thenBlock.statements, hasLength(2));
+      expect(
+          reThird.thenBlock.statements.first, isA<ExpressionStatementNode>());
+    });
+
+    test('changeWhileCondition rewrites the while condition', () {
+      final source = _loadFixture('function_body_with_loops.dart');
+      final body = parseFunctionBody(source);
+      final wh = body.statements[3] as WhileStatementNode;
+      expect(wh.conditionSource, equals('remaining > 100'));
+
+      final edit = FunctionBodyEditPlanner.changeWhileCondition(
+        statement: wh,
+        newConditionSource: 'remaining > 50',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reWh = reparsed.statements[3] as WhileStatementNode;
+      expect(reWh.conditionSource, equals('remaining > 50'));
+    });
+
+    test('addStatement into for-loop body (recursive)', () {
+      final source = _loadFixture('function_body_with_loops.dart');
+      final body = parseFunctionBody(source);
+      final forStmt = body.statements[1] as ForStatementNode;
+      expect(forStmt.body.statements, hasLength(1));
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: forStmt.body,
+        index: 1,
+        newStatementSource: 'log(total);',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reFor = reparsed.statements[1] as ForStatementNode;
+      expect(reFor.body.statements, hasLength(2));
+      expect(reFor.body.statements.last, isA<ExpressionStatementNode>());
+    });
+
+    test('removeStatement from while-loop body', () {
+      // Insert a statement into the while body, then remove it.
+      final source = _loadFixture('function_body_with_loops.dart');
+      final body = parseFunctionBody(source);
+      final wh = body.statements[3] as WhileStatementNode;
+
+      final addEdit = FunctionBodyEditPlanner.addStatement(
+        block: wh.body,
+        index: 0,
+        newStatementSource: 'log(remaining);',
+        source: source,
+      );
+      final intermediate = applySourceEdits(source, [addEdit]);
+
+      final intermediateBody = parseFunctionBody(intermediate);
+      final intermediateWh =
+          intermediateBody.statements[3] as WhileStatementNode;
+      expect(intermediateWh.body.statements, hasLength(2));
+
+      final logStmt = intermediateWh.body.statements.first;
+      final removeEdit = FunctionBodyEditPlanner.removeStatement(
+        statement: logStmt,
+        source: intermediate,
+      );
+      final finalSource = applySourceEdits(intermediate, [removeEdit]);
+
+      final finalBody = parseFunctionBody(finalSource);
+      final finalWh = finalBody.statements[3] as WhileStatementNode;
+      expect(finalWh.body.statements, hasLength(1));
+      expect(finalWh.body.statements.first, isA<ExpressionStatementNode>());
+    });
+  });
+
   group('replaceStatement', () {
     test('replaces an ExpressionStatement with a different call', () {
       final source = _loadFixture('function_body_simple.dart');

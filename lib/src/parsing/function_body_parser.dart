@@ -120,10 +120,18 @@ StatementNode _convertStatement(Statement stmt, String source) {
     final asIf = _tryConvertIfStatement(stmt, source, span);
     if (asIf != null) return asIf;
     // Fall through to opaque if the if-statement shape isn't supported
-    // (bare-statement body, `else if` chain, etc.).
+    // (bare-statement body, etc.).
   }
-  // Anything else (for/while/try/switch/...) or an unsupported if-shape
-  // — preserve verbatim.
+  if (stmt is ForStatement) {
+    final asFor = _tryConvertForStatement(stmt, source, span);
+    if (asFor != null) return asFor;
+  }
+  if (stmt is WhileStatement) {
+    final asWhile = _tryConvertWhileStatement(stmt, source, span);
+    if (asWhile != null) return asWhile;
+  }
+  // Anything else (try/switch/do-while/...) or an unsupported control-flow
+  // shape — preserve verbatim.
   return OpaqueStatementNode(
     sourceText: source.substring(stmt.offset, stmt.offset + stmt.length),
     sourceSpan: span,
@@ -131,10 +139,17 @@ StatementNode _convertStatement(Statement stmt, String source) {
 }
 
 /// Attempts to convert an `IfStatement` into an `IfStatementNode`.
-/// Returns null when the shape isn't supported by M8.0b: a non-block
-/// then statement, an else clause that's neither null nor a block
-/// (e.g. `else if`), etc. Callers fall through to `OpaqueStatementNode`
-/// for the unsupported cases.
+/// Returns null when the shape isn't supported: a non-block then
+/// statement, or an else clause that's neither null nor a block nor a
+/// recursively-supported nested `if`. Callers fall through to
+/// `OpaqueStatementNode` for the unsupported cases.
+///
+/// **Else-if (M8.0c):** an else clause that's another `IfStatement`
+/// recurses into this same function. If the nested if is itself
+/// supported, the outer node carries it as `elseIf`. If the nested if
+/// is unsupported (e.g. bare-body deep in the chain), the WHOLE chain
+/// becomes opaque — returning null here makes the caller emit one
+/// opaque statement covering the entire outer if.
 IfStatementNode? _tryConvertIfStatement(
   IfStatement stmt,
   String source,
@@ -145,9 +160,22 @@ IfStatementNode? _tryConvertIfStatement(
     return null;
   }
   final elseStmt = stmt.elseStatement;
-  // Allowed: no else, or else-block. Reject `else if` (where elseStmt is
-  // another IfStatement) and `else <bareStatement>;`.
-  if (elseStmt != null && elseStmt is! Block) {
+  // Allowed: no else, else-block, or else-if (recursively supported).
+  // Reject `else <bareStatement>;`.
+  IfStatementNode? elseIf;
+  StatementBlock? elseBlock;
+  if (elseStmt is Block) {
+    elseBlock = _convertBlock(elseStmt, source);
+  } else if (elseStmt is IfStatement) {
+    final nestedSpan =
+        SourceSpan(offset: elseStmt.offset, length: elseStmt.length);
+    elseIf = _tryConvertIfStatement(elseStmt, source, nestedSpan);
+    if (elseIf == null) {
+      // The nested else-if is itself unsupported (e.g. bare-body branch).
+      // Reject the entire chain so the caller falls through to opaque.
+      return null;
+    }
+  } else if (elseStmt != null) {
     return null;
   }
 
@@ -173,7 +201,79 @@ IfStatementNode? _tryConvertIfStatement(
             offset: stmt.elseKeyword!.offset,
             length: stmt.elseKeyword!.length,
           ),
-    elseBlock: elseStmt is Block ? _convertBlock(elseStmt, source) : null,
+    elseBlock: elseBlock,
+    elseIf: elseIf,
+    sourceSpan: span,
+  );
+}
+
+/// Attempts to convert a `ForStatement` into a `ForStatementNode`.
+/// Returns null when the body isn't a `Block`. The header
+/// (`(...)` between `for` / optional `await` and the body) is captured
+/// as raw source — its internal structure (c-style triple vs for-each
+/// vs pattern-for) is not yet modeled.
+ForStatementNode? _tryConvertForStatement(
+  ForStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final body = stmt.body;
+  if (body is! Block) return null;
+
+  final lp = stmt.leftParenthesis;
+  final rp = stmt.rightParenthesis;
+  final headerOffset = lp.offset;
+  final headerLength = (rp.offset + rp.length) - lp.offset;
+  final headerSpan = SourceSpan(offset: headerOffset, length: headerLength);
+  final headerSource = source.substring(
+    headerOffset,
+    headerOffset + headerLength,
+  );
+
+  return ForStatementNode(
+    forKeywordSpan: SourceSpan(
+      offset: stmt.forKeyword.offset,
+      length: stmt.forKeyword.length,
+    ),
+    awaitKeywordSpan: stmt.awaitKeyword == null
+        ? null
+        : SourceSpan(
+            offset: stmt.awaitKeyword!.offset,
+            length: stmt.awaitKeyword!.length,
+          ),
+    headerSource: headerSource,
+    headerSpan: headerSpan,
+    body: _convertBlock(body, source),
+    sourceSpan: span,
+  );
+}
+
+/// Attempts to convert a `WhileStatement` into a `WhileStatementNode`.
+/// Returns null when the body isn't a `Block`.
+WhileStatementNode? _tryConvertWhileStatement(
+  WhileStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final body = stmt.body;
+  if (body is! Block) return null;
+
+  final condition = stmt.condition;
+  final conditionSpan =
+      SourceSpan(offset: condition.offset, length: condition.length);
+  final conditionSource = source.substring(
+    condition.offset,
+    condition.offset + condition.length,
+  );
+
+  return WhileStatementNode(
+    whileKeywordSpan: SourceSpan(
+      offset: stmt.whileKeyword.offset,
+      length: stmt.whileKeyword.length,
+    ),
+    conditionSource: conditionSource,
+    conditionSpan: conditionSpan,
+    body: _convertBlock(body, source),
     sourceSpan: span,
   );
 }

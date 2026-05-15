@@ -149,15 +149,55 @@ void doIt() {}
       expect(body.statements, hasLength(1));
       expect(body.statements.first, isA<OpaqueStatementNode>());
     });
+  });
 
-    test('else if chain opaqued (whole if-statement)', () {
+  group('parseFunctionBody on function_body_with_else_if.dart (M8.0c)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File('test/fixtures/function_body_with_else_if.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('two top-level statements: variable + if-chain', () {
+      expect(body.statements, hasLength(2));
+      expect(body.statements[0], isA<VariableDeclarationStatementNode>());
+      expect(body.statements[1], isA<IfStatementNode>());
+    });
+
+    test('else-if chain has three branches plus terminal else', () {
+      final head = body.statements[1] as IfStatementNode;
+      expect(head.conditionSource, equals('clamped >= 90'));
+      expect(head.elseBlock, isNull);
+      expect(head.elseIf, isNotNull);
+
+      final second = head.elseIf!;
+      expect(second.conditionSource, equals('clamped >= 80'));
+      expect(second.elseBlock, isNull);
+      expect(second.elseIf, isNotNull);
+
+      final third = second.elseIf!;
+      expect(third.conditionSource, equals('clamped >= 70'));
+      expect(third.elseIf, isNull);
+      expect(third.elseBlock, isNotNull);
+      expect(third.elseBlock!.statements, hasLength(1));
+      expect(third.elseBlock!.statements.first, isA<ReturnStatementNode>());
+    });
+
+    test('each branch has the elseKeywordSpan of its introducer', () {
+      final head = body.statements[1] as IfStatementNode;
+      expect(head.elseKeywordSpan, isNotNull);
+      final second = head.elseIf!;
+      expect(second.elseKeywordSpan, isNotNull);
+    });
+
+    test('bare-body else-if anywhere in chain → whole chain opaque', () {
       const source = '''
 void f() {
   if (true) {
     a();
-  } else if (false) {
-    b();
-  }
+  } else if (false) b();
 }
 void a() {}
 void b() {}
@@ -165,6 +205,83 @@ void b() {}
       final body = parseFunctionBody(source);
       expect(body.statements, hasLength(1));
       expect(body.statements.first, isA<OpaqueStatementNode>());
+    });
+  });
+
+  group('parseFunctionBody on function_body_with_loops.dart (M8.0c)', () {
+    late String source;
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      source = File('test/fixtures/function_body_with_loops.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('top-level body has 5 statements (var, for, var, while, return)', () {
+      expect(body.statements, hasLength(5));
+      expect(body.statements[0], isA<VariableDeclarationStatementNode>());
+      expect(body.statements[1], isA<ForStatementNode>());
+      expect(body.statements[2], isA<VariableDeclarationStatementNode>());
+      expect(body.statements[3], isA<WhileStatementNode>());
+      expect(body.statements[4], isA<ReturnStatementNode>());
+    });
+
+    test('for-loop header captured as raw source', () {
+      final forStmt = body.statements[1] as ForStatementNode;
+      expect(forStmt.headerSource, equals('(var i = 0; i < n; i++)'));
+      expect(forStmt.awaitKeywordSpan, isNull);
+    });
+
+    test('for-loop body has one statement (total = total + i)', () {
+      final forStmt = body.statements[1] as ForStatementNode;
+      expect(forStmt.body.statements, hasLength(1));
+      expect(forStmt.body.statements.first, isA<ExpressionStatementNode>());
+    });
+
+    test('while-loop condition captured without parens', () {
+      final wh = body.statements[3] as WhileStatementNode;
+      expect(wh.conditionSource, equals('remaining > 100'));
+    });
+
+    test('for-loop header span surrounds parens', () {
+      final forStmt = body.statements[1] as ForStatementNode;
+      final headerText = source.substring(
+        forStmt.headerSpan.offset,
+        forStmt.headerSpan.offset + forStmt.headerSpan.length,
+      );
+      expect(headerText, startsWith('('));
+      expect(headerText, endsWith(')'));
+    });
+
+    test('await-for is supported and captures await keyword span', () {
+      const asyncSource = '''
+Future<void> consume(Stream<int> stream) async {
+  await for (final value in stream) {
+    use(value);
+  }
+}
+void use(int x) {}
+''';
+      final body = parseFunctionBody(asyncSource);
+      expect(body.statements, hasLength(1));
+      final forStmt = body.statements.first as ForStatementNode;
+      expect(forStmt.awaitKeywordSpan, isNotNull);
+      expect(forStmt.headerSource, equals('(final value in stream)'));
+    });
+
+    test('do-while still falls through to opaque', () {
+      const source = '''
+void f() {
+  var i = 0;
+  do {
+    i++;
+  } while (i < 3);
+}
+''';
+      final body = parseFunctionBody(source);
+      expect(body.statements, hasLength(2));
+      expect(body.statements[1], isA<OpaqueStatementNode>());
     });
   });
 
