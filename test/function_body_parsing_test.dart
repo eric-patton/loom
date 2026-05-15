@@ -671,26 +671,157 @@ String f(Object o) {
       expect(p.keywordSpan, isNull);
     });
 
-    test('object pattern is OpaquePatternNode (deferred)', () {
+    test('list pattern is OpaquePatternNode (deferred to M8.0h+)', () {
       const source = '''
-String f(Object o) {
-  switch (o) {
-    case Point(x: 0, y: 0):
-      return 'origin';
+String f(List<int> xs) {
+  switch (xs) {
+    case [1, 2]:
+      return 'pair';
     default:
       return 'other';
   }
-}
-class Point {
-  final int x;
-  final int y;
-  const Point({required this.x, required this.y});
 }
 ''';
       final body = parseFunctionBody(source);
       final sw = body.statements.first as SwitchStatementNode;
       final c0 = sw.members[0] as SwitchCaseNode;
       expect(c0.pattern, isA<OpaquePatternNode>());
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_object_record_patterns.dart '
+      '(M8.0g)', () {
+    late FunctionBodyModel body;
+    late SwitchStatementNode sw;
+
+    setUpAll(() {
+      final source = File(
+        'test/fixtures/function_body_with_object_record_patterns.dart',
+      ).readAsStringSync();
+      body = parseFunctionBody(source);
+      sw = body.statements.first as SwitchStatementNode;
+    });
+
+    test('switch has 6 members (5 cases + default)', () {
+      expect(sw.members, hasLength(6));
+      expect(sw.members.last, isA<SwitchDefaultNode>());
+    });
+
+    test('Point(x: 0, y: 0) is an ObjectPatternNode with 2 named fields', () {
+      final c0 = sw.members[0] as SwitchCaseNode;
+      expect(c0.pattern, isA<ObjectPatternNode>());
+      final op = c0.pattern as ObjectPatternNode;
+      expect(op.typeNameSource, equals('Point'));
+      expect(op.fields, hasLength(2));
+      expect(op.fields[0].fieldName, equals('x'));
+      expect(op.fields[0].isShorthand, isFalse);
+      expect(op.fields[0].isNamed, isTrue);
+      expect(op.fields[1].fieldName, equals('y'));
+    });
+
+    test('Point field sub-pattern is recursive (constants here)', () {
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+      expect(op.fields[0].pattern, isA<ConstantPatternNode>());
+      expect(
+        (op.fields[0].pattern as ConstantPatternNode).expressionSource,
+        equals('0'),
+      );
+    });
+
+    test('Point(x: var x, y: var y) when x == y captures inner patterns', () {
+      final c1 = sw.members[1] as SwitchCaseNode;
+      final op = c1.pattern as ObjectPatternNode;
+      expect(op.typeNameSource, equals('Point'));
+      expect(op.fields[0].pattern, isA<DeclaredVariablePatternNode>());
+      expect(
+        (op.fields[0].pattern as DeclaredVariablePatternNode).name,
+        equals('x'),
+      );
+      // Guard is still captured at the SwitchCaseNode level.
+      expect(c1.whenGuardSource, equals('x == y'));
+    });
+
+    test('Rect(:var width, :var height) uses shorthand named fields', () {
+      final c2 = sw.members[2] as SwitchCaseNode;
+      final op = c2.pattern as ObjectPatternNode;
+      expect(op.typeNameSource, equals('Rect'));
+      expect(op.fields, hasLength(2));
+      expect(op.fields[0].isShorthand, isTrue);
+      expect(op.fields[0].fieldName, isNull);
+      expect(op.fields[0].colonSpan, isNotNull);
+      // Inner pattern is a declared variable whose name acts as the
+      // implicit field name.
+      final inner = op.fields[0].pattern as DeclaredVariablePatternNode;
+      expect(inner.name, equals('width'));
+    });
+
+    test('(int a, int b) is a RecordPatternNode with 2 positional fields', () {
+      final c3 = sw.members[3] as SwitchCaseNode;
+      expect(c3.pattern, isA<RecordPatternNode>());
+      final rp = c3.pattern as RecordPatternNode;
+      expect(rp.fields, hasLength(2));
+      expect(rp.fields[0].isPositional, isTrue);
+      expect(rp.fields[0].fieldName, isNull);
+      expect(rp.fields[0].colonSpan, isNull);
+      // Inner pattern is `int a` — a declared variable.
+      final inner = rp.fields[0].pattern as DeclaredVariablePatternNode;
+      expect(inner.typeSource, equals('int'));
+      expect(inner.name, equals('a'));
+    });
+
+    test('(x: var x, y: var y) is a RecordPatternNode with 2 named fields', () {
+      final c4 = sw.members[4] as SwitchCaseNode;
+      final rp = c4.pattern as RecordPatternNode;
+      expect(rp.fields, hasLength(2));
+      expect(rp.fields[0].fieldName, equals('x'));
+      expect(rp.fields[0].isShorthand, isFalse);
+      expect(rp.fields[0].pattern, isA<DeclaredVariablePatternNode>());
+    });
+
+    test('parameterized object pattern captures the full type name', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case Result<int>(:var value):
+      return 'value=\$value';
+    default:
+      return 'other';
+  }
+}
+class Result<T> {
+  final T value;
+  const Result({required this.value});
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+      expect(op.typeNameSource, equals('Result<int>'));
+    });
+
+    test('empty object pattern Foo() parses with zero fields', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case Empty():
+      return 'empty';
+    default:
+      return 'other';
+  }
+}
+class Empty {
+  const Empty();
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+      expect(op.fields, isEmpty);
+      expect(op.typeNameSource, equals('Empty'));
     });
   });
 

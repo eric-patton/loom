@@ -1,7 +1,9 @@
 import 'package:analyzer/dart/analysis/utilities.dart';
-// Hide analyzer's `ClassMember` to avoid clashing with the loom-side
-// sealed type. (Same defensive import as `class_structure_parser.dart`.)
-import 'package:analyzer/dart/ast/ast.dart' hide ClassMember;
+// Hide analyzer's `ClassMember` (clashes with the loom-side sealed
+// type) and `PatternField` (clashes with the loom-side compound-pattern
+// field class — we still need the analyzer's via a prefixed import).
+import 'package:analyzer/dart/ast/ast.dart' hide ClassMember, PatternField;
+import 'package:analyzer/dart/ast/ast.dart' as ast show PatternField;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
@@ -734,14 +736,107 @@ PatternNode _convertPattern(DartPattern pattern, String source) {
     );
   }
 
-  // Object / record / list / map / logical-and / relational /
-  // null-check / null-assert / cast / parenthesized — all opaque for
-  // M8.0f. Future milestones can promote individual kinds as concrete
-  // edits demand.
+  if (pattern is ObjectPattern) {
+    return ObjectPatternNode(
+      typeNameSource: source.substring(
+        pattern.type.offset,
+        pattern.type.offset + pattern.type.length,
+      ),
+      typeNameSpan: SourceSpan(
+        offset: pattern.type.offset,
+        length: pattern.type.length,
+      ),
+      leftParenSpan: SourceSpan(
+        offset: pattern.leftParenthesis.offset,
+        length: pattern.leftParenthesis.length,
+      ),
+      fields: [
+        for (final f in pattern.fields) _convertPatternField(f, source),
+      ],
+      rightParenSpan: SourceSpan(
+        offset: pattern.rightParenthesis.offset,
+        length: pattern.rightParenthesis.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is RecordPattern) {
+    return RecordPatternNode(
+      leftParenSpan: SourceSpan(
+        offset: pattern.leftParenthesis.offset,
+        length: pattern.leftParenthesis.length,
+      ),
+      fields: [
+        for (final f in pattern.fields) _convertPatternField(f, source),
+      ],
+      rightParenSpan: SourceSpan(
+        offset: pattern.rightParenthesis.offset,
+        length: pattern.rightParenthesis.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  // List / map / logical-and / relational / null-check / null-assert /
+  // cast / parenthesized — all opaque for M8.0g. Future milestones can
+  // promote individual kinds as concrete edits demand.
   return OpaquePatternNode(
     sourceText:
         source.substring(pattern.offset, pattern.offset + pattern.length),
     sourceSpan: span,
+  );
+}
+
+/// Converts an analyzer `PatternField` into a kernel `PatternField`.
+/// Handles three field shapes:
+///   * `Foo(1, 2)` — positional (no name node).
+///   * `Foo(x: 1)` — explicit named (name node with explicit token).
+///   * `Foo(:var x)` — shorthand named (name node with null name token;
+///     field name is implied by the inner pattern's variable).
+PatternField _convertPatternField(
+  ast.PatternField field,
+  String source,
+) {
+  final nameNode = field.name;
+  final subPattern = _convertPattern(field.pattern, source);
+  final fieldSpan = SourceSpan(offset: field.offset, length: field.length);
+
+  if (nameNode == null) {
+    return PatternField(
+      fieldName: null,
+      fieldNameSpan: null,
+      colonSpan: null,
+      isShorthand: false,
+      pattern: subPattern,
+      sourceSpan: fieldSpan,
+    );
+  }
+
+  final colonSpan = SourceSpan(
+    offset: nameNode.colon.offset,
+    length: nameNode.colon.length,
+  );
+  final nameToken = nameNode.name;
+  if (nameToken == null) {
+    return PatternField(
+      fieldName: null,
+      fieldNameSpan: null,
+      colonSpan: colonSpan,
+      isShorthand: true,
+      pattern: subPattern,
+      sourceSpan: fieldSpan,
+    );
+  }
+
+  return PatternField(
+    fieldName: nameToken.lexeme,
+    fieldNameSpan:
+        SourceSpan(offset: nameToken.offset, length: nameToken.length),
+    colonSpan: colonSpan,
+    isShorthand: false,
+    pattern: subPattern,
+    sourceSpan: fieldSpan,
   );
 }
 

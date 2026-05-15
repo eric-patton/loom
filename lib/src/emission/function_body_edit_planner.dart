@@ -63,6 +63,18 @@ import 'source_edit.dart';
 ///   * `changeConstantPatternExpression` — replace the constant
 ///     expression of a `ConstantPatternNode`.
 ///
+/// Object/record pattern operations (M8.0g):
+///   * `changeObjectPatternType` — replace the class-type-name prefix
+///     of an `ObjectPatternNode` (e.g. `case Point(x: 0):` →
+///     `case Coord(x: 0):`).
+///   * `renamePatternFieldName` — rename an explicit named field
+///     (throws on positional/shorthand fields).
+///   * `replacePatternFieldPattern` — replace a field's sub-pattern.
+///     The recursive `PatternNode` shape means existing ops
+///     (`changeConstantPatternExpression`, `renameDeclaredPatternVariable`,
+///     etc.) also work on nested patterns inside object/record fields
+///     without needing dedicated ops.
+///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
 ///     `for (x in xs) f(x);`) — opaqued.
@@ -408,6 +420,73 @@ class FunctionBodyEditPlanner {
       offset: pattern.expressionSpan.offset,
       length: pattern.expressionSpan.length,
       replacement: newExpressionSource,
+    );
+  }
+
+  // ----------------------- Object/record pattern ops (M8.0g) -----
+
+  /// Replaces the class-type-name prefix of an `ObjectPatternNode` —
+  /// e.g. `case Point(x: 0):` → `case Coord(x: 0):`. The fields and
+  /// their sub-patterns are preserved verbatim; only the type name
+  /// changes.
+  ///
+  /// Works for parameterized types too — `case Result<int>(...)` →
+  /// `case Result<num>(...)` replaces the full type name including
+  /// type arguments.
+  static SourceEdit changeObjectPatternType({
+    required ObjectPatternNode pattern,
+    required String newTypeNameSource,
+  }) {
+    return SourceEdit(
+      offset: pattern.typeNameSpan.offset,
+      length: pattern.typeNameSpan.length,
+      replacement: newTypeNameSource,
+    );
+  }
+
+  /// Renames the explicit field-name of a named field in an object or
+  /// record pattern — e.g. `Point(x: 1, y: 2)` → `Point(left: 1, y: 2)`.
+  ///
+  /// Throws when the field is positional (no name) or shorthand (the
+  /// name is implied by the inner pattern's variable). For shorthand
+  /// fields, rename the inner variable via
+  /// `renameDeclaredPatternVariable` — that propagates to the field
+  /// name automatically.
+  static SourceEdit renamePatternFieldName({
+    required PatternField field,
+    required String newName,
+  }) {
+    final span = field.fieldNameSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Pattern field has no explicit name to rename. For positional '
+        'fields there is no name; for shorthand `:varX` fields, rename '
+        'the inner pattern variable instead — it acts as the field name.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newName,
+    );
+  }
+
+  /// Replaces the entire sub-pattern of a field — e.g. swap
+  /// `Point(x: 0, y: 0)` → `Point(x: int x, y: 0)` by replacing the
+  /// first field's pattern (`0`) with `int x`.
+  ///
+  /// Sub-pattern types may differ between original and replacement
+  /// (a constant pattern can become a declared variable pattern, etc.).
+  /// The replacement source is interpreted as a complete pattern; it
+  /// should not include the field's name prefix or surrounding colon.
+  static SourceEdit replacePatternFieldPattern({
+    required PatternField field,
+    required String newPatternSource,
+  }) {
+    return SourceEdit(
+      offset: field.pattern.sourceSpan.offset,
+      length: field.pattern.sourceSpan.length,
+      replacement: newPatternSource,
     );
   }
 

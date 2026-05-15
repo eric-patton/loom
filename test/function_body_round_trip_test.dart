@@ -802,4 +802,177 @@ String f(Object o) {
       );
     });
   });
+
+  group('object/record pattern edits (M8.0g)', () {
+    test('idempotence on function_body_with_object_record_patterns.dart', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(1));
+    });
+
+    test('changeObjectPatternType swaps Point → Coord', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[0] is `case Point(x: 0, y: 0):`.
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeObjectPatternType(
+        pattern: op,
+        newTypeNameSource: 'Coord',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      final reparsedOp = reparsedC0.pattern as ObjectPatternNode;
+      expect(reparsedOp.typeNameSource, equals('Coord'));
+      // Fields preserved.
+      expect(reparsedOp.fields, hasLength(2));
+      expect(reparsedOp.fields[0].fieldName, equals('x'));
+    });
+
+    test('renamePatternFieldName renames x → left', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+
+      final edit = FunctionBodyEditPlanner.renamePatternFieldName(
+        field: op.fields[0],
+        newName: 'left',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedOp = (reparsed.statements.first as SwitchStatementNode)
+          .members[0] as SwitchCaseNode;
+      final reparsedField = (reparsedOp.pattern as ObjectPatternNode).fields[0];
+      expect(reparsedField.fieldName, equals('left'));
+    });
+
+    test('renamePatternFieldName throws on positional fields', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[3] is `case (int a, int b):` — positional record.
+      final c3 = sw.members[3] as SwitchCaseNode;
+      final rp = c3.pattern as RecordPatternNode;
+      expect(rp.fields[0].isPositional, isTrue);
+
+      expect(
+        () => FunctionBodyEditPlanner.renamePatternFieldName(
+          field: rp.fields[0],
+          newName: 'first',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('renamePatternFieldName throws on shorthand fields', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[2] is `case Rect(:var width, :var height):` — shorthand.
+      final c2 = sw.members[2] as SwitchCaseNode;
+      final op = c2.pattern as ObjectPatternNode;
+      expect(op.fields[0].isShorthand, isTrue);
+
+      expect(
+        () => FunctionBodyEditPlanner.renamePatternFieldName(
+          field: op.fields[0],
+          newName: 'w',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('replacePatternFieldPattern swaps a constant for a typed var', () {
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+
+      // Field 0: `x: 0` → `x: int n`.
+      final edit = FunctionBodyEditPlanner.replacePatternFieldPattern(
+        field: op.fields[0],
+        newPatternSource: 'int n',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedOp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[0] as SwitchCaseNode)
+          .pattern as ObjectPatternNode;
+      final reparsedField = reparsedOp.fields[0];
+      expect(reparsedField.fieldName, equals('x'));
+      final inner = reparsedField.pattern as DeclaredVariablePatternNode;
+      expect(inner.typeSource, equals('int'));
+      expect(inner.name, equals('n'));
+    });
+
+    test('existing pattern-internal ops work recursively inside fields', () {
+      // Rename `x` → `xValue` inside `case Point(x: var x, ...) when x == y:`.
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[1] is the Point(x: var x, y: var y) with guard.
+      final c1 = sw.members[1] as SwitchCaseNode;
+      final op = c1.pattern as ObjectPatternNode;
+      final xField = op.fields[0];
+      final inner = xField.pattern as DeclaredVariablePatternNode;
+
+      final edit = FunctionBodyEditPlanner.renameDeclaredPatternVariable(
+        pattern: inner,
+        newName: 'xValue',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedOp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[1] as SwitchCaseNode)
+          .pattern as ObjectPatternNode;
+      final reparsedInner =
+          reparsedOp.fields[0].pattern as DeclaredVariablePatternNode;
+      expect(reparsedInner.name, equals('xValue'));
+    });
+
+    test('changeConstantPatternExpression deep inside a record field', () {
+      // case Point(x: 0, y: 0): → case Point(x: 0, y: 7):
+      final source =
+          _loadFixture('function_body_with_object_record_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+      final yConstant = op.fields[1].pattern as ConstantPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeConstantPatternExpression(
+        pattern: yConstant,
+        newExpressionSource: '7',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedOp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[0] as SwitchCaseNode)
+          .pattern as ObjectPatternNode;
+      expect(
+        (reparsedOp.fields[1].pattern as ConstantPatternNode).expressionSource,
+        equals('7'),
+      );
+    });
+  });
 }

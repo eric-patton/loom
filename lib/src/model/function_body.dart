@@ -588,15 +588,15 @@ class ThrowStatementNode extends StatementNode {
 /// NOT statements — they stay opaque inside the host expression's
 /// source (no separate node).
 ///
-/// **Pattern surface (M8.0f scope):** four pattern kinds are modeled
+/// **Pattern surface (M8.0g scope):** six pattern kinds are modeled
 /// structurally — `ConstantPatternNode`, `DeclaredVariablePatternNode`,
-/// `WildcardPatternNode`, `LogicalOrPatternNode`. Object / record / list /
-/// map / logical-and / relational / null-check / null-assert / cast /
-/// parenthesized patterns fall through to `OpaquePatternNode`. Each
-/// `SwitchCaseNode` carries BOTH the raw `patternSource` string (M8.0e,
-/// for callers that just want the verbatim text) AND a structured
-/// `pattern: PatternNode` (M8.0f, for callers that want to walk or edit
-/// pattern internals).
+/// `WildcardPatternNode`, `LogicalOrPatternNode`, `ObjectPatternNode`,
+/// `RecordPatternNode`. List / map / logical-and / relational / null-
+/// check / null-assert / cast / parenthesized patterns fall through to
+/// `OpaquePatternNode`. Each `SwitchCaseNode` carries BOTH the raw
+/// `patternSource` string (M8.0e, for callers that just want the
+/// verbatim text) AND a structured `pattern: PatternNode` (M8.0f/g,
+/// for callers that want to walk or edit pattern internals).
 class SwitchStatementNode extends StatementNode {
   SwitchStatementNode({
     required this.switchKeywordSpan,
@@ -926,10 +926,141 @@ class LogicalOrPatternNode extends PatternNode {
   String toString() => 'LogicalOrPatternNode(${operands.length} operand(s))';
 }
 
-/// A pattern kind not yet modeled — object, record, list, map, logical-
-/// and, relational, null-check, null-assert, cast, parenthesized.
-/// Preserves the source verbatim. Future milestones (M8.0g+) can
-/// promote individual kinds as concrete edit needs demand.
+/// An object pattern — `case Foo(x: 1, y: var n):`, `case Foo(:var x):`,
+/// `case Point(0, 0):`. Captures the class type name plus an ordered
+/// list of `PatternField`s (positional + named, in source order).
+///
+/// The type may include type arguments (`case Result<int>(:var value):`)
+/// and is captured as raw source. Fields are recursive — each field's
+/// sub-pattern is a full `PatternNode`, so nested `case Foo(x: int n
+/// when n > 0):` resolves through the existing `DeclaredVariablePattern`
+/// path.
+class ObjectPatternNode extends PatternNode {
+  ObjectPatternNode({
+    required this.typeNameSource,
+    required this.typeNameSpan,
+    required this.leftParenSpan,
+    required List<PatternField> fields,
+    required this.rightParenSpan,
+    required this.sourceSpan,
+  }) : fields = List.unmodifiable(fields);
+
+  /// Raw source of the type name, e.g. `Point`, `Result<int>`,
+  /// `prefix.MyClass`.
+  final String typeNameSource;
+  final SourceSpan typeNameSpan;
+
+  /// Span of the `(` opening the field list.
+  final SourceSpan leftParenSpan;
+
+  /// Fields in source order. May be empty (`case Foo():`).
+  final List<PatternField> fields;
+
+  /// Span of the `)` closing the field list.
+  final SourceSpan rightParenSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ObjectPatternNode('
+      '$typeNameSource, ${fields.length} field(s))';
+}
+
+/// A record pattern — `case (1, 2):`, `case (x: 1, y: var n):`,
+/// `case (:var x, :var y):`. Same shape as `ObjectPatternNode` but
+/// without the class-name prefix — records are structural, not
+/// nominally typed.
+///
+/// A single-element record pattern uses a trailing comma to disambiguate
+/// from a parenthesized pattern: `case (1,):` is a record, `case (1):`
+/// is a parenthesized constant pattern.
+class RecordPatternNode extends PatternNode {
+  RecordPatternNode({
+    required this.leftParenSpan,
+    required List<PatternField> fields,
+    required this.rightParenSpan,
+    required this.sourceSpan,
+  }) : fields = List.unmodifiable(fields);
+
+  /// Span of the `(` opening the record.
+  final SourceSpan leftParenSpan;
+
+  /// Fields in source order. The record-disambiguation rule requires
+  /// at least one field for a record pattern (otherwise it'd be a
+  /// parenthesized pattern).
+  final List<PatternField> fields;
+
+  /// Span of the `)` closing the record.
+  final SourceSpan rightParenSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'RecordPatternNode(${fields.length} field(s))';
+}
+
+/// A single field inside an `ObjectPatternNode` or `RecordPatternNode`.
+///
+/// Three field shapes are represented in a single class with nullable
+/// fields (same approach as `CatchClauseNode` in M8.0d):
+///   * **Positional**: `Foo(1, 2)` — `fieldName` and `colonSpan` are
+///     both null.
+///   * **Explicit named**: `Foo(x: 1)` — `fieldName == 'x'`,
+///     `colonSpan` is the `:` after the name, `isShorthand: false`.
+///   * **Shorthand named**: `Foo(:var x)` — `fieldName` is null
+///     (the name is implied by the inner pattern's variable), but
+///     `colonSpan` IS present (the `:` before `var x`), and
+///     `isShorthand: true`.
+class PatternField {
+  const PatternField({
+    required this.fieldName,
+    required this.fieldNameSpan,
+    required this.colonSpan,
+    required this.isShorthand,
+    required this.pattern,
+    required this.sourceSpan,
+  });
+
+  /// The explicit field name (e.g. `x` in `Foo(x: 1)`), or null when
+  /// the field is positional or shorthand.
+  final String? fieldName;
+  final SourceSpan? fieldNameSpan;
+
+  /// Span of the `:` separator for named fields (explicit OR shorthand);
+  /// null for positional fields.
+  final SourceSpan? colonSpan;
+
+  /// True when the field uses shorthand `:varX` syntax (the field name
+  /// is implied by the inner pattern's variable).
+  final bool isShorthand;
+
+  /// The sub-pattern for this field. Recursive — can be any
+  /// `PatternNode` kind.
+  final PatternNode pattern;
+
+  /// Full span of this field including its name + colon + sub-pattern.
+  final SourceSpan sourceSpan;
+
+  /// True when this field carries an explicit `name:` prefix.
+  bool get isNamed => fieldName != null;
+
+  /// True when this field has no name part at all (positional).
+  bool get isPositional => fieldName == null && colonSpan == null;
+
+  @override
+  String toString() {
+    if (isPositional) return 'PatternField($pattern)';
+    if (isShorthand) return 'PatternField(:$pattern)';
+    return 'PatternField($fieldName: $pattern)';
+  }
+}
+
+/// A pattern kind not yet modeled — list, map, logical-and, relational,
+/// null-check, null-assert, cast, parenthesized. Preserves the source
+/// verbatim. Future milestones (M8.0h+) can promote individual kinds as
+/// concrete edit needs demand.
 class OpaquePatternNode extends PatternNode {
   const OpaquePatternNode({
     required this.sourceText,
