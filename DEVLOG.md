@@ -8,7 +8,51 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8 complete — function-body modeling is feature-complete
+**Active milestone:** M9.0a — directives modeling (imports/exports/parts)
+**Last touched:** 2026-05-15 — first slice of cross-file modeling. `CompilationUnitDirectives` model with sealed `DirectiveNode` (5 subtypes) and `CombinatorNode` (show/hide). `parseDirectives` + `DirectivesEditPlanner`.
+
+**M9.0a surface added:** new `lib/src/model/directives.dart`, `lib/src/parsing/directives_parser.dart`, `lib/src/emission/directives_edit_planner.dart`. First top-level model that's about a file's relationship to OTHER files.
+
+**`CompilationUnitDirectives`** is the root model. Holds an ordered list of `DirectiveNode`s + a `directiveSectionEnd` offset for new-import insertion + `diagnostics` for parse errors. Convenience getters (`imports`, `exports`, `parts`) filter by directive kind.
+
+**Sealed `DirectiveNode`** with 5 subtypes:
+- `LibraryDirectiveNode` — `library [name];` (name optional in Dart 2.12+).
+- `ImportDirectiveNode` — `import 'uri' [as prefix] [show/hide ...]* [deferred];`. Captures URI (stripped of quotes), optional prefix, optional `deferred`/`as` spans, and ordered combinators.
+- `ExportDirectiveNode` — `export 'uri' [show/hide ...]*;`.
+- `PartDirectiveNode` — `part 'uri';`.
+- `PartOfDirectiveNode` — `part of 'uri';` (Dart 2.19+) OR `part of name.lib;` (legacy).
+
+**Sealed `CombinatorNode`** with `ShowCombinatorNode` / `HideCombinatorNode`. Each captures the keyword span and a flat list of names + name spans.
+
+**Seven new edit ops:**
+- `addImport` — appends after last import OR after library directive OR at top of file.
+- `removeDirective` — line-collapse pattern matching `removeStatement`.
+- `changeDirectiveUri` — replaces URI text while preserving quote style.
+- `changeImportPrefix` — renames the `as p` portion.
+- `addCombinatorName` — insert a name in a show/hide list.
+- `removeCombinatorName` — handles comma + space cleanup.
+- `addImportCombinator` / `addExportCombinator` — append a new combinator clause before the trailing `;`.
+
+**Validation:** 545 tests green (was 521, +24 new). New fixture `directives_simple.dart` exercises every directive form. 16 parsing tests, 8 round-trip tests.
+
+**Deliberately deferred to M9.0b+:**
+- Multi-file project view (`ProjectModel`) — the natural follow-on. Walks a directory; parses directives for each file; builds the import graph.
+- Symbol resolution across files — given an identifier reference, which import does it come from?
+- Configuration directives (`import 'foo.dart' if (dart.library.io) 'bar.dart'`).
+- Adding a prefix to a bare import (requires inserting ` as <name>`).
+- Removing an entire combinator clause (vs. removing names within one).
+- Reordering imports.
+
+**Blockers:** none
+**Next action:** M9.0b — `ProjectModel` (multi-file project view) OR M9.1 (symbol resolution). Pick based on the most pressing OutSystems-trajectory need.
+
+**Prior summary block (M8 complete — preserved):**
+
+**M8 complete (M8.0a–M8.10).** Function-body modeling is feature-complete: 17 statement kinds, 14 pattern kinds, 20+ expression kinds, ~80 edit ops, 521 tests. The M-series (M6+M7+M8) covers kernel generalization, class structure, and function body. Ready for M9 — cross-file modeling. [This M9.0a entry is the first M9 slice.]
+
+(Original M8.0d–M8.3 entry preserved unchanged below.)
+
+**Original active milestone before M8 completion:** M8 complete — function-body modeling is feature-complete
 **Last touched:** 2026-05-15 — closed the M8 series with M8.4 through M8.10. M8 is now done: expressions (11 → 20+ kinds), expression positions (7 → 14+), pattern-for/bare-bodies, argument-list internals, symbol-aware rename for locals/labels, and compound-structure add/remove ops.
 
 **Summary of M8.4–M8.10 (this session):**
