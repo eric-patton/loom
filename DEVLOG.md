@@ -8,34 +8,45 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M9 complete — cross-file modeling shipped
-**Last touched:** 2026-05-15 — closed the M9 series with M9.0a through M9.4. The kernel now models multi-file projects: directives, the import graph, package URI resolution, cross-file symbol resolution, and project-wide rename.
+**Active milestone:** M10 complete — type/reference analysis + codegen-aware modeling shipped
+**Last touched:** 2026-05-15 — closed the M10 series with M10.0a → M10.2c. Kernel now models annotation arguments, recognizes the three biggest codegen idioms (Freezed, json_serializable, Drift), and has an opt-in resolved-analysis layer for type/element queries.
 
-**Summary of M9 (this session):**
+**Summary of M10 (this session):**
 
-- **M9.0a** — directives modeling: `CompilationUnitDirectives` + sealed `DirectiveNode` (5 subtypes) + sealed `CombinatorNode` (show/hide). `parseDirectives` + `DirectivesEditPlanner` with 7 ops.
-- **M9.0b** — `ProjectModel` multi-file container: holds N files, builds the import graph, queries `importersOf` / `importsFrom`.
-- **M9.1** — cross-file broadcast ops: `addImportEverywhere`, `removeImportEverywhere`, `renameImportUri`, `applyProjectEdits`, `merge`. `ProjectEdits = Map<String, List<SourceEdit>>` typedef.
-- **M9.2** — `PackageConfig` + URI resolution: pure Dart (caller provides config); `ProjectModel.resolveImportUri` handles `dart:*`, `package:*`, relative, absolute URIs.
-- **M9.3** — cross-file symbol resolution: `FileSymbols` per file (lazy-parsed top-level declarations); `ProjectModel.exportedNamesOf` walks export chains cycle-safely with combinator filtering; `resolveSymbol(name, fromFile) → SymbolLocation` traces imports through re-exports to the original declaration.
-- **M9.4** — project-wide rename (capstone): `renameTopLevelDeclaration(project, symbol, newName)` produces `ProjectEdits` covering: the declaration site, all internal references in the declaration file, all references in files that reach the symbol, and show/hide combinator names. Visitor handles both `SimpleIdentifier` and `NamedType.name` (type references in declarations/parameters/extends).
+- **M10.0a** — top-level annotation capture: extracted `AnnotationNode` into its own model file; extended `FileSymbolDeclaration` with `annotations` list (was previously only on class members). Captures `@JsonSerializable`/`@freezed`/`@pragma`/etc. on top-level classes, mixins, enums, extensions, extension types, functions, typedefs, and variables.
+- **M10.0b** — annotation argument internals + edit ops: modeled positional vs. named annotation arguments structurally (was just raw text). New `AnnotationEditPlanner` with `addAnnotationArgument` / `removeAnnotationArgument` / `changeAnnotationArgumentValue` / `changeAnnotationArgumentName` — finer-grained than the existing `replaceAnnotationArguments` which replaced the whole arg list.
+- **M10.1a** — `FreezedView`: recognizes `@freezed` / `@Freezed(...)` / `@unfreezed` annotated classes; surfaces them as a "data class" with one or more `variants` (factory ctors); `singletonFields` convenience accessor for the common one-ctor case; `fromJson` constructor captured separately. Edits flow through the existing `ClassStructureEditPlanner` against the underlying parameter nodes the view exposes.
+- **M10.1b** — `JsonSerializableView`: recognizes `@JsonSerializable` classes; surfaces real instance fields with per-field `@JsonKey` configuration. `jsonKeyName` resolves to the `@JsonKey(name:)` arg or defaults to the Dart name. Exposes the class-level annotation for editing config like `fieldRename: FieldRename.snake`.
+- **M10.1c** — `DriftTableView` + extends/with/implements modeling: extended `ClassStructureNode` with three previously-unmodeled clauses (`superclassName`, `mixinNames`, `interfaceNames`) — each as raw source text with spans. Built `DriftTableView` on top: recognizes classes extending `Table`, surfaces column-typed getters (`IntColumn`, `TextColumn`, `BoolColumn`, `RealColumn`, `BlobColumn`, `DateTimeColumn`) as a structured column list. Column bodies (cascade chains) remain opaque.
+- **M10.2a** — `ResolvedProject` foundation: opt-in async wrapper around `AnalysisContextCollection` for callers who need fully-resolved ASTs (type info, element model, semantic diagnostics). File-based; caller passes absolute paths; in-memory consumers can use a tempdir. `dispose()` required. The unresolved `parseString` path remains the kernel's primary surface.
+- **M10.2b** — type queries on resolved AST: `typeOfTopLevelDeclaration` and `typeOfExpressionAt`. Returns displayStrings — handles inference (`const pi = 3.14` → `double`), generics (`List<int>`), and nested type expressions.
+- **M10.2c** — element-precise resolveSymbol: `resolveSymbolPrecise` uses the analyzer's `LibraryFragment.scope.lookup` for type-aware name resolution. Returns `ResolvedSymbolLocation` (filePath, name, nameOffset, nameLength, elementKind). Eliminates the M9.4 caveats — handles SDK symbols (`dart:core`'s `int`), through-export chains, same-named symbols from different imports.
 
-**Total M9 surface:**
-- 3 new model files: `directives.dart`, `package_config.dart`, `project.dart`, `file_symbols.dart`
-- 2 new parsers: `directives_parser.dart`, `file_symbols_parser.dart`
-- 2 new planners: `directives_edit_planner.dart`, `project_edit_planner.dart`
-- 4 new test files: `directives_parsing_test.dart`, `directives_round_trip_test.dart`, `project_model_test.dart`, `project_edit_test.dart`, `package_config_test.dart`, `symbol_resolution_test.dart` (6 actually)
-- ~15 new edit ops
-- 595 tests green (was 521 at end of M8, +74 new across the M9 series)
+**Total M10 surface:**
+- 3 new model files: `annotation.dart`, `codegen_views.dart`, `analysis/resolved_project.dart`
+- 1 new shared parser helper: `parsing/annotation_capture.dart`
+- 1 new planner: `emission/annotation_edit_planner.dart`
+- 5 new test files: `annotation_edit_test.dart`, `freezed_view_test.dart`, `json_serializable_view_test.dart`, `drift_table_view_test.dart`, `resolved_project_test.dart`
+- 664 tests green (was 595 at end of M9, +69 new across the M10 series)
 
-**Limitations (documented):**
-- Symbol resolution doesn't handle `dart:*` SDK symbols (kernel doesn't know SDK contents).
-- Symbol resolution skips packages whose roots aren't in `packageConfig` AND whose files aren't in `project.files`.
-- Rename doesn't track local-scope shadowing — caller-responsible if a project has same-named locals.
-- Rename matches identifiers by name only — false positives possible in projects with name collisions.
+**Design decisions:**
+- **Annotation argument modeling is structural, not semantic.** Args are typed as positional/named with raw value source — the kernel doesn't interpret the value (could be a literal, an identifier, a complex expression). Same approach as constructor params elsewhere.
+- **Codegen views are non-destructive lenses.** `FreezedView.from(model)`, `JsonSerializableView.from(model)`, `DriftTableView.from(model)` return null when the class doesn't match the pattern. They DON'T transform the model — edits go through the existing `ClassStructureEditPlanner` against the underlying nodes the view exposes. Recognition is by annotation name (Freezed, JsonSerializable) or by `extends` clause (Drift). Trade-off: false positives if a project locally defines a same-named annotation; acceptable for the common case.
+- **Resolved analysis is opt-in.** The rest of the kernel works without it. `ResolvedProject.open` is the entry point; it's async and requires absolute disk paths. M10.2 demonstrates that the kernel CAN do type-aware editing when needed; consumers who don't need it pay zero cost.
+- **No element-precise rename (yet).** The M9.4 name-based rename remains the rename op; M10.2c added the precise-resolution primitive (`resolveSymbolPrecise`) but didn't yet rebuild rename on top. Consumers can compose: use `resolveSymbolPrecise` to confirm the target element, then use the existing `renameTopLevelDeclaration`. A future milestone (M10.3?) could fold them.
+
+**Limitations (carried from M9 and new for M10):**
+- Symbol resolution (M9.3 name-based): doesn't handle `dart:*` SDK symbols; skips packages whose roots aren't in `packageConfig` AND whose files aren't in `project.files`. M10.2c's `resolveSymbolPrecise` handles all of these but requires the resolved-analysis pivot.
+- Rename (M9.4): matches identifiers by name only — false positives possible in projects with name collisions. Doesn't track local-scope shadowing.
+- Codegen views: recognition is annotation-name-based (or extends-clause based for Drift). False positives possible if a project locally defines a same-named annotation.
+- `ResolvedProject`: file-based; in-memory analysis requires writing to a tempdir.
 
 **Blockers:** none
-**Next action:** Eric review of the M9 series (8 new commits). Ready for M10 — reference + type analysis, codegen-aware editing (json_serializable annotations, Drift schema → table classes, Freezed factory expansion, etc.). Or pivot to building a real UI consumer on top of the kernel.
+**Next action:** Eric review of the M10 series (8 new commits). The kernel is now feature-complete for the "OutSystems for Dart/Flutter" trajectory across all the originally-rostered domains. Remaining ambition arcs: (1) pivot to building a real UI consumer on top of the kernel; (2) run scout against larger real-world corpora to find edge cases; (3) extend codegen recognition to more domains (build_runner, dio, riverpod code-gen); (4) build element-precise rename on top of M10.2c.
+
+**Prior summary block (M9 complete — preserved):**
+
+**M9 complete (M9.0a–M9.4).** Cross-file modeling: directives, the import graph, package URI resolution, cross-file symbol resolution, project-wide rename. 595 tests at the end of M9, +74 from M8.
 
 **Prior summary block (M8 complete — preserved):**
 
@@ -687,6 +698,39 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M10 series complete — type/reference analysis + codegen recognition
+**Worked on:** Closed the M10 series with M10.0a → M10.2c, eight sub-milestones across three arcs.
+
+**Arc 1: annotation surface (M10.0a–M10.0b).** Pre-M10, annotations were captured on class members only and had only a raw arguments-source string. M10.0a extracted `AnnotationNode` into its own model file and threaded annotation capture through `parseFileSymbols`, so top-level classes / functions / typedefs / variables now carry their annotations. M10.0b modeled argument internals — positional vs. named, with name/value spans — and added four new ops in `AnnotationEditPlanner`: `addAnnotationArgument` (handles bare annotation, empty parens, and appending with comma), `removeAnnotationArgument` (single-arg, first/last/middle with comma cleanup), `changeAnnotationArgumentValue`, `changeAnnotationArgumentName`. Useful as the substrate for codegen-aware editing.
+
+**Arc 2: codegen recognition (M10.1a–M10.1c).** Three non-destructive lens views over `ClassStructureModel`:
+- `FreezedView` — recognizes `@freezed` / `@unfreezed` / `@Freezed(...)`; exposes factory constructors as `variants`; `singletonFields` convenience for the common one-ctor case; `fromJson` constructor captured separately.
+- `JsonSerializableView` — recognizes `@JsonSerializable`; surfaces real instance fields with per-field `@JsonKey` config. `jsonKeyName` resolves to the `@JsonKey(name:)` arg or defaults to the Dart name. Exposes the class-level annotation for editing `fieldRename:` etc.
+- `DriftTableView` — recognizes classes extending `Table`; surfaces column-typed getters (`IntColumn`, `TextColumn`, `BoolColumn`, `RealColumn`, `BlobColumn`, `DateTimeColumn`) as a `columns` list. Required extending `ClassStructureNode` with previously-unmodeled `superclassName` / `mixinNames` / `interfaceNames` capture.
+
+Recognition is structural (annotation name + member shape) — no resolved AST needed. Trade-off: false positives if a project defines a same-named annotation locally. Acceptable for the OutSystems-trajectory common case.
+
+Edits flow through the existing `ClassStructureEditPlanner` against underlying nodes — no separate edit planner per view. This kept the view layer thin (just the recognition).
+
+**Arc 3: resolved analysis (M10.2a–M10.2c).** Opt-in async wrapper around `AnalysisContextCollection`. The rest of the kernel uses `parseString` and stays sync; `ResolvedProject` is only for callers needing type info / element-precise resolution.
+
+- M10.2a: `ResolvedProject.open(includedPaths: [...])` opens the analyzer pipeline. File-based — absolute paths only. Caller MUST `await dispose()`. In-memory consumers use a tempdir.
+- M10.2b: `typeOfTopLevelDeclaration(filePath, name)` and `typeOfExpressionAt(filePath, offset)` — return displayStrings. Inferred types resolve correctly (`const pi = 3.14` → `double`). The expression-at-offset visitor uses `GeneralizingAstVisitor` to override `visitExpression` and find the smallest expression starting at the target offset.
+- M10.2c: `resolveSymbolPrecise(filePath, name)` — uses analyzer's `LibraryFragment.scope.lookup`. Returns `ResolvedSymbolLocation` with filePath/name/offset/length/elementKind. Eliminates the M9.4 name-collision caveats. Works for SDK symbols (`dart:core`'s `int`).
+
+**Learned:**
+- The analyzer's element model in 13.x uses the dual `Element` + `Fragment` structure. Top-level scope lookup lives on `LibraryFragment.scope`, NOT `LibraryElement.scope` (which doesn't exist on the public API). The fragment side carries declaration-site info (nameOffset, source); the element side carries semantic info (kind, type).
+- `NamedArgument` is the analyzer-13 type for named arguments in an `ArgumentList` (older versions had `NamedExpression`). Has `name: Token`, `colon: Token`, `argumentExpression: Expression`. No `.label.name` — just `.name.lexeme`.
+- `ResolvedUnitResult.diagnostics` includes both syntactic AND semantic — the resolved path catches undefined-name errors that `parseString` wouldn't.
+- `AnalysisContextCollection.contextFor(path)` throws `StateError` when the path isn't in any included root, and `ArgumentError` when the path isn't absolute/normalized — different exceptions for different validation failures.
+
+**Decided:**
+- Resolved analysis stays opt-in. The pure-Dart, sync, fast `parseString` path remains the kernel's main surface. `ResolvedProject` is for the specific cases (type queries, element-precise rename) where the heavier path is justified.
+- Codegen views are recognition + view-only. No new edit planner per codegen pattern; edits route through the existing class-structure planner against the underlying nodes the view exposes. Avoids a combinatorial explosion of "Freezed edit planner" / "JsonSerializable edit planner" / etc.
+- Don't rebuild M9.4's rename on top of M10.2c yet. The precise-resolution primitive is in place; consumers who need it can compose. A future milestone can fold them if needed.
+
+**Next:** Eric review of the M10 series (8 new commits, +69 tests, 664 total green). Beyond M10: build a UI consumer, run scout against bigger corpora, extend codegen recognition to more idioms.
 
 ### [2026-05-15] M8.3 — expressions everywhere + 6 new expression kinds
 **Worked on:** Extended M8.2's expression-internal slice on two axes — surface the structured `ExpressionNode` view in more statement positions AND promote more expression kinds out of opaque. Plus a kernel-wide naming cleanup: all expression subtypes now use the `*ExpressionNode` suffix consistently.
