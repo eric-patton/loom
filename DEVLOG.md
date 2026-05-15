@@ -8,20 +8,27 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M6.2 — third domain catalog (synthetic Pipeline DSL)
-**Last touched:** 2026-05-14 — added a third domain consumer of the unified kernel: a synthetic data-pipeline / workflow DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, but representative of OutSystems-style declarative workflows. Concretely validates that M6.1's scaffolding plugs in a third domain — each non-shared piece is genuinely thin:
-- `PipelineNode` (~50 lines, parallel to `WidgetNode` / `RouteNode`)
-- `PipelineCatalog` (~20 lines, 8 spec entries)
-- `PipelineVisitor` (~30 lines, two `BaseVisitor` hooks)
-- `PipelineSerializer` (~30 lines, delegates to extracted `ConstructorCallSerializer`)
-- `PipelineEditPlanner` (~80 lines, thin glue over `ListEditHelpers`)
-- `parsePipelineTree` (~110 lines, mirrors `parseRouteTree`'s three entry-point shapes)
+**Active milestone:** M7.0 — class-structure modeling (fields only)
+**Last touched:** 2026-05-14 — added the first non-tree-shaped model: class structure. Walks a Dart `ClassDeclaration`'s body and surfaces field declarations as editable nodes; methods, constructors, and getters/setters remain opaque source-span entries (M7.x territory). Deliberately a **separate sealed hierarchy** from the constructor-tree `ModelNode` — the shapes are too different (flat list of members vs. tree of constructor calls) to share a base usefully.
 
-Adding the third domain revealed a previously-hidden duplication: the per-domain `_serializeWidget` / `_serializeRouteNode` were structurally identical (the ~100-line constructor-call serialization). Extracted as `ConstructorCallSerializer` (rule of three). `WidgetSerializer` and `RouteSerializer` thinned to ~25 lines each. Now any new domain serializer is ~30 lines.
+**New surface:**
+- `ClassStructureModel { root, diagnostics }` — top-level
+- `ClassStructureNode { className, classSpan, bodySpan, fields, opaqueMemberSpans }`
+- `ClassFieldNode { name, nameSpan, typeName, typeSpan, initializerSource, initializerSpan, isFinal, isVar, isLate, isStatic, sourceSpan }`
+- `parseClassStructure(source)` — finds first `ClassDeclaration` with a `BlockClassBody`; surfaces fields as nodes, other members as opaque spans. Required two analyzer-13 API adaptations: `ClassDeclaration.name` → `namePart.typeName`, and `ClassDeclaration.body` is now a sealed `ClassBody` requiring pattern match on `BlockClassBody`.
+- `ClassStructureEditPlanner` — five operations: `renameField`, `changeFieldType`, `changeFieldInitializer`, `removeField`, `addField`.
 
-**Validation:** 163 tests green (147 + 16 new pipeline tests across parsing + round-trip). 2 hand-crafted fixtures. Scout regression-free: flutter/packages/go_router (117 files) identical to M6.1 numbers — 0 crashes, 0 idempotence failures. CLI `loom parse` now three-way auto-detects (widget / route / pipeline) and prints all that succeed.
+**Validation:** 185 tests green (163 + 22 new class-structure tests, parsing + round-trip per operation). 2 hand-crafted fixtures. Scout against flutter/examples (1,214 files): 0 crashes, 0 idempotence failures, 599 class-structure clean parses. Scout against flutter/packages/go_router (117 files): 78 class clean parses, 0 crashes. CLI `loom parse` now four-way auto-detects (widget / route / pipeline / class-structure).
+
+**Deliberately omitted from M7.0 (any of these is a future milestone):**
+- Adding a type annotation to an untyped field
+- Adding an initializer to a bare field
+- Edits that target qualifiers (final / var / late / static)
+- Reordering fields
+- Method-signature / constructor / annotation modeling
+- Multi-variable field declarations (`final String a, b;`) — captured as best-effort
 **Blockers:** none
-**Next action:** **Eric review gate for M6.0 + M6.0.1 + M6.1 + M6.2.** Then likely M7 — class-structure modeling (fields/methods as a flat list of members, not a tree). This is the genuinely different shape M6.x's tree-based catalogs haven't pressured yet. Alternative: M6.3 could add one more constructor-tree catalog (test framework with statement walking, or fl_chart) before pivoting to M7.
+**Next action:** **Eric review gate for M6 series + M7.0.** Then M7.1 or M8 territory — likely M7.1 to deepen class-structure modeling (method signatures? constructors?), or pivot to M8's function-body / statement modeling which is the next genuinely new shape.
 
 ---
 
@@ -187,7 +194,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M6.0** (shipped 2026-05-14) | First non-widget catalog: route DSL (GoRouter-shaped). Same constructor-tree shape as widgets. | Forcing function: a second consumer of the kernel. |
 | **M6.1** (shipped 2026-05-14) | Extracted shared scaffolding in three phases: (1) unified sealed `ModelNode` hierarchy (Route node types collapsed into shared `OpaqueNode` / `MethodReferenceNode`); (2) `BaseVisitor` abstract class with three domain hooks; (3) `ListEditHelpers` for byte-level slot edits + `RouteSerializer` sibling of `WidgetSerializer`. Each visitor / edit-planner now ~50–100 lines instead of ~300–450. | Made the kernel genuinely reusable for a third domain — M6.2's next catalog needs ~50 lines, not a copy of the scaffolding. |
 | **M6.2** (shipped 2026-05-14) | Third domain catalog: synthetic Pipeline DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, representative of OutSystems-style declarative workflows. Adding the third domain revealed a hidden duplication in the per-domain serializers (the constructor-call serialization was ~100 lines of identical code in two places); extracted as `ConstructorCallSerializer`. | Validated M6.1's scaffolding actually plugs in a third domain — non-shared per-domain code is ~250 LOC total. The literal M6.2 options from the original plan (test framework, MaterialApp configs, Shelf cascades) turned out to be poor fits for "constructor-tree catalog" (test bodies live in function literals, MaterialApp is already a widget, Shelf is a cascade — different shape). Pipeline DSL is the cleanest demonstration of the OutSystems trajectory. |
-| **M7** | Class-structure modeling — fields, methods, constructor declarations as a *flat list of members*, not a tree. Different shape from widgets. | OutSystems-style entity modeling: Drift tables, Freezed unions, json_serializable classes. |
+| **M7.0** (shipped 2026-05-14) | Class-structure modeling — **fields only**, first slice. Parse a class's field declarations; methods + constructors stay opaque. Separate sealed hierarchy from constructor-tree `ModelNode` (different shape: flat list of members vs. tree of expressions). Five edit operations: rename / changeType / changeInitializer / remove / addField. ~600 LOC new. | OutSystems-style entity modeling for Drift tables, Freezed unions, json_serializable classes — most of those are field-shaped. |
+| M7.1+ | Deepen class structure: method signatures, constructors, annotations, multi-variable field declarations, edits to qualifiers. | Round out the class-structure model toward Drift / Freezed / json_serializable coverage. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -222,6 +230,15 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_orientation.dart` | flutter/website @ `e927ec21`, `examples/cookbook/design/orientation/lib/main.dart` | 47 | First class MyApp uses `const MaterialApp(...)` containing opaque OrientationList; exercises const-MaterialApp + opaque-single-slot |
 | `test/fixtures/real_world_text_input.dart` | flutter/website @ `e927ec21`, `examples/cookbook/forms/text_input/lib/main.dart` | 50 | MaterialApp → Scaffold → opaque MyCustomForm; second class MyCustomForm uses Column with multiple Paddings around opaque TextField/TextFormField |
 | `test/fixtures/real_world_long_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/long_lists/lib/main.dart` | 32 | MyApp with non-const constructor and `final List<String> items` field; MaterialApp → Scaffold → opaque ListView.builder with closures |
+
+### Class-structure fixtures (M7.0)
+
+The first non-tree-shaped model. Validates the kernel handles flat lists of class members alongside the constructor-tree DSLs.
+
+| File | Source | Lines | Exercises |
+|---|---|---|---|
+| `test/fixtures/class_simple.dart` | hand-crafted | 6 | Four fields with varied qualifiers: `final String`, `final int`, nullable `String?`, `late final DateTime`. No methods/constructors. |
+| `test/fixtures/class_with_methods.dart` | hand-crafted | 14 | Class with both fields and non-field members — constructor, getter, instance method, static const field. Tests that opaque-member spans are captured and don't interfere with field operations. |
 
 ### Pipeline fixtures (M6.2)
 
@@ -260,6 +277,47 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.0 — class-structure modeling (fields only, first slice)
+**Worked on:** First non-tree-shaped model in the kernel. M6.x's constructor-tree catalogs were all tree-of-expressions; class structure is a flat list of members. Eric picked the "fields only" scope to keep the slice small while validating that the kernel can absorb a genuinely different shape.
+
+**Architectural decision: separate sealed hierarchy.** `ClassStructureModel` is NOT a `ModelNode` variant. The constructor-tree `ModelNode` (sealed across `WidgetNode` / `RouteNode` / `PipelineNode` / `OpaqueNode` / `MethodReferenceNode`) models trees of expressions with named child slots. A class is fundamentally different: a flat ordered list of members (fields, methods, constructors) each with member-specific shape. Forcing class structure into `ModelNode` would either dilute the constructor-call semantics or contort the model. M7+ may eventually introduce a `LoomModel` umbrella; for now, separate hierarchies are the honest representation.
+
+**Surface added:**
+- `lib/src/model/class_structure.dart`: `ClassStructureModel`, `ClassStructureNode`, `ClassFieldNode`. ~140 LOC.
+- `lib/src/parsing/class_structure_parser.dart`: `parseClassStructure(source)`. Walks `body.members`; `FieldDeclaration` → `ClassFieldNode` (captures name/type/initializer spans + qualifiers), non-field members → opaque source-span entry. ~100 LOC.
+- `lib/src/emission/class_structure_edit_planner.dart`: five operations (`renameField`, `changeFieldType`, `changeFieldInitializer`, `removeField`, `addField`). ~200 LOC.
+- `test/fixtures/class_simple.dart` + `test/fixtures/class_with_methods.dart`.
+- `test/class_structure_parsing_test.dart` (12 tests) + `test/class_structure_round_trip_test.dart` (10 tests).
+- CLI four-way auto-detect; scout per-domain tracking.
+
+**Analyzer 13 API adaptations encountered:**
+- `ClassDeclaration.name` (used by older analyzers) became `ClassDeclaration.namePart.typeName`. The `namePart` is a sealed `ClassNamePart` whose `typeName` is the class-name `Token`.
+- `ClassDeclaration.body` is now a sealed `ClassBody`. Concrete: `BlockClassBody` (with `leftBracket` / `rightBracket`) for `class Foo {...}`, or `EmptyClassBody` (with `semicolon`) for `class Foo;`. Pattern-match required. M7.0 only supports BlockClassBody; EmptyClassBody is too rare to bother with.
+
+Note: `MethodDeclaration.name` is still a plain `Token` (unchanged), so the existing `BaseVisitor` usage at `base_visitor.dart:189` wasn't affected by this migration.
+
+**Validation:**
+- 185 tests green (163 + 22 new). `dart analyze` and `dart format` clean.
+- Scout against `flutter/examples` (1,214 files): 0 crashes, 0 idempotence failures, **599 class-structure clean parses**. That's the largest real-world surface we've scouted, and the new parser holds up.
+- Scout against `flutter/packages/go_router` (117 files): 78 class-structure clean parses, 0 crashes (route + widget numbers unchanged from M6.2).
+- Scout against the loom repo itself: 75 files, 55 class-structure clean parses.
+
+**Five edit operations, with deliberate gaps:** rename, changeType (requires existing type), changeInitializer (requires existing initializer), remove, addField. Excluded for M7.0:
+- Adding a type to an untyped field (requires insertion logic, not just span replacement)
+- Adding an initializer to a bare field (same reason)
+- Reordering fields (would benefit from the `ListEditHelpers` pattern but the class body isn't bracket-delimited the same way)
+- Edits to qualifiers (final / var / late / static — each is a separate token to insert/remove)
+- Multi-variable single-declaration handling (`final String a, b;` — one source decl maps to two `ClassFieldNode`s sharing the outer span)
+
+These are all incremental and can ship as M7.1 / M7.2 if real-world fixtures demand them.
+
+**Learned:**
+- **Constructor-tree generality has limits.** The M6.1 / M6.2 scaffolding (`BaseVisitor`, `ListEditHelpers`, `ConstructorCallSerializer`) doesn't carry over to class structure at all — different shape needs different machinery. The shared primitives (`SourceSpan`, `SourceEdit`, `applySourceEdits`) DO carry over, which is the right level of "shared kernel."
+- **Separate sealed hierarchies coexist fine.** Two `ModelNode`-like types in one package isn't confusing as long as the names are domain-clear. `ModelNode` = constructor-call tree node; `ClassStructureNode` = class root with members. Downstream consumers pattern-match within one hierarchy at a time.
+- **Real Dart is mostly classes.** 599/1,214 (49%) of flutter/examples files have at least one class. 55/75 (73%) of the loom repo. Class-structure modeling unlocks the most common Dart-file shape — much broader than widget trees alone (588 of those 1,214 files).
+
+**Next:** Eric review. Then M7.1 (deepen class structure with method signatures / constructors / annotations) or pivot to M8 (function-body / statement modeling). M7.1 is the natural extension; M8 is the next genuinely new shape after constructor trees and flat member lists.
 
 ### [2026-05-14] M6.2 — third domain catalog (synthetic Pipeline DSL)
 **Worked on:** Eric picked M6.2 (more catalogs to stress-test M6.1's scaffolding) over M7 (class-structure modeling). Added a synthetic data-pipeline / workflow DSL as the third domain consumer of the unified kernel, validating that the M6.1 abstractions actually let a third domain plug in.

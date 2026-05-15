@@ -39,6 +39,8 @@ void main(List<String> args) {
   var parsedRouteDiagnostics = 0;
   var parsedPipelineClean = 0;
   var parsedPipelineDiagnostics = 0;
+  var parsedClassClean = 0;
+  var parsedClassDiagnostics = 0;
   var noTreeFound = 0;
   var threwOther = 0;
   var idempotenceFailed = 0;
@@ -48,6 +50,7 @@ void main(List<String> args) {
   final widgetSamples = <String>[];
   final routeSamples = <String>[];
   final pipelineSamples = <String>[];
+  final classSamples = <String>[];
 
   for (final entity in root.listSync(recursive: true)) {
     if (entity is! File) {
@@ -72,6 +75,7 @@ void main(List<String> args) {
     var widgetParsed = false;
     var routeParsed = false;
     var pipelineParsed = false;
+    var classParsed = false;
     var crashed = false;
 
     try {
@@ -167,11 +171,42 @@ void main(List<String> args) {
       }
     }
 
-    if (!crashed && !widgetParsed && !routeParsed && !pipelineParsed) {
+    if (!crashed) {
+      try {
+        final classModel = parseClassStructure(source);
+        classParsed = true;
+        if (classModel.diagnostics.isEmpty) {
+          parsedClassClean++;
+          if (classSamples.length < 5) {
+            classSamples.add(
+              '${entity.path} -> ClassStructure(${classModel.root.className}, '
+              '${classModel.root.fields.length} field(s))',
+            );
+          }
+        } else {
+          parsedClassDiagnostics++;
+          diagnosticFiles.add(
+            '${entity.path} [class] (${classModel.diagnostics.length})',
+          );
+        }
+      } on ParseException {
+        // No class declaration.
+      } on Object catch (e, st) {
+        threwOther++;
+        crashes.add(_Crash(entity.path, e, st));
+        crashed = true;
+      }
+    }
+
+    if (!crashed &&
+        !widgetParsed &&
+        !routeParsed &&
+        !pipelineParsed &&
+        !classParsed) {
       noTreeFound++;
     }
 
-    if (widgetParsed || routeParsed || pipelineParsed) {
+    if (widgetParsed || routeParsed || pipelineParsed || classParsed) {
       final result = applySourceEdits(source, const <SourceEdit>[]);
       if (result != source) {
         idempotenceFailed++;
@@ -190,6 +225,10 @@ void main(List<String> args) {
   stdout.writeln('  Parsed pipeline clean:            $parsedPipelineClean');
   stdout.writeln(
     '  Parsed pipeline with diagnostics: $parsedPipelineDiagnostics',
+  );
+  stdout.writeln('  Parsed class-structure clean:     $parsedClassClean');
+  stdout.writeln(
+    '  Parsed class-structure with diag: $parsedClassDiagnostics',
   );
   stdout.writeln('  No tree found:                    $noTreeFound');
   stdout.writeln('  Other exception (CRASH):          $threwOther');
@@ -242,6 +281,13 @@ void main(List<String> args) {
     stdout.writeln('');
     stdout.writeln('Pipeline clean-parse samples (first 5):');
     for (final entry in pipelineSamples) {
+      stdout.writeln('  $entry');
+    }
+  }
+  if (classSamples.isNotEmpty) {
+    stdout.writeln('');
+    stdout.writeln('Class-structure clean-parse samples (first 5):');
+    for (final entry in classSamples) {
       stdout.writeln('  $entry');
     }
   }

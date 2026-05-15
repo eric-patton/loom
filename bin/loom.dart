@@ -72,10 +72,22 @@ int _runParse(List<String> args) {
     pipelineError = e;
   }
 
-  if (widgetModel == null && routeModel == null && pipelineModel == null) {
+  ClassStructureModel? classModel;
+  ParseException? classError;
+  try {
+    classModel = parseClassStructure(source);
+  } on ParseException catch (e) {
+    classError = e;
+  }
+
+  if (widgetModel == null &&
+      routeModel == null &&
+      pipelineModel == null &&
+      classModel == null) {
     stderr.writeln('loom parse: ${widgetError!.message}');
     stderr.writeln('loom parse: ${routeError!.message}');
     stderr.writeln('loom parse: ${pipelineError!.message}');
+    stderr.writeln('loom parse: ${classError!.message}');
     return 1;
   }
 
@@ -92,8 +104,53 @@ int _runParse(List<String> args) {
   if (pipelineModel != null) {
     if (hasPrinted) stdout.writeln('');
     _printPipelineTree(pipelineModel, stdout);
+    hasPrinted = true;
+  }
+  if (classModel != null) {
+    if (hasPrinted) stdout.writeln('');
+    _printClassStructure(classModel, stdout);
   }
   return 0;
+}
+
+void _printClassStructure(ClassStructureModel model, IOSink sink) {
+  final root = model.root;
+  final diagSuffix = model.diagnostics.isEmpty
+      ? ''
+      : ', ${model.diagnostics.length} diagnostic(s)';
+  sink.writeln(
+    'ClassStructureModel(class=${root.className}, '
+    '${root.fields.length} field(s), '
+    '${root.opaqueMemberSpans.length} opaque member(s)$diagSuffix)',
+  );
+  for (final diag in model.diagnostics) {
+    sink.writeln(
+      '  ! ${diag.message} @${diag.span.offset}+${diag.span.length}',
+    );
+  }
+  for (final field in root.fields) {
+    final qualifiers = <String>[
+      if (field.isStatic) 'static',
+      if (field.isLate) 'late',
+      if (field.isFinal) 'final',
+      if (field.isVar) 'var',
+    ];
+    final type = field.typeName ?? '';
+    final init =
+        field.initializerSource == null ? '' : ' = ${field.initializerSource}';
+    sink.writeln(
+      '  ${qualifiers.join(' ')}'
+      '${qualifiers.isNotEmpty ? ' ' : ''}'
+      '$type${type.isNotEmpty ? ' ' : ''}'
+      '${field.name}$init',
+    );
+  }
+  if (root.opaqueMemberSpans.isNotEmpty) {
+    sink.writeln('  // ${root.opaqueMemberSpans.length} opaque member(s):');
+    for (final span in root.opaqueMemberSpans) {
+      sink.writeln('  //   @${span.offset}+${span.length}');
+    }
+  }
 }
 
 void _printTree(WidgetTreeModel model, IOSink sink) {
