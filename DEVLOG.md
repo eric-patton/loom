@@ -8,8 +8,55 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.1 — close statement surface (yield/break/continue/labeled) + moveStatement
-**Last touched:** 2026-05-15 — four new statement kinds plus the long-deferred `moveStatement` (statement reordering) op. The function-body **statement** surface is now feature-complete at the structural level — every Dart statement shape the parser recognizes has a dedicated node type.
+**Active milestone:** M8.2 — for-loop header structure + expression internals (first slice)
+**Last touched:** 2026-05-15 — two bundled additions: (1) `ForStatementNode.header` now exposes the parenthesized for-header as a structured `ForLoopHeader` (sealed: `CStyleForHeader`, `ForEachHeader`, `OpaqueForLoopHeader` for pattern-for); (2) `ExpressionStatementNode.expression` exposes the expression as a structured `ExpressionNode` (sealed: `IdentifierExpression`, `LiteralExpression`, `MethodInvocationExpression`, `BinaryExpressionNode`, `OpaqueExpression`). 9 new edit ops.
+
+**M8.2 surface added (just now):**
+
+**For-loop header (full coverage of common shapes).** `ForStatementNode` keeps `headerSource` / `headerSpan` (M8.0c) and adds `header: ForLoopHeader` alongside (M8.2). The `ForLoopHeader` sealed type covers:
+- `CStyleForHeader` — `for (init; cond; updaters)`. Captures optional init source/span, both separator spans, optional condition source/span, and an ordered list of updater sources/spans. Init can be a variable decl (`var i = 0`) or expression (`i = 0`).
+- `ForEachHeader` — `for (var x in iter)` / `for (final T x in iter)` / `for (x in iter)`. Single class with `isExistingIdentifier: bool` flag distinguishing declared vs identifier shapes. Captures optional keyword (var/final), optional type, loop variable name+span, `in` keyword span, iterable source+span.
+- `OpaqueForLoopHeader` — pattern-for variants (`for (var (a, b) in pairs)`). Source preserved verbatim. Deferred — modeling pattern-for binding requires the M8.0f pattern infrastructure to apply to declarations (not just switch cases), which is a separate surface.
+
+**Expression internals (first slice).** New sealed `ExpressionNode` exposed via `ExpressionStatementNode.expression`. Five subtypes:
+- `IdentifierExpression` — `x`, `foo` (bare identifier reference).
+- `LiteralExpression` — `42`, `'hello'`, `true`, `null`, `3.14`. Carries `LiteralKind` enum + raw source. Adjacent-string-concatenation forms (`'a' 'b'`) are a single string literal.
+- `MethodInvocationExpression` — `f(args)` (no target) or `target.method(args)`. The target (when present) is itself an `ExpressionNode` (recursive). Arguments captured as raw source including the parens.
+- `BinaryExpressionNode` — `a + b`, `a == b`, etc. Operator lexeme + recursive operands. Named with `Node` suffix to avoid clashing with the analyzer's `BinaryExpression` type.
+- `OpaqueExpression` — catch-all for everything else (assignment, conditional, await, cast, is, property-access-without-invocation, instance-creation, collection literals, function expressions, etc.).
+
+**Scope discipline.** Expression internals are surfaced ONLY in `ExpressionStatementNode.expression`. Other expression-bearing positions (variable initializers, return expressions, condition expressions, pattern operands, etc.) still use raw source. The pattern from M8.0e/f/g/h applies here too: model the most common shapes first; promote others when fixtures demand.
+
+**Nine new edit ops:**
+
+For-loop header:
+- `changeCStyleForCondition` — replace the c-style header's condition expression.
+- `replaceCStyleForUpdater` — replace one updater by index.
+- `renameForEachLoopVariable` — rename the loop variable (does NOT update body references).
+- `changeForEachLoopVariableType` — change the type (requires existing type).
+- `changeForEachIterable` — replace the iterable expression.
+
+Expressions:
+- `renameIdentifierExpression` — rename a simple identifier.
+- `changeBinaryOperator` — swap the operator in a binary expression (works recursively on nested binary trees).
+- `changeMethodInvocationName` — rename the called method.
+- `changeMethodInvocationArguments` — replace the arg list source (must include parens).
+
+**Validation:** 444 tests green (was 412, +32 new). Two new fixtures: `function_body_with_for_headers.dart` (c-style + 3 for-each variants) and `function_body_with_expressions.dart` (12 expression-statement variants covering all 5 modeled kinds plus an assignment fall-through to opaque).
+
+**Deliberately deferred (M8.3+ / M9+):**
+- Expressions in OTHER positions (variable initializers, return expressions, if conditions, while conditions, pattern operands, switch subject, etc.) — only ExpressionStatement.expression is structured in M8.2.
+- Modeling more expression kinds (unary, conditional ternary, await, assignment, cascade, index, property access, instance creation, list/set/map/record literals, string interpolation, function expressions, throw, cast, is, postfix, prefixed identifier, etc.).
+- Modeling argument internals (currently the `argumentsSource` is opaque text including parens).
+- Modeling expression internals inside c-style for-headers (init expr / cond expr / updaters are still raw source within `CStyleForHeader`).
+- Modeling pattern-for binding (`for (var (a, b) in pairs)`).
+- Symbol-aware rename for non-pattern locals (loop variables, function args, etc.).
+- Cross-file modeling (M9): imports/exports, multi-file project view.
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a–h + M8.1 + M8.2 series (26 commits total). Expression internals are now structurally accessible inside expression statements; full coverage is a multi-milestone arc (M8.3+ would surface expressions in other positions and add more expression kinds). M9 is a natural pivot to cross-file modeling once the function-body story plateaus.
+
+**Note:** the M8.1 entry below is preserved.
 
 **M8.1 surface added (just now):** four new statement nodes + one new structural edit op + four targeted edit ops.
 
@@ -403,7 +450,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0g** (shipped 2026-05-15) | Object + record patterns. `ObjectPatternNode` (`case Foo(x: 1, y: var n):`) + `RecordPatternNode` (`case (1, 2):`) sharing a `PatternField` class that handles positional / explicit-named / shorthand-named (`:varX`) shapes. Three new ops: `changeObjectPatternType`, `renamePatternFieldName`, `replacePatternFieldPattern`. Existing pattern-internal ops work recursively inside fields. Pattern coverage now 6/14. | OutSystems-style decomposition — matching record/value shapes with field-level destructuring. Compound patterns are now first-class. |
 | **M8.0h** (shipped 2026-05-15) | Close pattern surface (14/14). 8 new pattern kinds: `ListPatternNode` (with rest elements), `MapPatternNode`, `RelationalPatternNode`, `NullCheckPatternNode`, `NullAssertPatternNode`, `CastPatternNode`, `ParenthesizedPatternNode`, `LogicalAndPatternNode` (flattened). Plus switch **expressions** surfaced on variable initializers and return expressions. Plus symbol-aware rename (`renameDeclaredPatternVariableWithReferences`) that rewrites pattern variable references across the case's guard + body via AST walking. 5 new edit ops. | Dart 3 pattern matching is now feature-complete at the structural level. Switch-expression decisions (value-producing multi-way matches) and symbol-aware pattern variable renames are first-class. |
 | **M8.1** (shipped 2026-05-15) | Close statement surface. 4 new statement kinds: `YieldStatementNode` (with `yield*` form), `BreakStatementNode`, `ContinueStatementNode`, `LabeledStatementNode` (+ `LabelNode`). Plus `moveStatement(block, fromIndex, toIndex)` — long-deferred reordering op that single-edit replaces the affected sub-range with the reordered content (inter-statement gaps preserved). 4 targeted edit ops: `changeYieldExpression`, `changeBreakLabel`, `changeContinueLabel`, `renameStatementLabel`. | Function-body **statement** surface is now feature-complete. Generators (`sync*`/`async*`) and explicit loop control are first-class; statement reordering closes the basic structural-edit toolkit. |
-| M8.2+ | Modeling expression internals (function calls, await, binary ops, assignment) — the biggest remaining surface in function bodies. Plus broader symbol-aware rename (for non-pattern locals), symbol-aware label rename, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, adding/removing/reordering pattern elements, bare-statement control-flow bodies, adding labels to bare break/continue, modeling switch expressions deeply nested in other expressions. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.2** (shipped 2026-05-15) | For-loop header structure + expression internals (first slice). `ForStatementNode.header` exposes structured `ForLoopHeader` (c-style, for-each, opaque catch-all for pattern-for). `ExpressionStatementNode.expression` exposes 5 expression kinds (identifier, literal, method-invocation, binary, opaque). 9 new edit ops. | For-loop pieces (cond, updater, iterable, loop variable) are first-class. Expression-statement editing (rename calls, swap operators, etc.) starts to work for common shapes. |
+| M8.3+ | Expand expression modeling to OTHER positions (variable initializers, return expressions, if/while conditions, pattern operands, etc.). Promote more expression kinds out of opaque (assignment, conditional, await, cast, is, property access, instance creation, collection literals, function expressions). Argument-list internals. Symbol-aware rename for non-pattern locals + labels. Modeling pattern-for binding. Adding/removing/reordering pattern fields, list/map entries, logical-or/logical-and operands. Bare-statement control-flow bodies. Switch expressions deeply nested in other expressions. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -486,6 +534,32 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.2 — for-loop header + expression internals (first slice)
+**Worked on:** Two opaque-text surfaces inside function bodies converted to structured views. (1) For-loop header — the parenthesized `(...)` after `for` was raw text in M8.0c; M8.2 surfaces a sealed `ForLoopHeader` covering c-style and for-each shapes. (2) Expression internals — the contents of `expressionSource` on expression statements were raw text from M8.0a onward; M8.2 surfaces a sealed `ExpressionNode` covering five common kinds.
+
+**For-loop header — full coverage.** Analyzer has 6 `ForParts` subtypes: `ForPartsWithDeclarations`, `ForPartsWithExpression`, `ForPartsWithPattern`, `ForEachPartsWithDeclaration`, `ForEachPartsWithIdentifier`, `ForEachPartsWithPattern`. The kernel collapses to 3:
+- C-style with declarations OR expression init → `CStyleForHeader` (init source nullable; differentiating var-decl vs expression init isn't useful for editing).
+- For-each with declaration OR existing identifier → `ForEachHeader` (with `isExistingIdentifier: bool` flag). Same play as M8.0g's `PatternField` collapsing positional/named/shorthand into one class.
+- Pattern-for variants → `OpaqueForLoopHeader`. Deferred because modeling pattern-for binding requires reusing the M8.0f `PatternNode` infrastructure for declaration context, which is its own slice.
+
+The condition / updaters / init inside c-style headers are still RAW source (modeling expression internals on for-headers isn't included in M8.2's expression-statement-only slice). Future M8.3+ can promote those if needed.
+
+**Expression internals — first slice.** Sealed `ExpressionNode` with 5 subtypes (identifier, literal, method-invocation, binary, opaque). The big design call: **scope to ExpressionStatementNode only**. Other expression positions (variable initializers, return expressions, conditions, pattern operands) still see raw source. Reasons:
+- Expression internals appear EVERYWHERE in Dart. Surfacing them globally requires touching every statement/pattern node that holds expression source. That's a refactor for a separate milestone.
+- The M8.0e–h pattern arc taught me that "scope tightly, ship the most common shape first" produces value faster than trying to cover everything at once.
+- ExpressionStatement is the highest-value position because that's where `print(x);` / `x.method(y);` / `x = 5;` live — visible-by-default for callers.
+
+**Naming clash: `BinaryExpression`.** The analyzer has a `BinaryExpression` type. My kernel class needed the same name (other expression kinds — `MethodInvocation`, `SimpleIdentifier` — don't clash because I renamed them in the kernel). I considered hiding the analyzer's `BinaryExpression` via the `hide` import pattern (same as `ClassMember`, `PatternField`, etc.) but decided to rename the kernel class to `BinaryExpressionNode` instead — it's the only collision, and a `Node` suffix is consistent with `LabelNode`, `MapPatternEntryNode`, etc. Other expression types stay without the suffix for now; if more collisions emerge in M8.3+, I'll rename in bulk for consistency.
+
+**Validation:** 444 tests green (was 412, +32 new). `dart analyze` clean. `dart format` clean. Two new fixtures (for-headers + expressions).
+
+**Learned:**
+- **Backward-compat field-addition pattern is repeating successfully.** Adding `header: ForLoopHeader` alongside `headerSource: String` (the M8.0c field) mirrors M7.2's `parameters` alongside `parametersSource` and M8.0f's `pattern` alongside `patternSource`. Existing callers using the raw source field keep working; new callers walk the structured view. Worth codifying as a kernel idiom.
+- **`isExistingIdentifier` flag is the right collapse for for-each.** Two analyzer types (`ForEachPartsWithDeclaration` / `ForEachPartsWithIdentifier`) share substantial structure; the only meaningful difference for editing is whether the loop variable is declared here or refers elsewhere. A bool flag captures that without two classes. Same play as the four catch-clause variants → `CatchClauseNode` collapse in M8.0d.
+- **Expression scope is the first piece of M8.2's "first slice" framing.** I could have done full expression coverage (surface in all 8+ positions where expressions appear) but that's much bigger than M8.0h. Limiting to ExpressionStatement makes M8.2 shippable in one commit while still delivering the most-visible benefit.
+
+**Next:** Eric review of M6 + M7 + M8.0a–h + M8.1 + M8.2 series (26 commits total). Function-body modeling now has structured views for: statements (all kinds), patterns (all kinds), control-flow headers (for-loop), and expressions (first slice — ExpressionStatement only). The remaining big surfaces are: expressions in other positions, more expression kinds, pattern-for binding, and cross-file modeling (M9). M8.3 would deepen expression coverage; M9 would jump up a level.
 
 ### [2026-05-15] M8.1 — close statement surface + moveStatement
 **Worked on:** Final structural slice for function-body modeling. Four new statement kinds (yield/break/continue/labeled) plus the long-deferred `moveStatement` reorder op. After this milestone, every Dart statement shape the parser recognizes has a dedicated `StatementNode` subtype — `OpaqueStatementNode` is now only a safety fallback.

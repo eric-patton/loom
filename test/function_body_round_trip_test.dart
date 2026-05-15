@@ -1146,6 +1146,237 @@ String f(Object o) {
     });
   });
 
+  group('for-loop header edits (M8.2)', () {
+    test('idempotence on function_body_with_for_headers.dart', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('changeCStyleForCondition rewrites the c-style condition', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      final f = body.statements[1] as ForStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeCStyleForCondition(
+        header: f.header,
+        newConditionSource: 'i < 100',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedF = reparsed.statements[1] as ForStatementNode;
+      final h = reparsedF.header as CStyleForHeader;
+      expect(h.conditionSource, equals('i < 100'));
+    });
+
+    test('replaceCStyleForUpdater rewrites the updater', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      final f = body.statements[1] as ForStatementNode;
+
+      final edit = FunctionBodyEditPlanner.replaceCStyleForUpdater(
+        header: f.header,
+        updaterIndex: 0,
+        newUpdaterSource: 'i += 2',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedF = reparsed.statements[1] as ForStatementNode;
+      final h = reparsedF.header as CStyleForHeader;
+      expect(h.updaterSources, equals(['i += 2']));
+    });
+
+    test('renameForEachLoopVariable renames the loop variable', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      // body.statements[2] is `for (final user in xs) {...}`.
+      final f = body.statements[2] as ForStatementNode;
+
+      final edit = FunctionBodyEditPlanner.renameForEachLoopVariable(
+        header: f.header,
+        newName: 'item',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedF = reparsed.statements[2] as ForStatementNode;
+      final h = reparsedF.header as ForEachHeader;
+      expect(h.loopVariableName, equals('item'));
+    });
+
+    test('changeForEachLoopVariableType swaps int → num', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      // body.statements[3] is `for (int x in xs) {...}`.
+      final f = body.statements[3] as ForStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeForEachLoopVariableType(
+        header: f.header,
+        newType: 'num',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedF = reparsed.statements[3] as ForStatementNode;
+      final h = reparsedF.header as ForEachHeader;
+      expect(h.typeSource, equals('num'));
+    });
+
+    test('changeForEachIterable rewrites the iterable expression', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      final f = body.statements[2] as ForStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeForEachIterable(
+        header: f.header,
+        newIterableSource: 'activeUsers',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedF = reparsed.statements[2] as ForStatementNode;
+      final h = reparsedF.header as ForEachHeader;
+      expect(h.iterableSource, equals('activeUsers'));
+    });
+
+    test('changeForEachLoopVariableType throws when no type', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      // body.statements[2] is `for (final user in xs)` — no type.
+      final f = body.statements[2] as ForStatementNode;
+      expect(
+        () => FunctionBodyEditPlanner.changeForEachLoopVariableType(
+          header: f.header,
+          newType: 'String',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('changeCStyleForCondition throws on a for-each header', () {
+      final source = _loadFixture('function_body_with_for_headers.dart');
+      final body = parseFunctionBody(source);
+      final f = body.statements[2] as ForStatementNode;
+      expect(
+        () => FunctionBodyEditPlanner.changeCStyleForCondition(
+          header: f.header,
+          newConditionSource: 'true',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+
+  group('expression-internal edits (M8.2)', () {
+    test('idempotence on function_body_with_expressions.dart', () {
+      final source = _loadFixture('function_body_with_expressions.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('changeMethodInvocationName: print → log', () {
+      final source = _loadFixture('function_body_with_expressions.dart');
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpression;
+
+      final edit = FunctionBodyEditPlanner.changeMethodInvocationName(
+        expression: m,
+        newMethodName: 'log',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedStmt = reparsed.statements[0] as ExpressionStatementNode;
+      final reparsedM = reparsedStmt.expression as MethodInvocationExpression;
+      expect(reparsedM.methodName, equals('log'));
+    });
+
+    test('changeMethodInvocationArguments: (x) → (x, y)', () {
+      final source = _loadFixture('function_body_with_expressions.dart');
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpression;
+
+      final edit = FunctionBodyEditPlanner.changeMethodInvocationArguments(
+        expression: m,
+        newArgumentsSource: '(x, 42)',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedStmt = reparsed.statements[0] as ExpressionStatementNode;
+      final reparsedM = reparsedStmt.expression as MethodInvocationExpression;
+      expect(reparsedM.argumentsSource, equals('(x, 42)'));
+    });
+
+    test('renameIdentifierExpression: bare `x;` → bare `value;`', () {
+      final source = _loadFixture('function_body_with_expressions.dart');
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[4] as ExpressionStatementNode;
+      final id = stmt.expression as IdentifierExpression;
+
+      final edit = FunctionBodyEditPlanner.renameIdentifierExpression(
+        expression: id,
+        newName: 'value',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // Re-parse: the bare-identifier statement now says `value;`.
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedStmt = reparsed.statements[4] as ExpressionStatementNode;
+      expect(
+        (reparsedStmt.expression as IdentifierExpression).name,
+        equals('value'),
+      );
+    });
+
+    test('changeBinaryOperator: x + 1 → x - 1', () {
+      final source = _loadFixture('function_body_with_expressions.dart');
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[9] as ExpressionStatementNode;
+      final b = stmt.expression as BinaryExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeBinaryOperator(
+        expression: b,
+        newOperator: '-',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedStmt = reparsed.statements[9] as ExpressionStatementNode;
+      final reparsedB = reparsedStmt.expression as BinaryExpressionNode;
+      expect(reparsedB.operator, equals('-'));
+    });
+
+    test('changeBinaryOperator on nested binary edits the inner only', () {
+      const source = '''
+void f(int x) {
+  x + 1 + 2;
+}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      // Outer is `(x + 1) + 2`; left operand is the inner `x + 1`.
+      final outer = stmt.expression as BinaryExpressionNode;
+      final inner = outer.leftOperand as BinaryExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeBinaryOperator(
+        expression: inner,
+        newOperator: '*',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // After edit: `x * 1 + 2;`
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedStmt = reparsed.statements[0] as ExpressionStatementNode;
+      final reparsedOuter = reparsedStmt.expression as BinaryExpressionNode;
+      expect(reparsedOuter.operator, equals('+'));
+      final reparsedInner = reparsedOuter.leftOperand as BinaryExpressionNode;
+      expect(reparsedInner.operator, equals('*'));
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =

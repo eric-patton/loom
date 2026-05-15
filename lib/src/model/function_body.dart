@@ -186,14 +186,24 @@ class DeclaredVariable {
 }
 
 /// A standalone expression used as a statement — `print(x);`,
-/// `x = 5;`, `await fetch();`, `someInstance.method();`. The
-/// expression's internal structure is NOT modeled in M8.0a; it lives
-/// in `expressionSource` as raw text and round-trips verbatim.
+/// `x = 5;`, `await fetch();`, `someInstance.method();`.
+///
+/// M8.0a captured the expression as raw `expressionSource` only.
+/// M8.0h added the optional `switchExpression` structured overlay
+/// (when the expression IS a switch expression). M8.2 adds a more
+/// general `expression: ExpressionNode` structured view modeling
+/// five expression kinds (identifier, literal, method invocation,
+/// binary, opaque catch-all).
+///
+/// Both the raw `expressionSource` and the structured `expression`
+/// are always present; existing callers using `expressionSource`
+/// continue to work.
 class ExpressionStatementNode extends StatementNode {
   const ExpressionStatementNode({
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    required this.expression,
     this.switchExpression,
   });
 
@@ -206,6 +216,10 @@ class ExpressionStatementNode extends StatementNode {
   /// Span of the full statement including the trailing `;`.
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured expression (M8.2). Always non-null; falls back to
+  /// `OpaqueExpression` for kinds not modeled in the M8.2 first slice.
+  final ExpressionNode expression;
 
   /// Structured view when the expression IS a top-level switch
   /// expression. Null otherwise. (M8.0h)
@@ -329,22 +343,19 @@ class IfStatementNode extends StatementNode {
 ///
 /// Covers c-style `for (var i = 0; i < n; i++)`, for-each
 /// `for (var x in iter)`, `for (final T x in iter)`, and pattern-for
-/// forms — the entire parenthesized header is preserved as raw source.
+/// forms. M8.0c captured the entire parenthesized header as raw
+/// source; M8.2 adds a structured `header: ForLoopHeader` field
+/// alongside it for callers that want to edit the header's pieces.
+///
 /// Only fully-braced bodies are modeled; a bare-statement body
 /// (`for (x in xs) f(x);`) falls through to `OpaqueStatementNode`.
-///
-/// **Why opaque header:** the header has three structurally different
-/// shapes (init/cond/update triple, declared for-each, expression
-/// for-each) plus optional `await` and pattern variants. Modeling them
-/// requires three new node kinds — deferred until concrete fixtures
-/// demand it. For now, edits to the body work via `StatementBlock`
-/// without needing to understand the header.
 class ForStatementNode extends StatementNode {
   const ForStatementNode({
     required this.forKeywordSpan,
     required this.awaitKeywordSpan,
     required this.headerSource,
     required this.headerSpan,
+    required this.header,
     required this.body,
     required this.sourceSpan,
   });
@@ -358,10 +369,16 @@ class ForStatementNode extends StatementNode {
 
   /// Raw source of the header, INCLUDING the surrounding `(` and `)`.
   /// E.g. `(var i = 0; i < n; i++)`, `(final user in users)`.
+  /// Always present; the structured view is in [header].
   final String headerSource;
 
   /// Span covering the parenthesized header.
   final SourceSpan headerSpan;
+
+  /// Structured header (M8.2). Either `CStyleForHeader`,
+  /// `ForEachHeader`, or `OpaqueForLoopHeader` (pattern-for variants).
+  /// Always non-null.
+  final ForLoopHeader header;
 
   /// The `{ ... }` block of the loop body.
   final StatementBlock body;
@@ -1595,4 +1612,334 @@ class SwitchExpressionCaseNode {
   @override
   String toString() => 'SwitchExpressionCaseNode('
       '$pattern => $resultExpressionSource)';
+}
+
+// ===========================================================================
+// For-loop header (M8.2)
+// ===========================================================================
+
+/// Base type for a `ForStatementNode`'s parenthesized header. Sealed
+/// across three subtypes:
+///   * `CStyleForHeader` — `for (init; cond; updaters)`.
+///   * `ForEachHeader` — `for (var x in iter)` or `for (x in iter)`.
+///   * `OpaqueForLoopHeader` — pattern-for shapes
+///     (`for (var (a, b) in pairs)`) or future unknown headers.
+sealed class ForLoopHeader {
+  const ForLoopHeader();
+
+  /// Span of the full header including the surrounding `(` and `)`.
+  SourceSpan get sourceSpan;
+}
+
+/// A c-style `for (init; condition; updaters)` header.
+///
+/// The init, condition, and updaters are captured as raw source
+/// (each optional for init/condition; updaters is an ordered list).
+/// Modeling expression internals is the M8.2 first slice and applies
+/// only to top-level expression statements for now; for-loop pieces
+/// stay as opaque text until concrete edits demand more.
+class CStyleForHeader extends ForLoopHeader {
+  CStyleForHeader({
+    required this.initSource,
+    required this.initSpan,
+    required this.leftSeparatorSpan,
+    required this.conditionSource,
+    required this.conditionSpan,
+    required this.rightSeparatorSpan,
+    required List<String> updaterSources,
+    required List<SourceSpan> updaterSpans,
+    required this.sourceSpan,
+  })  : updaterSources = List.unmodifiable(updaterSources),
+        updaterSpans = List.unmodifiable(updaterSpans),
+        assert(
+          updaterSources.length == updaterSpans.length,
+          'updaterSources and updaterSpans must have the same length',
+        );
+
+  /// Raw source of the init clause (e.g. `var i = 0`, `i = 0`), or
+  /// null when the init is empty (`for (; cond; updater)`).
+  final String? initSource;
+  final SourceSpan? initSpan;
+
+  /// Span of the first `;` separator (after init).
+  final SourceSpan leftSeparatorSpan;
+
+  /// Raw source of the condition expression, or null when absent
+  /// (`for (init; ; updater)`).
+  final String? conditionSource;
+  final SourceSpan? conditionSpan;
+
+  /// Span of the second `;` separator (after condition).
+  final SourceSpan rightSeparatorSpan;
+
+  /// Raw sources of the updater expressions (e.g. `['i++', 'j *= 2']`).
+  /// Empty when no updaters.
+  final List<String> updaterSources;
+  final List<SourceSpan> updaterSpans;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'CStyleForHeader('
+      '${initSource ?? ''}; ${conditionSource ?? ''}; '
+      '${updaterSources.join(', ')})';
+}
+
+/// A `for (var x in iter)` or `for (x in iter)` header.
+///
+/// Covers both shapes via a single class with `isExistingIdentifier`:
+///   * **Declared variable** — `for (var x in iter)`,
+///     `for (final T x in iter)`, `for (int x in iter)`. Has optional
+///     keyword (`var`/`final`) and optional type annotation.
+///   * **Existing identifier** — `for (x in iter)` where `x` is
+///     already declared. Rare; `isExistingIdentifier == true`.
+class ForEachHeader extends ForLoopHeader {
+  const ForEachHeader({
+    required this.keywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.loopVariableName,
+    required this.loopVariableSpan,
+    required this.isExistingIdentifier,
+    required this.inKeywordSpan,
+    required this.iterableSource,
+    required this.iterableSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the optional leading `var` / `final` / `const` keyword
+  /// (declared-variable form only). Null otherwise.
+  final SourceSpan? keywordSpan;
+
+  /// Raw source of the type annotation, or null when absent.
+  final String? typeSource;
+  final SourceSpan? typeSpan;
+
+  /// Name of the loop variable.
+  final String loopVariableName;
+  final SourceSpan loopVariableSpan;
+
+  /// True when this is `for (x in iter)` (existing identifier),
+  /// false when this is `for (var x in iter)` / `for (T x in iter)`
+  /// (declares a new variable).
+  final bool isExistingIdentifier;
+
+  /// Span of the `in` keyword.
+  final SourceSpan inKeywordSpan;
+
+  /// Raw source of the iterable expression.
+  final String iterableSource;
+  final SourceSpan iterableSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ForEachHeader('
+      '${typeSource == null ? '' : '$typeSource '}'
+      '$loopVariableName in $iterableSource)';
+}
+
+/// Catch-all for for-loop header shapes the parser doesn't model
+/// structurally — pattern-for variants like `for (var (a, b) in pairs)`,
+/// `for (final (a, b) = something; ...; ...)` etc. Preserves the
+/// header source verbatim.
+class OpaqueForLoopHeader extends ForLoopHeader {
+  const OpaqueForLoopHeader({
+    required this.headerSource,
+    required this.sourceSpan,
+  });
+
+  /// Verbatim header text (including the surrounding parens).
+  final String headerSource;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'OpaqueForLoopHeader($headerSource)';
+}
+
+// ===========================================================================
+// Expression internals — first slice (M8.2)
+// ===========================================================================
+
+/// Base type for a Dart expression. Sealed across five subtypes for
+/// the M8.2 first slice — the most common shapes that appear inside
+/// `ExpressionStatementNode`. Most expression kinds fall through to
+/// `OpaqueExpression` for now; future milestones can promote them as
+/// concrete edit needs demand.
+///
+/// **Scope (M8.2):** structured modeling exists only inside
+/// `ExpressionStatementNode.expression`. Other expression-bearing
+/// positions (variable initializers, return expressions, if conditions,
+/// etc.) still use raw source. Surfacing structured expressions
+/// everywhere is a separate, larger surface.
+///
+/// **Modeled kinds:**
+///   * `IdentifierExpression` — `x`, `print` (a bare reference).
+///   * `LiteralExpression` — `42`, `'hello'`, `true`, `false`, `null`,
+///     `3.14`.
+///   * `MethodInvocationExpression` — `f(args)` or `target.method(args)`.
+///   * `BinaryExpression` — `a + b`, `a == b`, etc.
+///   * `OpaqueExpression` — catch-all for unary, conditional, await,
+///     assignment, cascade, function expressions, index, property
+///     access (without invocation), instance creation, list/set/map/
+///     record literals, string interpolation, throw, cast, is, etc.
+sealed class ExpressionNode {
+  const ExpressionNode();
+
+  /// Span of the full expression in the source.
+  SourceSpan get sourceSpan;
+}
+
+/// A simple identifier reference — `x`, `print`, `myVar`. A property
+/// access like `foo.bar` is NOT this (it's opaque for M8.2).
+class IdentifierExpression extends ExpressionNode {
+  const IdentifierExpression({
+    required this.name,
+    required this.sourceSpan,
+  });
+
+  final String name;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'IdentifierExpression($name)';
+}
+
+/// A literal value — int, double, string, boolean, null. The literal's
+/// raw source is preserved verbatim (e.g. `0xFF`, `1_000_000`,
+/// `'it\'s'`, `"""triple"""`) — the kernel doesn't normalize literal
+/// representations.
+class LiteralExpression extends ExpressionNode {
+  const LiteralExpression({
+    required this.kind,
+    required this.source,
+    required this.sourceSpan,
+  });
+
+  final LiteralKind kind;
+  final String source;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'LiteralExpression(${kind.name}: $source)';
+}
+
+/// Kinds of `LiteralExpression`. String literals INCLUDE adjacent-
+/// concatenation forms (`'a' 'b'`) — they're a single string literal
+/// in the analyzer AST.
+enum LiteralKind {
+  intLiteral,
+  doubleLiteral,
+  stringLiteral,
+  boolLiteral,
+  nullLiteral,
+}
+
+/// A method invocation — `print(x)`, `x.method(y)`, `Foo.bar(z)`.
+///
+/// `target` is null for top-level invocations (`print(x)`). For
+/// `x.method(y)`, target is `IdentifierExpression(x)` and methodName
+/// is `method`. The arguments list is captured as raw source
+/// (`(x, y)`) including the surrounding parens — modeling individual
+/// arguments structurally is deferred.
+class MethodInvocationExpression extends ExpressionNode {
+  const MethodInvocationExpression({
+    required this.target,
+    required this.dotSpan,
+    required this.methodName,
+    required this.methodNameSpan,
+    required this.argumentsSource,
+    required this.argumentsSpan,
+    required this.sourceSpan,
+  });
+
+  /// The target expression (e.g. `x` in `x.method(y)`), or null when
+  /// this is a top-level invocation (`f(args)`).
+  final ExpressionNode? target;
+
+  /// Span of the `.` separator. Null when [target] is null.
+  final SourceSpan? dotSpan;
+
+  /// The invoked method's name.
+  final String methodName;
+  final SourceSpan methodNameSpan;
+
+  /// Raw source of the argument list INCLUDING the surrounding parens.
+  final String argumentsSource;
+  final SourceSpan argumentsSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => target == null
+      ? 'MethodInvocationExpression($methodName$argumentsSource)'
+      : 'MethodInvocationExpression($target.$methodName$argumentsSource)';
+}
+
+/// A binary expression — `a + b`, `a == b`, `a && b`, `a ?? b`, etc.
+///
+/// Named with the `Node` suffix to avoid clashing with the analyzer's
+/// `BinaryExpression` type (other expression kinds don't clash, but
+/// this one does).
+///
+/// Operands are recursive — they're full `ExpressionNode`s, so
+/// `a + b * c` produces `BinaryExpressionNode(a, +, BinaryExpressionNode(b, *, c))`
+/// matching the analyzer's precedence parsing. Editing the operator
+/// or operands works the same regardless of nesting depth.
+class BinaryExpressionNode extends ExpressionNode {
+  const BinaryExpressionNode({
+    required this.leftOperand,
+    required this.operator,
+    required this.operatorSpan,
+    required this.rightOperand,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode leftOperand;
+
+  /// The operator token's lexeme — `+`, `-`, `*`, `/`, `~/`, `%`,
+  /// `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `??`, `|`, `&`,
+  /// `^`, `<<`, `>>`, `>>>`, `as`, `is`.
+  final String operator;
+  final SourceSpan operatorSpan;
+
+  final ExpressionNode rightOperand;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() =>
+      'BinaryExpressionNode($leftOperand $operator $rightOperand)';
+}
+
+/// An expression kind not yet modeled. Preserves the raw source.
+/// Future milestones can promote individual kinds.
+class OpaqueExpression extends ExpressionNode {
+  const OpaqueExpression({
+    required this.sourceText,
+    required this.sourceSpan,
+  });
+
+  final String sourceText;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final preview = sourceText.length > 40
+        ? '${sourceText.substring(0, 40).replaceAll('\n', '\\n')}...'
+        : sourceText.replaceAll('\n', '\\n');
+    return 'OpaqueExpression("$preview")';
+  }
 }

@@ -115,6 +115,7 @@ StatementNode _convertStatement(Statement stmt, String source) {
       ),
       expressionSpan: exprSpan,
       sourceSpan: span,
+      expression: _convertExpression(expr, source),
       switchExpression: expr is SwitchExpression
           ? _convertSwitchExpression(expr, source)
           : null,
@@ -320,10 +321,10 @@ IfStatementNode? _tryConvertIfStatement(
 }
 
 /// Attempts to convert a `ForStatement` into a `ForStatementNode`.
-/// Returns null when the body isn't a `Block`. The header
-/// (`(...)` between `for` / optional `await` and the body) is captured
-/// as raw source — its internal structure (c-style triple vs for-each
-/// vs pattern-for) is not yet modeled.
+/// Returns null when the body isn't a `Block`. The header is
+/// captured BOTH as raw source AND as a structured `ForLoopHeader`
+/// (M8.2): `CStyleForHeader`, `ForEachHeader`, or
+/// `OpaqueForLoopHeader` (pattern-for variants).
 ForStatementNode? _tryConvertForStatement(
   ForStatement stmt,
   String source,
@@ -355,8 +356,160 @@ ForStatementNode? _tryConvertForStatement(
           ),
     headerSource: headerSource,
     headerSpan: headerSpan,
+    header: _convertForLoopHeader(stmt, source, headerSource, headerSpan),
     body: _convertBlock(body, source),
     sourceSpan: span,
+  );
+}
+
+/// Converts a `ForStatement`'s parts into a structured `ForLoopHeader`.
+/// Returns `OpaqueForLoopHeader` for pattern-for variants
+/// (`ForPartsWithPattern`, `ForEachPartsWithPattern`) — those are
+/// less common and modeling pattern-for binding requires the M8.0f
+/// pattern infrastructure to apply to declarations, not just switch
+/// cases. Deferred.
+ForLoopHeader _convertForLoopHeader(
+  ForStatement stmt,
+  String source,
+  String headerSource,
+  SourceSpan headerSpan,
+) {
+  final parts = stmt.forLoopParts;
+
+  if (parts is ForPartsWithDeclarations) {
+    return _convertCStyleHeader(
+      initSource: source.substring(
+        parts.variables.offset,
+        parts.variables.offset + parts.variables.length,
+      ),
+      initSpan: SourceSpan(
+        offset: parts.variables.offset,
+        length: parts.variables.length,
+      ),
+      parts: parts,
+      source: source,
+      headerSpan: headerSpan,
+    );
+  }
+  if (parts is ForPartsWithExpression) {
+    final init = parts.initialization;
+    return _convertCStyleHeader(
+      initSource: init == null
+          ? null
+          : source.substring(init.offset, init.offset + init.length),
+      initSpan: init == null
+          ? null
+          : SourceSpan(offset: init.offset, length: init.length),
+      parts: parts,
+      source: source,
+      headerSpan: headerSpan,
+    );
+  }
+  if (parts is ForEachPartsWithDeclaration) {
+    final lv = parts.loopVariable;
+    return ForEachHeader(
+      keywordSpan: lv.keyword == null
+          ? null
+          : SourceSpan(
+              offset: lv.keyword!.offset,
+              length: lv.keyword!.length,
+            ),
+      typeSource: lv.type == null
+          ? null
+          : source.substring(
+              lv.type!.offset,
+              lv.type!.offset + lv.type!.length,
+            ),
+      typeSpan: lv.type == null
+          ? null
+          : SourceSpan(offset: lv.type!.offset, length: lv.type!.length),
+      loopVariableName: lv.name.lexeme,
+      loopVariableSpan:
+          SourceSpan(offset: lv.name.offset, length: lv.name.length),
+      isExistingIdentifier: false,
+      inKeywordSpan: SourceSpan(
+        offset: parts.inKeyword.offset,
+        length: parts.inKeyword.length,
+      ),
+      iterableSource: source.substring(
+        parts.iterable.offset,
+        parts.iterable.offset + parts.iterable.length,
+      ),
+      iterableSpan: SourceSpan(
+        offset: parts.iterable.offset,
+        length: parts.iterable.length,
+      ),
+      sourceSpan: headerSpan,
+    );
+  }
+  if (parts is ForEachPartsWithIdentifier) {
+    final id = parts.identifier;
+    return ForEachHeader(
+      keywordSpan: null,
+      typeSource: null,
+      typeSpan: null,
+      loopVariableName: id.name,
+      loopVariableSpan: SourceSpan(offset: id.offset, length: id.length),
+      isExistingIdentifier: true,
+      inKeywordSpan: SourceSpan(
+        offset: parts.inKeyword.offset,
+        length: parts.inKeyword.length,
+      ),
+      iterableSource: source.substring(
+        parts.iterable.offset,
+        parts.iterable.offset + parts.iterable.length,
+      ),
+      iterableSpan: SourceSpan(
+        offset: parts.iterable.offset,
+        length: parts.iterable.length,
+      ),
+      sourceSpan: headerSpan,
+    );
+  }
+  // ForPartsWithPattern, ForEachPartsWithPattern, or any future shape.
+  return OpaqueForLoopHeader(
+    headerSource: headerSource,
+    sourceSpan: headerSpan,
+  );
+}
+
+CStyleForHeader _convertCStyleHeader({
+  required String? initSource,
+  required SourceSpan? initSpan,
+  required ForParts parts,
+  required String source,
+  required SourceSpan headerSpan,
+}) {
+  final condition = parts.condition;
+  final updaterSources = <String>[];
+  final updaterSpans = <SourceSpan>[];
+  for (final u in parts.updaters) {
+    updaterSources.add(source.substring(u.offset, u.offset + u.length));
+    updaterSpans.add(SourceSpan(offset: u.offset, length: u.length));
+  }
+  return CStyleForHeader(
+    initSource: initSource,
+    initSpan: initSpan,
+    leftSeparatorSpan: SourceSpan(
+      offset: parts.leftSeparator.offset,
+      length: parts.leftSeparator.length,
+    ),
+    conditionSource: condition == null
+        ? null
+        : source.substring(
+            condition.offset,
+            condition.offset + condition.length,
+          ),
+    conditionSpan: condition == null
+        ? null
+        : SourceSpan(offset: condition.offset, length: condition.length),
+    rightSeparatorSpan: SourceSpan(
+      offset: parts.rightSeparator.offset,
+      length: parts.rightSeparator.length,
+    ),
+    updaterSources: updaterSources,
+    updaterSpans: updaterSpans,
+    sourceSpan: headerSpan,
   );
 }
 
@@ -1253,6 +1406,96 @@ SwitchExpressionNode _convertSwitchExpression(
     ),
     sourceSpan: SourceSpan(offset: expr.offset, length: expr.length),
   );
+}
+
+/// Converts an analyzer `Expression` into a kernel `ExpressionNode`.
+/// Total: returns `OpaqueExpression` for kinds not modeled in M8.2.
+ExpressionNode _convertExpression(Expression expr, String source) {
+  final span = SourceSpan(offset: expr.offset, length: expr.length);
+  final raw = source.substring(expr.offset, expr.offset + expr.length);
+
+  if (expr is SimpleIdentifier) {
+    return IdentifierExpression(
+      name: expr.name,
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is IntegerLiteral) {
+    return LiteralExpression(
+      kind: LiteralKind.intLiteral,
+      source: raw,
+      sourceSpan: span,
+    );
+  }
+  if (expr is DoubleLiteral) {
+    return LiteralExpression(
+      kind: LiteralKind.doubleLiteral,
+      source: raw,
+      sourceSpan: span,
+    );
+  }
+  if (expr is StringLiteral) {
+    return LiteralExpression(
+      kind: LiteralKind.stringLiteral,
+      source: raw,
+      sourceSpan: span,
+    );
+  }
+  if (expr is BooleanLiteral) {
+    return LiteralExpression(
+      kind: LiteralKind.boolLiteral,
+      source: raw,
+      sourceSpan: span,
+    );
+  }
+  if (expr is NullLiteral) {
+    return LiteralExpression(
+      kind: LiteralKind.nullLiteral,
+      source: raw,
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is MethodInvocation) {
+    final target = expr.target;
+    final args = expr.argumentList;
+    return MethodInvocationExpression(
+      target: target == null ? null : _convertExpression(target, source),
+      dotSpan: expr.operator == null
+          ? null
+          : SourceSpan(
+              offset: expr.operator!.offset,
+              length: expr.operator!.length,
+            ),
+      methodName: expr.methodName.name,
+      methodNameSpan: SourceSpan(
+        offset: expr.methodName.offset,
+        length: expr.methodName.length,
+      ),
+      argumentsSource: source.substring(
+        args.offset,
+        args.offset + args.length,
+      ),
+      argumentsSpan: SourceSpan(offset: args.offset, length: args.length),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is BinaryExpression) {
+    return BinaryExpressionNode(
+      leftOperand: _convertExpression(expr.leftOperand, source),
+      operator: expr.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: expr.operator.offset,
+        length: expr.operator.length,
+      ),
+      rightOperand: _convertExpression(expr.rightOperand, source),
+      sourceSpan: span,
+    );
+  }
+
+  return OpaqueExpression(sourceText: raw, sourceSpan: span);
 }
 
 /// AST visitor that locates the first (or matching) block function body

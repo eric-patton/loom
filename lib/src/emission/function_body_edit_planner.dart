@@ -105,6 +105,22 @@ import 'source_edit.dart';
 ///   * `renameStatementLabel` — rename a `LabelNode` declaration on
 ///     a `LabeledStatementNode` (doesn't update break/continue refs).
 ///
+/// For-loop header operations (M8.2):
+///   * `changeCStyleForCondition` — replace the condition expression
+///     of a c-style for header.
+///   * `replaceCStyleForUpdater` — replace one updater by index.
+///   * `renameForEachLoopVariable` — rename a for-each loop variable.
+///   * `changeForEachLoopVariableType` — change its type (requires
+///     existing type annotation).
+///   * `changeForEachIterable` — replace the iterable expression.
+///
+/// Expression-internal operations (M8.2 first slice):
+///   * `renameIdentifierExpression` — rename a simple identifier.
+///   * `changeBinaryOperator` — swap the operator in a binary
+///     expression.
+///   * `changeMethodInvocationName` — rename the called method.
+///   * `changeMethodInvocationArguments` — replace the argument list.
+///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
 ///     `for (x in xs) f(x);`) — opaqued.
@@ -799,6 +815,189 @@ class FunctionBodyEditPlanner {
         replacement: newName,
       ));
     }
+  }
+
+  // ----------------------- For-header ops (M8.2) -----------------
+
+  /// Replaces the condition expression of a c-style for-loop header.
+  /// Throws when the header is a `ForEachHeader` or `OpaqueForLoopHeader`,
+  /// or when the c-style header has no condition (`for (i = 0; ; i++)`).
+  static SourceEdit changeCStyleForCondition({
+    required ForLoopHeader header,
+    required String newConditionSource,
+  }) {
+    if (header is! CStyleForHeader) {
+      throw ArgumentError(
+        'changeCStyleForCondition only applies to CStyleForHeader; '
+        'got ${header.runtimeType}.',
+      );
+    }
+    final span = header.conditionSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'C-style for-header has no condition expression to replace. '
+        'Adding one (to `for (init; ; updaters)`) is deferred.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newConditionSource,
+    );
+  }
+
+  /// Replaces a single updater in a c-style for-header by index.
+  /// `for (var i = 0; cond; i++, j *= 2)` has two updaters; passing
+  /// `updaterIndex: 1` rewrites `j *= 2`.
+  static SourceEdit replaceCStyleForUpdater({
+    required ForLoopHeader header,
+    required int updaterIndex,
+    required String newUpdaterSource,
+  }) {
+    if (header is! CStyleForHeader) {
+      throw ArgumentError(
+        'replaceCStyleForUpdater only applies to CStyleForHeader; '
+        'got ${header.runtimeType}.',
+      );
+    }
+    if (updaterIndex < 0 || updaterIndex >= header.updaterSpans.length) {
+      throw ArgumentError(
+        'updaterIndex $updaterIndex out of range '
+        '[0, ${header.updaterSpans.length})',
+      );
+    }
+    final span = header.updaterSpans[updaterIndex];
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newUpdaterSource,
+    );
+  }
+
+  /// Renames a `ForEachHeader`'s loop variable. Works for both
+  /// declared (`for (var x in iter)`) and existing-identifier
+  /// (`for (x in iter)`) shapes. Does NOT update references to the
+  /// variable inside the loop body — caller-responsible (or future
+  /// symbol-aware op).
+  static SourceEdit renameForEachLoopVariable({
+    required ForLoopHeader header,
+    required String newName,
+  }) {
+    if (header is! ForEachHeader) {
+      throw ArgumentError(
+        'renameForEachLoopVariable only applies to ForEachHeader; '
+        'got ${header.runtimeType}.',
+      );
+    }
+    return SourceEdit(
+      offset: header.loopVariableSpan.offset,
+      length: header.loopVariableSpan.length,
+      replacement: newName,
+    );
+  }
+
+  /// Changes the type annotation of a `ForEachHeader`'s declared loop
+  /// variable. Throws when the header has no type annotation
+  /// (e.g. `for (var x in iter)` has no explicit type).
+  static SourceEdit changeForEachLoopVariableType({
+    required ForLoopHeader header,
+    required String newType,
+  }) {
+    if (header is! ForEachHeader) {
+      throw ArgumentError(
+        'changeForEachLoopVariableType only applies to ForEachHeader; '
+        'got ${header.runtimeType}.',
+      );
+    }
+    final span = header.typeSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'For-each header has no explicit type annotation to replace.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newType,
+    );
+  }
+
+  /// Replaces the iterable expression of a `ForEachHeader` — e.g.
+  /// `for (var x in users)` → `for (var x in activeUsers)`.
+  static SourceEdit changeForEachIterable({
+    required ForLoopHeader header,
+    required String newIterableSource,
+  }) {
+    if (header is! ForEachHeader) {
+      throw ArgumentError(
+        'changeForEachIterable only applies to ForEachHeader; '
+        'got ${header.runtimeType}.',
+      );
+    }
+    return SourceEdit(
+      offset: header.iterableSpan.offset,
+      length: header.iterableSpan.length,
+      replacement: newIterableSource,
+    );
+  }
+
+  // ----------------------- Expression ops (M8.2) -----------------
+
+  /// Renames a simple `IdentifierExpression` — e.g. `x` → `value`.
+  /// Use `renameDeclaredPatternVariableWithReferences` (M8.0h) for
+  /// the symbol-aware variant inside switch cases.
+  static SourceEdit renameIdentifierExpression({
+    required IdentifierExpression expression,
+    required String newName,
+  }) {
+    return SourceEdit(
+      offset: expression.sourceSpan.offset,
+      length: expression.sourceSpan.length,
+      replacement: newName,
+    );
+  }
+
+  /// Changes the operator of a `BinaryExpressionNode` — e.g.
+  /// `a + b` → `a - b`. Operator must be valid Dart (`+`, `-`, `*`,
+  /// `==`, `&&`, etc.) — the kernel doesn't validate; if you pass
+  /// nonsense the source will fail to re-parse.
+  static SourceEdit changeBinaryOperator({
+    required BinaryExpressionNode expression,
+    required String newOperator,
+  }) {
+    return SourceEdit(
+      offset: expression.operatorSpan.offset,
+      length: expression.operatorSpan.length,
+      replacement: newOperator,
+    );
+  }
+
+  /// Renames the called method on a `MethodInvocationExpression` —
+  /// e.g. `print(x)` → `log(x)`, `x.foo(y)` → `x.bar(y)`. The target
+  /// (if any) and arguments are preserved verbatim.
+  static SourceEdit changeMethodInvocationName({
+    required MethodInvocationExpression expression,
+    required String newMethodName,
+  }) {
+    return SourceEdit(
+      offset: expression.methodNameSpan.offset,
+      length: expression.methodNameSpan.length,
+      replacement: newMethodName,
+    );
+  }
+
+  /// Replaces the argument list of a `MethodInvocationExpression` —
+  /// e.g. `print(x)` → `print(x, y)`. The new source MUST include
+  /// the surrounding parens.
+  static SourceEdit changeMethodInvocationArguments({
+    required MethodInvocationExpression expression,
+    required String newArgumentsSource,
+  }) {
+    return SourceEdit(
+      offset: expression.argumentsSpan.offset,
+      length: expression.argumentsSpan.length,
+      replacement: newArgumentsSource,
+    );
   }
 
   // ----------------------- Yield/break/continue ops (M8.1) -------

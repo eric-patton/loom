@@ -1110,6 +1110,207 @@ void f() {
     });
   });
 
+  group(
+      'parseFunctionBody on function_body_with_for_headers.dart '
+      '(M8.2 — for-loop headers)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File('test/fixtures/function_body_with_for_headers.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('first for-loop is c-style with declaration + cond + updater', () {
+      final f = body.statements[1] as ForStatementNode;
+      expect(f.header, isA<CStyleForHeader>());
+      final h = f.header as CStyleForHeader;
+      expect(h.initSource, equals('var i = 0'));
+      expect(h.conditionSource, equals('i < xs.length'));
+      expect(h.updaterSources, equals(['i++']));
+    });
+
+    test(
+        'c-style header with no condition / no updater parses fields null '
+        'or empty', () {
+      const source = '''
+void f() {
+  for (var i = 0; ; ) {
+    if (i > 10) break;
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final f = body.statements[0] as ForStatementNode;
+      final h = f.header as CStyleForHeader;
+      expect(h.initSource, equals('var i = 0'));
+      expect(h.conditionSource, isNull);
+      expect(h.updaterSources, isEmpty);
+    });
+
+    test('second for-loop is for-each with `final user`', () {
+      final f = body.statements[2] as ForStatementNode;
+      expect(f.header, isA<ForEachHeader>());
+      final h = f.header as ForEachHeader;
+      expect(h.loopVariableName, equals('user'));
+      expect(h.isExistingIdentifier, isFalse);
+      expect(h.typeSource, isNull);
+      expect(h.keywordSpan, isNotNull);
+      expect(h.iterableSource, equals('xs'));
+    });
+
+    test('third for-loop is for-each with typed `int x`', () {
+      final f = body.statements[3] as ForStatementNode;
+      final h = f.header as ForEachHeader;
+      expect(h.loopVariableName, equals('x'));
+      expect(h.typeSource, equals('int'));
+      expect(h.keywordSpan, isNull);
+    });
+
+    test('for-each with existing identifier (no decl) is captured', () {
+      const source = '''
+void f(int x, List<int> xs) {
+  for (x in xs) {
+    print(x);
+  }
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final f = body.statements[0] as ForStatementNode;
+      final h = f.header as ForEachHeader;
+      expect(h.loopVariableName, equals('x'));
+      expect(h.isExistingIdentifier, isTrue);
+      expect(h.typeSource, isNull);
+      expect(h.keywordSpan, isNull);
+    });
+
+    test('pattern-for falls through to OpaqueForLoopHeader', () {
+      const source = '''
+void f(List<(int, int)> pairs) {
+  for (var (a, b) in pairs) {
+    print(a + b);
+  }
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final f = body.statements[0] as ForStatementNode;
+      expect(f.header, isA<OpaqueForLoopHeader>());
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_expressions.dart '
+      '(M8.2 — expression internals)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File('test/fixtures/function_body_with_expressions.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('print(x) is a MethodInvocationExpression with no target', () {
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpression;
+      expect(m.target, isNull);
+      expect(m.methodName, equals('print'));
+      expect(m.argumentsSource, equals('(x)'));
+    });
+
+    test('log(\'hello\') has a string-literal arg in raw source', () {
+      final stmt = body.statements[1] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpression;
+      expect(m.methodName, equals('log'));
+      expect(m.argumentsSource, equals("('hello')"));
+    });
+
+    test('x.toString() has target IdentifierExpression(x)', () {
+      final stmt = body.statements[3] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpression;
+      expect(m.target, isA<IdentifierExpression>());
+      expect((m.target! as IdentifierExpression).name, equals('x'));
+      expect(m.methodName, equals('toString'));
+      expect(m.dotSpan, isNotNull);
+    });
+
+    test('bare identifier `x;` is an IdentifierExpression', () {
+      final stmt = body.statements[4] as ExpressionStatementNode;
+      expect(stmt.expression, isA<IdentifierExpression>());
+      expect((stmt.expression as IdentifierExpression).name, equals('x'));
+    });
+
+    test('int literal 42 is a LiteralExpression of kind intLiteral', () {
+      final stmt = body.statements[5] as ExpressionStatementNode;
+      final l = stmt.expression as LiteralExpression;
+      expect(l.kind, equals(LiteralKind.intLiteral));
+      expect(l.source, equals('42'));
+    });
+
+    test("string literal 'literal' parses as stringLiteral kind", () {
+      final stmt = body.statements[6] as ExpressionStatementNode;
+      final l = stmt.expression as LiteralExpression;
+      expect(l.kind, equals(LiteralKind.stringLiteral));
+      expect(l.source, equals("'literal'"));
+    });
+
+    test('bool literal true is a boolLiteral', () {
+      final stmt = body.statements[7] as ExpressionStatementNode;
+      final l = stmt.expression as LiteralExpression;
+      expect(l.kind, equals(LiteralKind.boolLiteral));
+    });
+
+    test('null literal is a nullLiteral', () {
+      final stmt = body.statements[8] as ExpressionStatementNode;
+      final l = stmt.expression as LiteralExpression;
+      expect(l.kind, equals(LiteralKind.nullLiteral));
+    });
+
+    test('x + 1 is a BinaryExpressionNode', () {
+      final stmt = body.statements[9] as ExpressionStatementNode;
+      final b = stmt.expression as BinaryExpressionNode;
+      expect(b.operator, equals('+'));
+      expect((b.leftOperand as IdentifierExpression).name, equals('x'));
+      expect((b.rightOperand as LiteralExpression).source, equals('1'));
+    });
+
+    test('x == 0 is a BinaryExpressionNode with ==', () {
+      final stmt = body.statements[10] as ExpressionStatementNode;
+      final b = stmt.expression as BinaryExpressionNode;
+      expect(b.operator, equals('=='));
+    });
+
+    test('unmodeled expressions (assignment) fall through to opaque', () {
+      const source = '''
+void f(int x) {
+  x = 5;
+}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      expect(stmt.expression, isA<OpaqueExpression>());
+    });
+
+    test('nested binary expression recurses through operand', () {
+      const source = '''
+void f(int x) {
+  x + 1 + 2;
+}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final b = stmt.expression as BinaryExpressionNode;
+      expect(b.operator, equals('+'));
+      // Left associative: ((x + 1) + 2). Left operand is itself binary.
+      expect(b.leftOperand, isA<BinaryExpressionNode>());
+      final inner = b.leftOperand as BinaryExpressionNode;
+      expect((inner.leftOperand as IdentifierExpression).name, equals('x'));
+      expect((inner.rightOperand as LiteralExpression).source, equals('1'));
+      expect((b.rightOperand as LiteralExpression).source, equals('2'));
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';
