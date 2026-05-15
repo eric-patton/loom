@@ -14,6 +14,7 @@ export 'src/emission/edit_planner.dart';
 export 'src/emission/function_body_edit_planner.dart';
 export 'src/emission/pipeline_edit_planner.dart';
 export 'src/emission/pipeline_serializer.dart';
+export 'src/emission/project_edit_planner.dart';
 export 'src/emission/property_serializer.dart';
 export 'src/emission/route_edit_planner.dart';
 export 'src/emission/route_serializer.dart';
