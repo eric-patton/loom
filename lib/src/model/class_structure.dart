@@ -125,6 +125,10 @@ class ClassFieldNode extends ClassMember {
     required this.isLate,
     required this.isStatic,
     required this.sourceSpan,
+    this.finalKeywordSpan,
+    this.varKeywordSpan,
+    this.lateKeywordSpan,
+    this.staticKeywordSpan,
     List<AnnotationNode> annotations = const <AnnotationNode>[],
   }) : annotations = List.unmodifiable(annotations);
 
@@ -154,6 +158,20 @@ class ClassFieldNode extends ClassMember {
   final bool isVar;
   final bool isLate;
   final bool isStatic;
+
+  /// Span of the `final` keyword token, when [isFinal] is true. Null
+  /// otherwise. M7.5 captures these for qualifier-editing operations.
+  final SourceSpan? finalKeywordSpan;
+
+  /// Span of the `var` keyword token, when [isVar] is true. Null otherwise.
+  final SourceSpan? varKeywordSpan;
+
+  /// Span of the `late` keyword token, when [isLate] is true. Null otherwise.
+  final SourceSpan? lateKeywordSpan;
+
+  /// Span of the `static` keyword token, when [isStatic] is true. Null
+  /// otherwise.
+  final SourceSpan? staticKeywordSpan;
 
   @override
   final SourceSpan sourceSpan;
@@ -202,6 +220,7 @@ class ClassMethodNode extends ClassMember {
     required this.isAsync,
     required this.isGenerator,
     required this.sourceSpan,
+    this.staticKeywordSpan,
     List<ClassParameterNode> parameters = const <ClassParameterNode>[],
     List<AnnotationNode> annotations = const <AnnotationNode>[],
   })  : parameters = List.unmodifiable(parameters),
@@ -236,6 +255,10 @@ class ClassMethodNode extends ClassMember {
 
   /// True for `sync*` / `async*` generator methods.
   final bool isGenerator;
+
+  /// Span of the `static` keyword when [isStatic] is true. Null otherwise.
+  /// M7.5 capture.
+  final SourceSpan? staticKeywordSpan;
 
   @override
   final SourceSpan sourceSpan;
@@ -291,6 +314,8 @@ class ClassConstructorNode extends ClassMember {
     required this.isConst,
     required this.isFactory,
     required this.sourceSpan,
+    this.constKeywordSpan,
+    this.factoryKeywordSpan,
     List<ClassParameterNode> parameters = const <ClassParameterNode>[],
     List<AnnotationNode> annotations = const <AnnotationNode>[],
   })  : parameters = List.unmodifiable(parameters),
@@ -323,6 +348,14 @@ class ClassConstructorNode extends ClassMember {
 
   final bool isConst;
   final bool isFactory;
+
+  /// Span of the `const` keyword when [isConst] is true. Null otherwise.
+  /// M7.5 capture.
+  final SourceSpan? constKeywordSpan;
+
+  /// Span of the `factory` keyword when [isFactory] is true. Null
+  /// otherwise. M7.5 capture.
+  final SourceSpan? factoryKeywordSpan;
 
   @override
   final SourceSpan sourceSpan;
@@ -401,6 +434,9 @@ class ClassParameterNode {
     required this.isFinal,
     required this.isConst,
     required this.sourceSpan,
+    this.requiredKeywordSpan,
+    this.finalKeywordSpan,
+    this.constKeywordSpan,
     List<AnnotationNode> annotations = const <AnnotationNode>[],
   }) : annotations = List.unmodifiable(annotations);
 
@@ -447,6 +483,19 @@ class ClassParameterNode {
 
   final bool isFinal;
   final bool isConst;
+
+  /// Span of the `required` keyword when [isRequired] && [isNamed]. Null
+  /// otherwise. M7.5 capture. (Positional params are implicitly required
+  /// — no keyword to capture.)
+  final SourceSpan? requiredKeywordSpan;
+
+  /// Span of the `final` keyword when [isFinal]. Null otherwise.
+  /// M7.5 capture.
+  final SourceSpan? finalKeywordSpan;
+
+  /// Span of the `const` keyword when [isConst]. Null otherwise.
+  /// M7.5 capture.
+  final SourceSpan? constKeywordSpan;
 
   /// Span of the full parameter declaration including type, name, and
   /// any default value, but excluding inter-parameter separators (`,`)

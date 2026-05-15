@@ -477,6 +477,357 @@ void main() {
     });
   });
 
+  group('qualifier edits — fields (M7.5)', () {
+    test('addFieldFinal on `String? email;` produces `final String? email;`',
+        () {
+      // email is the non-final field in class_simple.dart.
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final email = model.root.fields.firstWhere((f) => f.name == 'email');
+      expect(email.isFinal, isFalse);
+
+      final edit = ClassStructureEditPlanner.addFieldFinal(
+        field: email,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedEmail = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'email',
+      );
+      expect(reparsedEmail.isFinal, isTrue);
+    });
+
+    test('removeFieldFinal on `final String name;` produces `String name;`',
+        () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final name = model.root.fields.firstWhere((f) => f.name == 'name');
+      expect(name.isFinal, isTrue);
+
+      final edit = ClassStructureEditPlanner.removeFieldFinal(
+        field: name,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedName = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'name',
+      );
+      expect(reparsedName.isFinal, isFalse);
+      expect(reparsedName.typeName, equals('String'));
+    });
+
+    test('addFieldLate on `String? email;` lands `late` correctly', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final email = model.root.fields.firstWhere((f) => f.name == 'email');
+      expect(email.isLate, isFalse);
+
+      final edit = ClassStructureEditPlanner.addFieldLate(
+        field: email,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedEmail = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'email',
+      );
+      expect(reparsedEmail.isLate, isTrue);
+    });
+
+    test('removeFieldLate on `late final DateTime createdAt`', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final createdAt = model.root.fields.firstWhere(
+        (f) => f.name == 'createdAt',
+      );
+      expect(createdAt.isLate, isTrue);
+      expect(createdAt.isFinal, isTrue);
+
+      final edit = ClassStructureEditPlanner.removeFieldLate(
+        field: createdAt,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCreated = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'createdAt',
+      );
+      expect(reparsedCreated.isLate, isFalse);
+      // final should still be there.
+      expect(reparsedCreated.isFinal, isTrue);
+    });
+
+    test('addFieldStatic on `String? email;` lands `static`', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final email = model.root.fields.firstWhere((f) => f.name == 'email');
+
+      final edit = ClassStructureEditPlanner.addFieldStatic(
+        field: email,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedEmail = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'email',
+      );
+      expect(reparsedEmail.isStatic, isTrue);
+    });
+
+    test('removeFieldStatic on `static const String species`', () {
+      // species in class_with_methods.dart.
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final species = model.root.fields.firstWhere(
+        (f) => f.name == 'species',
+      );
+      expect(species.isStatic, isTrue);
+
+      final edit = ClassStructureEditPlanner.removeFieldStatic(
+        field: species,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedSpecies = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'species',
+      );
+      expect(reparsedSpecies.isStatic, isFalse);
+    });
+
+    test('addFieldFinal on `int age = 0;` replaces no qualifier with final',
+        () {
+      // age in class_with_methods.dart has no `final`/`var`.
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final age = model.root.fields.firstWhere((f) => f.name == 'age');
+      expect(age.isFinal, isFalse);
+      expect(age.isVar, isFalse);
+
+      final edit = ClassStructureEditPlanner.addFieldFinal(
+        field: age,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedAge = reparsed.root.fields.firstWhere(
+        (f) => f.name == 'age',
+      );
+      expect(reparsedAge.isFinal, isTrue);
+      expect(reparsedAge.initializerSource, equals('0'));
+    });
+  });
+
+  group('qualifier edits — methods (M7.5)', () {
+    test('addMethodStatic on isAdult', () {
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final method = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'isAdult');
+      expect(method.isStatic, isFalse);
+
+      final edit = ClassStructureEditPlanner.addMethodStatic(
+        method: method,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedMethod = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'isAdult');
+      expect(reparsedMethod.isStatic, isTrue);
+    });
+  });
+
+  group('qualifier edits — constructors (M7.5)', () {
+    test('addConstructorConst on Money.fromString factory', () {
+      // Money.fromString is factory, not const. We can't actually add
+      // const to a factory with a body, but the kernel doesn't enforce
+      // semantic validity — it produces the byte-level edit. The result
+      // wouldn't be valid Dart but tests the edit machinery.
+      // Instead let's test on a regular ctor.
+      // class_with_methods.dart Person({...}) is non-const.
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members.whereType<ClassConstructorNode>().single;
+      expect(ctor.isConst, isFalse);
+
+      final edit = ClassStructureEditPlanner.addConstructorConst(
+        constructor: ctor,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor =
+          reparsed.root.members.whereType<ClassConstructorNode>().single;
+      expect(reparsedCtor.isConst, isTrue);
+    });
+
+    test('removeConstructorConst on Money() const ctor', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final defaultCtor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(defaultCtor.isConst, isTrue);
+
+      final edit = ClassStructureEditPlanner.removeConstructorConst(
+        constructor: defaultCtor,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(reparsedCtor.isConst, isFalse);
+    });
+
+    test('addConstructorFactory + removeConstructorFactory round-trip', () {
+      // Take Money.fromString (factory), remove factory, add it back.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == 'fromString');
+      expect(ctor.isFactory, isTrue);
+
+      final removeEdit = ClassStructureEditPlanner.removeConstructorFactory(
+        constructor: ctor,
+        source: source,
+      );
+      final intermediate = applySourceEdits(source, [removeEdit]);
+
+      final intermediateModel = parseClassStructure(intermediate);
+      final intermediateCtor = intermediateModel.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == 'fromString');
+      expect(intermediateCtor.isFactory, isFalse);
+
+      final addEdit = ClassStructureEditPlanner.addConstructorFactory(
+        constructor: intermediateCtor,
+        source: intermediate,
+      );
+      final finalSource = applySourceEdits(intermediate, [addEdit]);
+
+      final finalModel = parseClassStructure(finalSource);
+      final finalCtor = finalModel.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == 'fromString');
+      expect(finalCtor.isFactory, isTrue);
+    });
+  });
+
+  group('qualifier edits — parameters (M7.5)', () {
+    test('addParameterRequired on a non-required named param', () {
+      // class_freezed_like.dart's age param is named-optional (has default).
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final age = ctor.parameters.firstWhere((p) => p.name == 'age');
+      expect(age.isRequired, isFalse);
+      expect(age.isNamed, isTrue);
+
+      final edit = ClassStructureEditPlanner.addParameterRequired(
+        parameter: age,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedAge = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null)
+          .parameters
+          .firstWhere((p) => p.name == 'age');
+      expect(reparsedAge.isRequired, isTrue);
+    });
+
+    test('removeParameterRequired on firstName', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final firstName =
+          ctor.parameters.firstWhere((p) => p.name == 'firstName');
+      expect(firstName.isRequired, isTrue);
+
+      final edit = ClassStructureEditPlanner.removeParameterRequired(
+        parameter: firstName,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedFirst = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null)
+          .parameters
+          .firstWhere((p) => p.name == 'firstName');
+      expect(reparsedFirst.isRequired, isFalse);
+    });
+
+    test('addParameterRequired throws on positional', () {
+      // class_with_constructors.dart Money operator+ has positional `other`.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      final other = op.parameters.single;
+      expect(other.isPositional, isTrue);
+
+      expect(
+        () => ClassStructureEditPlanner.addParameterRequired(
+          parameter: other,
+          source: source,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('addParameterFinal on a non-final param', () {
+      // class_with_constructors.dart Money operator+'s `other` is non-final.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      final other = op.parameters.single;
+      expect(other.isFinal, isFalse);
+
+      final edit = ClassStructureEditPlanner.addParameterFinal(
+        parameter: other,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedOther = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator)
+          .parameters
+          .single;
+      expect(reparsedOther.isFinal, isTrue);
+    });
+  });
+
   group('appendParameter section creation (M7.4)', () {
     test('creates a named section on operator+', () {
       // operator+ has positional `(Money other)` and no named section.

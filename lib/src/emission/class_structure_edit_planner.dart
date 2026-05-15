@@ -66,12 +66,27 @@ enum ParameterSection { positionalRequired, positionalOptional, named }
 ///     annotation is bare (no existing parens).
 ///   * `renameNamedConstructor` — replace the `.named` segment.
 ///
-/// Deliberately deferred to M7.5+ (smaller surface remaining):
-///   * Edits to qualifiers (final/var/late/static/const/factory/async) —
-///     requires model surgery to capture keyword spans
+/// M7.5 surface additions (qualifier editing — 16 operations):
+///   * Field: `addFieldFinal` / `removeFieldFinal` (handles var → final
+///     conversion); `addFieldLate` / `removeFieldLate`;
+///     `addFieldStatic` / `removeFieldStatic`.
+///   * Method: `addMethodStatic` / `removeMethodStatic`.
+///   * Constructor: `addConstructorConst` / `removeConstructorConst`;
+///     `addConstructorFactory` / `removeConstructorFactory`.
+///   * Parameter: `addParameterRequired` / `removeParameterRequired`
+///     (named params only); `addParameterFinal` / `removeParameterFinal`.
+///
+///   Insertion respects canonical ordering: e.g. adding `final` to a
+///   field that already has `static late` lands `final` AFTER `late`,
+///   preserving Dart's conventional `static late final` sequence.
+///   Adding `final` to a field that has `var` REPLACES `var` with
+///   `final` rather than emitting both. Removal deletes the keyword
+///   plus trailing whitespace.
+///
+/// Deliberately left for ad-hoc handling (truly rare in real code):
 ///   * Adding a type annotation to an untyped field or parameter
 ///   * Adding an initializer to a bare field
-///   * Adding a default to a parameter without one
+///   * Adding a default value to a parameter without one
 ///   * Converting an unnamed constructor into a named one
 ///   * Multi-variable field declarations beyond best-effort
 ///   * Reordering members
@@ -409,6 +424,264 @@ class ClassStructureEditPlanner {
       length: end - start,
       replacement: '',
     );
+  }
+
+  // --------------------- Qualifier operations (M7.5) -----------
+
+  // Field qualifiers ----------------------------------------------
+
+  static SourceEdit addFieldFinal({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (field.isFinal) {
+      throw ArgumentError('Field "${field.name}" is already final.');
+    }
+    if (field.isVar) {
+      final span = field.varKeywordSpan!;
+      return SourceEdit(
+        offset: span.offset,
+        length: span.length,
+        replacement: 'final',
+      );
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: field.sourceSpan,
+      annotations: field.annotations,
+      precedingQualifiers: [
+        field.staticKeywordSpan,
+        field.lateKeywordSpan,
+      ],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'final ');
+  }
+
+  static SourceEdit removeFieldFinal({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (!field.isFinal || field.finalKeywordSpan == null) {
+      throw ArgumentError('Field "${field.name}" is not final.');
+    }
+    return _removeKeyword(field.finalKeywordSpan!, source);
+  }
+
+  static SourceEdit addFieldLate({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (field.isLate) {
+      throw ArgumentError('Field "${field.name}" is already late.');
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: field.sourceSpan,
+      annotations: field.annotations,
+      precedingQualifiers: [field.staticKeywordSpan],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'late ');
+  }
+
+  static SourceEdit removeFieldLate({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (!field.isLate || field.lateKeywordSpan == null) {
+      throw ArgumentError('Field "${field.name}" is not late.');
+    }
+    return _removeKeyword(field.lateKeywordSpan!, source);
+  }
+
+  static SourceEdit addFieldStatic({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (field.isStatic) {
+      throw ArgumentError('Field "${field.name}" is already static.');
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: field.sourceSpan,
+      annotations: field.annotations,
+      precedingQualifiers: const [],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'static ');
+  }
+
+  static SourceEdit removeFieldStatic({
+    required ClassFieldNode field,
+    required String source,
+  }) {
+    if (!field.isStatic || field.staticKeywordSpan == null) {
+      throw ArgumentError('Field "${field.name}" is not static.');
+    }
+    return _removeKeyword(field.staticKeywordSpan!, source);
+  }
+
+  // Method qualifiers ---------------------------------------------
+
+  static SourceEdit addMethodStatic({
+    required ClassMethodNode method,
+    required String source,
+  }) {
+    if (method.isStatic) {
+      throw ArgumentError('Method "${method.name}" is already static.');
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: method.sourceSpan,
+      annotations: method.annotations,
+      precedingQualifiers: const [],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'static ');
+  }
+
+  static SourceEdit removeMethodStatic({
+    required ClassMethodNode method,
+    required String source,
+  }) {
+    if (!method.isStatic || method.staticKeywordSpan == null) {
+      throw ArgumentError('Method "${method.name}" is not static.');
+    }
+    return _removeKeyword(method.staticKeywordSpan!, source);
+  }
+
+  // Constructor qualifiers ----------------------------------------
+
+  static SourceEdit addConstructorConst({
+    required ClassConstructorNode constructor,
+    required String source,
+  }) {
+    if (constructor.isConst) {
+      throw ArgumentError(
+        'Constructor ${_ctorLabel(constructor)} is already const.',
+      );
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: constructor.sourceSpan,
+      annotations: constructor.annotations,
+      precedingQualifiers: const [],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'const ');
+  }
+
+  static SourceEdit removeConstructorConst({
+    required ClassConstructorNode constructor,
+    required String source,
+  }) {
+    if (!constructor.isConst || constructor.constKeywordSpan == null) {
+      throw ArgumentError(
+        'Constructor ${_ctorLabel(constructor)} is not const.',
+      );
+    }
+    return _removeKeyword(constructor.constKeywordSpan!, source);
+  }
+
+  static SourceEdit addConstructorFactory({
+    required ClassConstructorNode constructor,
+    required String source,
+  }) {
+    if (constructor.isFactory) {
+      throw ArgumentError(
+        'Constructor ${_ctorLabel(constructor)} is already factory.',
+      );
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: constructor.sourceSpan,
+      annotations: constructor.annotations,
+      precedingQualifiers: [constructor.constKeywordSpan],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'factory ');
+  }
+
+  static SourceEdit removeConstructorFactory({
+    required ClassConstructorNode constructor,
+    required String source,
+  }) {
+    if (!constructor.isFactory || constructor.factoryKeywordSpan == null) {
+      throw ArgumentError(
+        'Constructor ${_ctorLabel(constructor)} is not factory.',
+      );
+    }
+    return _removeKeyword(constructor.factoryKeywordSpan!, source);
+  }
+
+  // Parameter qualifiers ------------------------------------------
+
+  static SourceEdit addParameterRequired({
+    required ClassParameterNode parameter,
+    required String source,
+  }) {
+    if (parameter.isRequired && parameter.isNamed) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" is already required.',
+      );
+    }
+    if (!parameter.isNamed) {
+      throw ArgumentError(
+        'Only named parameters can be marked required. Parameter '
+        '"${parameter.name}" is positional.',
+      );
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: parameter.sourceSpan,
+      annotations: parameter.annotations,
+      precedingQualifiers: const [],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'required ');
+  }
+
+  static SourceEdit removeParameterRequired({
+    required ClassParameterNode parameter,
+    required String source,
+  }) {
+    if (parameter.requiredKeywordSpan == null) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" has no `required` keyword.',
+      );
+    }
+    return _removeKeyword(parameter.requiredKeywordSpan!, source);
+  }
+
+  static SourceEdit addParameterFinal({
+    required ClassParameterNode parameter,
+    required String source,
+  }) {
+    if (parameter.isFinal) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" is already final.',
+      );
+    }
+    if (parameter.isConst) {
+      // const and final are mutually exclusive on parameters.
+      throw ArgumentError(
+        'Parameter "${parameter.name}" is const; remove const before '
+        'adding final.',
+      );
+    }
+    final pos = _qualifierInsertionPoint(
+      declSourceSpan: parameter.sourceSpan,
+      annotations: parameter.annotations,
+      precedingQualifiers: [parameter.requiredKeywordSpan],
+      source: source,
+    );
+    return SourceEdit(offset: pos, length: 0, replacement: 'final ');
+  }
+
+  static SourceEdit removeParameterFinal({
+    required ClassParameterNode parameter,
+    required String source,
+  }) {
+    if (!parameter.isFinal || parameter.finalKeywordSpan == null) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" is not final.',
+      );
+    }
+    return _removeKeyword(parameter.finalKeywordSpan!, source);
   }
 
   // ----------------------- Constructor operations (M7.4) --------
@@ -783,6 +1056,58 @@ class ClassStructureEditPlanner {
 
   static bool _isWhitespace(int ch) =>
       ch == 0x20 || ch == 0x09 || ch == 0x0A || ch == 0x0D;
+
+  /// Computes the insertion point for a new qualifier keyword on a
+  /// declaration. Starts after annotations (skipping any trailing
+  /// whitespace) and advances past each present preceding qualifier in
+  /// canonical order. The result is the byte offset where inserting
+  /// `keyword ` (with trailing space) places the new keyword at the
+  /// correct position.
+  static int _qualifierInsertionPoint({
+    required SourceSpan declSourceSpan,
+    required List<AnnotationNode> annotations,
+    required List<SourceSpan?> precedingQualifiers,
+    required String source,
+  }) {
+    var pos = annotations.isEmpty
+        ? declSourceSpan.offset
+        : _skipForwardWhitespace(source, annotations.last.sourceSpan.end);
+    for (final span in precedingQualifiers) {
+      if (span != null) {
+        pos = _skipForwardWhitespace(source, span.end);
+      }
+    }
+    return pos;
+  }
+
+  /// Deletes a keyword token and any trailing whitespace up to (but not
+  /// including) the next non-whitespace byte. The trailing-whitespace
+  /// consumption keeps the surrounding declaration tightly formatted
+  /// (no double-space leftovers).
+  static SourceEdit _removeKeyword(SourceSpan keywordSpan, String source) {
+    var end = keywordSpan.end;
+    while (end < source.length && _isWhitespace(source.codeUnitAt(end))) {
+      end++;
+    }
+    return SourceEdit(
+      offset: keywordSpan.offset,
+      length: end - keywordSpan.offset,
+      replacement: '',
+    );
+  }
+
+  static int _skipForwardWhitespace(String source, int offset) {
+    var pos = offset;
+    while (pos < source.length && _isWhitespace(source.codeUnitAt(pos))) {
+      pos++;
+    }
+    return pos;
+  }
+
+  static String _ctorLabel(ClassConstructorNode c) =>
+      c.namedConstructorName == null
+          ? c.className
+          : '${c.className}.${c.namedConstructorName}';
 
   /// Returns the run of horizontal whitespace immediately preceding
   /// `offset` on its line — i.e. the indentation of `offset`'s line.

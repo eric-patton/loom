@@ -124,6 +124,25 @@ void _appendFields(
   final isStatic = member.isStatic;
   final annotations = _captureAnnotations(member.metadata, source);
 
+  // M7.5: capture keyword spans for qualifier editing.
+  final finalKeywordSpan = isFinal
+      ? SourceSpan(offset: keyword.offset, length: keyword.length)
+      : null;
+  final varKeywordSpan =
+      isVar ? SourceSpan(offset: keyword.offset, length: keyword.length) : null;
+  final lateKeywordSpan = member.fields.lateKeyword == null
+      ? null
+      : SourceSpan(
+          offset: member.fields.lateKeyword!.offset,
+          length: member.fields.lateKeyword!.length,
+        );
+  final staticKeywordSpan = member.staticKeyword == null
+      ? null
+      : SourceSpan(
+          offset: member.staticKeyword!.offset,
+          length: member.staticKeyword!.length,
+        );
+
   for (final variable in member.fields.variables) {
     final initializer = variable.initializer;
     final initializerSource = initializer == null
@@ -155,6 +174,10 @@ void _appendFields(
         isLate: isLate,
         isStatic: isStatic,
         sourceSpan: sharedSpan,
+        finalKeywordSpan: finalKeywordSpan,
+        varKeywordSpan: varKeywordSpan,
+        lateKeywordSpan: lateKeywordSpan,
+        staticKeywordSpan: staticKeywordSpan,
         annotations: annotations,
       ),
     );
@@ -180,6 +203,15 @@ ClassMethodNode _buildMethodNode(MethodDeclaration member, String source) {
   final body = member.body;
   final bodySpan = SourceSpan(offset: body.offset, length: body.length);
 
+  // M7.5: capture static keyword span. MethodDeclaration's
+  // modifierKeyword is either `abstract` or `static`; we want only the
+  // static case.
+  final modifier = member.modifierKeyword;
+  final staticKeywordSpan =
+      modifier != null && modifier.keyword == Keyword.STATIC
+          ? SourceSpan(offset: modifier.offset, length: modifier.length)
+          : null;
+
   return ClassMethodNode(
     name: member.name.lexeme,
     nameSpan: SourceSpan(
@@ -199,6 +231,7 @@ ClassMethodNode _buildMethodNode(MethodDeclaration member, String source) {
     isAsync: body.isAsynchronous,
     isGenerator: body.isGenerator,
     sourceSpan: SourceSpan(offset: member.offset, length: member.length),
+    staticKeywordSpan: staticKeywordSpan,
     parameters: params == null
         ? const <ClassParameterNode>[]
         : _captureParameters(params, source),
@@ -256,6 +289,16 @@ ClassConstructorNode _buildConstructorNode(
   final body = member.body;
   final bodySpan = SourceSpan(offset: body.offset, length: body.length);
 
+  // M7.5: capture const/factory keyword spans.
+  final constKw = member.constKeyword;
+  final factoryKw = member.factoryKeyword;
+  final constKeywordSpan = constKw == null
+      ? null
+      : SourceSpan(offset: constKw.offset, length: constKw.length);
+  final factoryKeywordSpan = factoryKw == null
+      ? null
+      : SourceSpan(offset: factoryKw.offset, length: factoryKw.length);
+
   return ClassConstructorNode(
     className: className,
     classNameSpan: classNameSpan,
@@ -274,6 +317,8 @@ ClassConstructorNode _buildConstructorNode(
     isConst: member.constKeyword != null,
     isFactory: member.factoryKeyword != null,
     sourceSpan: SourceSpan(offset: member.offset, length: member.length),
+    constKeywordSpan: constKeywordSpan,
+    factoryKeywordSpan: factoryKeywordSpan,
     parameters: _captureParameters(params, source),
     annotations: _captureAnnotations(member.metadata, source),
   );
@@ -300,6 +345,11 @@ List<ClassParameterNode> _captureParameters(
 
     final typeNode = param.type;
     final defaultClause = param.defaultClause;
+
+    // M7.5: capture qualifier keyword spans.
+    final requiredKw = param.requiredKeyword;
+    final finalKw = param.finalKeyword;
+    final constKw = param.constKeyword;
 
     out.add(
       ClassParameterNode(
@@ -333,6 +383,15 @@ List<ClassParameterNode> _captureParameters(
         isFinal: param.isFinal,
         isConst: param.isConst,
         sourceSpan: SourceSpan(offset: param.offset, length: param.length),
+        requiredKeywordSpan: requiredKw == null
+            ? null
+            : SourceSpan(offset: requiredKw.offset, length: requiredKw.length),
+        finalKeywordSpan: finalKw == null
+            ? null
+            : SourceSpan(offset: finalKw.offset, length: finalKw.length),
+        constKeywordSpan: constKw == null
+            ? null
+            : SourceSpan(offset: constKw.offset, length: constKw.length),
         annotations: _captureAnnotations(param.metadata, source),
       ),
     );
