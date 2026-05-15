@@ -8,7 +8,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.5 — qualifier editing (M7 complete)
+**Active milestone:** M8.0a — function-body modeling (first slice: sequential statements + return)
 **Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
@@ -33,39 +33,40 @@ Parameter add/remove are deliberately deferred — they require placement logic 
 
 CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
 
-**M7.5 surface added (just now):**
+**M8.0a surface added (just now):** the third entirely new shape after constructor trees and class-member lists. Models the *inside* of a function body — the sequence of statements that constitute the code.
 
-Model surgery: added 10 nullable `SourceSpan?` keyword-span fields across the class-structure node types.
-- `ClassFieldNode`: `finalKeywordSpan`, `varKeywordSpan`, `lateKeywordSpan`, `staticKeywordSpan`
-- `ClassMethodNode`: `staticKeywordSpan`
-- `ClassConstructorNode`: `constKeywordSpan`, `factoryKeywordSpan`
-- `ClassParameterNode`: `requiredKeywordSpan`, `finalKeywordSpan`, `constKeywordSpan`
+**New separate sealed hierarchy** (`StatementNode`), independent from `ModelNode` (constructor trees) and `ClassMember` (flat class structure). Three modeled statement kinds + opaque catch-all:
+- `VariableDeclarationStatementNode` — `var x = 1; final int y = 2; late T z;` etc. with `typeName`/`typeSpan`, qualifier flags, and a list of `DeclaredVariable`s (handles multi-variable declarations like `var a = 1, b = 2;`).
+- `ExpressionStatementNode` — `print(x);`, `x = 5;`, `await f();`. The expression is opaque source text (M8.0a doesn't model expression internals).
+- `ReturnStatementNode` — `return [expr];`, expression optional.
+- `OpaqueStatementNode` — catch-all for unmodeled kinds (if/for/while/switch/try/etc.); preserves bytes through edits to surrounding statements.
 
-Parser updates capture each from analyzer 13's `Token?` accessors (`fields.keyword`, `fields.lateKeyword`, `member.staticKeyword`, `modifierKeyword`, `constKeyword`, `factoryKeyword`, `requiredKeyword`, `finalKeyword`).
+**`FunctionBodyModel`** is the root — captures `bodySpan` (the full `{...}` block) and `innerSpan` (the byte range between the braces, used as anchor for `addStatement` when the body is otherwise empty), plus the ordered list of statements and any parser diagnostics.
 
-16 add/remove qualifier operations on `ClassStructureEditPlanner`:
-- Field: `addFieldFinal` (handles var→final replacement) / `removeFieldFinal`; `addFieldLate` / `removeFieldLate`; `addFieldStatic` / `removeFieldStatic`
-- Method: `addMethodStatic` / `removeMethodStatic`
-- Constructor: `addConstructorConst` / `removeConstructorConst`; `addConstructorFactory` / `removeConstructorFactory`
-- Parameter: `addParameterRequired` (named-only) / `removeParameterRequired`; `addParameterFinal` / `removeParameterFinal`
+**`parseFunctionBody(source, {bodySpan})`:** walks the AST via a `RecursiveAstVisitor` to find either the FIRST `BlockFunctionBody` in source (default) or the body at a specific offset (when `bodySpan` is provided, e.g. from a `ClassMethodNode.bodySpan`). Throws on arrow bodies (`=> expr;`) or empty bodies (`;`).
 
-Canonical insertion order is respected: e.g. `addFieldFinal` on a field with existing `static late` lands `final` AFTER `late`, producing the conventional `static late final` sequence. Insertion uses a `_qualifierInsertionPoint` helper that walks past annotations and any present preceding qualifiers (in canonical order) before placing the new keyword. Removal uses `_removeKeyword` which deletes the keyword span plus trailing whitespace through the next non-whitespace byte.
+**`FunctionBodyEditPlanner` — 7 operations:**
+- Statement-list: `addStatement(parent, index, newSource, source)` with indent inference, `removeStatement(stmt, source)` with line cleanup, `replaceStatement(stmt, newSource)`.
+- Variable-declaration: `renameDeclaredVariable`, `changeVariableType` (requires existing), `changeVariableInitializer` (requires existing).
+- Return: `changeReturnExpression` (requires existing expression).
 
-**The M7 series is now functionally complete** for class-structure editing:
-- M7.0 fields, M7.1 methods + constructors, M7.2 parameters + annotations, M7.2.1 parameter add/remove, M7.3 annotation editing, M7.4 section creation + bracket cleanup + bare-annotation args + ctor rename, M7.5 qualifier editing.
+**Naming note:** analyzer 13 also exports `VariableDeclarationStatement` / `ExpressionStatement` / `ReturnStatement` as AST node types. Loom-side model classes have `Node` suffix to avoid the collision (matches the `ClassFieldNode` / `ClassMethodNode` / `ClassConstructorNode` pattern from M7).
 
-Together, the M7 family covers every edit a Freezed / json_serializable / Drift table tooling layer would normally need.
+**Validation:**
+- 263 tests green (was 246, +17 new across parsing + round-trip).
+- `dart analyze` and `dart format` clean.
+- Scout numbers unchanged (M8.0a doesn't add a top-level parser; it operates on a sub-region of existing files).
 
-Truly long-tail items remaining (ship ad-hoc only if real fixtures demand):
-- Adding a type annotation to an untyped field or parameter
-- Adding an initializer to a bare field
-- Adding a default value to a parameter without one
-- Converting an unnamed constructor into a named one
-- Multi-variable field declarations beyond best-effort
-- Reordering members
+**Deliberately deferred (M8.0b / M8.1+):**
+- Control flow modeling: if/else, for, while, switch, try/catch, do — each is a distinct statement kind with its own shape.
+- Expression-internal structure (assignment, call, await, binary ops, etc.) — currently all opaque source.
+- Add/edit type annotations on untyped variable declarations.
+- Add/remove variable qualifiers (`final`, `var`, `late`, `const`).
+- Reordering statements (use add + remove for now).
+- Editing nested function declarations inside a body.
 
 **Blockers:** none
-**Next action:** **Eric review gate for the full M6 + M7 series** (16 commits since the last review gate, all the major work to make Loom usable for OutSystems-style entity + DSL modeling). Then **M8 — function-body / statement modeling**, the next genuinely new shape after constructor trees, flat member lists, and complete class structure.
+**Next action:** Eric review gate for the M6 + M7 series + M8.0a (17 commits total). Then M8.0b (control flow — if/else first, then loops) if the function-body modeling direction proves valuable.
 
 ---
 
@@ -239,7 +240,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M7.4** (shipped 2026-05-14) | Closing M7 gaps. `appendParameter` now creates `{}` / `[]` sections when needed; `removeParameter(parameter, source, parent)` drains empty sections; `replaceAnnotationArguments` now inserts on bare annotations; `renameNamedConstructor` replaces the `.named` segment. | Most M7 edits land cleanly without ad-hoc workarounds. |
 | **M7.5** (shipped 2026-05-14) | Qualifier editing. Added 10 keyword-span fields across the class-structure node types; 16 add/remove operations covering field final/late/static, method static, ctor const/factory, parameter required/final. Insertion respects canonical ordering. M7 is now feature-complete for class-structure editing. | Closes the entity-modeling surface — toggling `static`, `late`, `final`, `required` etc. is a common need for Freezed / json_serializable / Drift tooling. |
 | Future M7.x | Ad-hoc additions only if real fixtures demand: adding type to untyped fields/params, adding initializer to bare fields, adding default to bare params, unnamed→named ctor conversion, multi-variable field decls beyond best-effort, member reordering. | Long-tail edge cases. |
-| **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
+| **M8.0a** (shipped 2026-05-14) | Function-body modeling, first slice. Sealed `StatementNode = VariableDeclarationStatementNode | ExpressionStatementNode | ReturnStatementNode | OpaqueStatementNode`. `parseFunctionBody` finds a function body by default or by explicit span. `FunctionBodyEditPlanner` — 7 ops covering statement list, variable decls, return expression. ~700 LOC. | Sequential business logic — `do A; do B; return X`. Most OutSystems-style flows are sequential procedural code. |
+| M8.0b+ | Control flow (if/for/while/switch/try), expression-internal structure, qualifier editing for vars, statement reordering, nested function declarations. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -322,6 +324,47 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M8.0a — function-body modeling (sequential statements + return)
+**Worked on:** Eric picked M8.0a — sequential statements + return, no control flow yet. Third entirely new model shape in the kernel after constructor trees (M1–M6.2) and class-member lists (M7). Models the *inside* of a function body: what's between the `{` and `}` of a method, constructor, top-level function, or anonymous closure.
+
+**Architectural decision: third separate sealed hierarchy.** `StatementNode` is its own sealed root, independent from `ModelNode` (constructor trees) and `ClassMember` (class-flat). Statements are a fundamentally different shape — an ordered sequence of typed nodes with statement-specific subtypes — and forcing them into either existing hierarchy would dilute the semantics. The pattern is now well-established: separate hierarchies for separate shapes, with shared primitives (`SourceSpan`, `SourceEdit`, `applySourceEdits`, `PropertyValue`, etc.) carried across.
+
+**Model:**
+- `FunctionBodyModel { bodySpan, innerSpan, statements, diagnostics }` — `bodySpan` is the full `{...}`, `innerSpan` is the byte range between the braces (anchor for `addStatement` when body is otherwise empty).
+- `sealed StatementNode` with four variants:
+  - `VariableDeclarationStatementNode` — captures `typeName/typeSpan`, qualifier flags (`isFinal`/`isVar`/`isLate`/`isConst`), and a list of `DeclaredVariable` (handles `var a = 1, b = 2;` multi-variable).
+  - `ExpressionStatementNode` — captures the expression as raw source text plus span; expression internals not modeled.
+  - `ReturnStatementNode` — optional `expressionSource`/`expressionSpan` (null for bare `return;`).
+  - `OpaqueStatementNode` — catch-all for unmodeled statement kinds.
+- `DeclaredVariable { name, nameSpan, initializerSource, initializerSpan }` — one per declared variable within a `VariableDeclarationStatementNode`.
+
+**Parser:** `parseFunctionBody(source, {bodySpan})` uses a `RecursiveAstVisitor` to locate the right `FunctionBody`. With no `bodySpan` it returns the first `BlockFunctionBody` encountered (pre-order, so a top-level function's body comes before nested closures). With an explicit `bodySpan` (e.g., `ClassMethodNode.bodySpan` from M7), it returns the body at that exact offset. Throws on arrow or empty bodies.
+
+**Edit planner — 7 operations:**
+| Op | What |
+|---|---|
+| `addStatement(parent, index, newSource, source)` | Insert at index; infers indent from siblings or body braces; handles empty body case. |
+| `removeStatement(stmt, source)` | Delete + trailing whitespace through next newline. |
+| `replaceStatement(stmt, newSource)` | Wholesale source replacement. |
+| `renameDeclaredVariable(variable, newName)` | Replace name token span. |
+| `changeVariableType(decl, newType)` | Replace type span (requires existing type). |
+| `changeVariableInitializer(variable, newSource)` | Replace `= expr` portion (requires existing initializer). |
+| `changeReturnExpression(stmt, newSource)` | Replace returned expression (requires existing; bare `return;` is opaque). |
+
+**Analyzer-13 name collision:** the analyzer exports `VariableDeclarationStatement` / `ExpressionStatement` / `ReturnStatement` as AST node types. Loom-side model classes use the `Node` suffix to avoid clashing — `VariableDeclarationStatementNode`, etc. Matches the M7 pattern (`ClassFieldNode`, `ClassMethodNode`, etc.). Cleaner than prefix-importing or using `hide` clauses.
+
+**Fixture & tests:**
+- `test/fixtures/function_body_simple.dart` — a 14-line `registerUser(email)` function that exercises two `final` variable declarations, two expression statements (log + saveUser calls), and a return.
+- 8 parsing tests + 9 round-trip tests across all operations.
+- 263 tests total green (was 246, +17 new).
+
+**Learned:**
+- **The `Node` suffix convention generalizes.** I already used it for M7 to disambiguate from analyzer's AST types. Doing the same here was zero friction and keeps the naming pattern consistent across model files. Going forward, any new model class that risks shadowing an analyzer AST type should get the suffix.
+- **Function bodies pressure indent inference more than class bodies do.** Class members are usually indented at a single canonical level (typically 2 spaces). Function bodies can be deeply nested (closures inside methods inside classes), so the inferred indent varies by context. The `_lineIndentBefore` helper handles this correctly because it reads from actual source positions rather than assuming.
+- **`_lineIndentBefore` is now in three places** (ListEditHelpers, ClassStructureEditPlanner, FunctionBodyEditPlanner). The rule of three has triggered — time to extract. Not for this commit; the next cleanup pass.
+
+**Next:** Eric review of M6 + M7 + M8.0a series. Then M8.0b — control flow (if/else first), or pivot back to filling in some other gap if the direction needs refinement.
 
 ### [2026-05-14] M7.5 — qualifier editing (M7 feature-complete)
 **Worked on:** Last of the M7 series. Adds 16 qualifier add/remove operations covering field `final`/`late`/`static`, method `static`, constructor `const`/`factory`, and parameter `required`/`final`. Required model surgery to capture keyword spans (10 new nullable `SourceSpan?` fields across 4 node types).
