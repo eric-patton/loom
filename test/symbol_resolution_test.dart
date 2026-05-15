@@ -47,6 +47,122 @@ void f() {}
     });
   });
 
+  group('parseFileSymbols — top-level annotations (M10.0a)', () {
+    test('captures annotations on a class declaration', () {
+      const source = "@JsonSerializable()\nclass Person {}\n";
+      final symbols = parseFileSymbols(source);
+      final person = symbols.findDeclaration('Person');
+      expect(person, isNotNull);
+      expect(person!.annotations, hasLength(1));
+      expect(person.annotations.first.name, equals('JsonSerializable'));
+      expect(
+        person.annotations.first.argumentsSource,
+        equals('()'),
+      );
+    });
+
+    test('captures bare annotation (no parens)', () {
+      const source = "@freezed\nclass Person {}\n";
+      final symbols = parseFileSymbols(source);
+      final person = symbols.findDeclaration('Person')!;
+      expect(person.annotations, hasLength(1));
+      expect(person.annotations.first.name, equals('freezed'));
+      expect(person.annotations.first.argumentsSource, isNull);
+    });
+
+    test('captures multiple annotations on one declaration', () {
+      const source = '''
+@freezed
+@JsonSerializable()
+class Person {}
+''';
+      final symbols = parseFileSymbols(source);
+      final person = symbols.findDeclaration('Person')!;
+      expect(person.annotations, hasLength(2));
+      expect(person.annotations[0].name, equals('freezed'));
+      expect(person.annotations[1].name, equals('JsonSerializable'));
+    });
+
+    test('captures annotations on top-level function', () {
+      const source = "@pragma('vm:entry-point')\nvoid main() {}\n";
+      final symbols = parseFileSymbols(source);
+      final main = symbols.findDeclaration('main')!;
+      expect(main.annotations, hasLength(1));
+      expect(main.annotations.first.name, equals('pragma'));
+    });
+
+    test('captures annotations on typedef', () {
+      const source = "@deprecated\ntypedef IntCallback = void Function(int);\n";
+      final symbols = parseFileSymbols(source);
+      final cb = symbols.findDeclaration('IntCallback')!;
+      expect(cb.annotations, hasLength(1));
+      expect(cb.annotations.first.name, equals('deprecated'));
+    });
+
+    test('captures annotations on top-level variable', () {
+      const source = "@deprecated\nconst kPi = 3.14;\n";
+      final symbols = parseFileSymbols(source);
+      final kPi = symbols.findDeclaration('kPi')!;
+      expect(kPi.annotations, hasLength(1));
+      expect(kPi.annotations.first.name, equals('deprecated'));
+    });
+
+    test('multi-var declaration: every variable inherits the annotations', () {
+      const source = "@deprecated\nvar a = 1, b = 2;\n";
+      final symbols = parseFileSymbols(source);
+      expect(symbols.findDeclaration('a')!.annotations, hasLength(1));
+      expect(symbols.findDeclaration('b')!.annotations, hasLength(1));
+    });
+
+    test('no annotations → empty list', () {
+      const source = "class Plain {}\n";
+      final symbols = parseFileSymbols(source);
+      expect(symbols.findDeclaration('Plain')!.annotations, isEmpty);
+    });
+  });
+
+  group('AnnotationArgumentNode — argument internals (M10.0b)', () {
+    test('positional argument captures value source', () {
+      const source = "@pragma('vm:entry-point')\nvoid main() {}\n";
+      final symbols = parseFileSymbols(source);
+      final args = symbols.findDeclaration('main')!.annotations.first.arguments;
+      expect(args, hasLength(1));
+      expect(args.first, isA<PositionalAnnotationArgumentNode>());
+      expect(args.first.valueSource, equals("'vm:entry-point'"));
+    });
+
+    test('named argument captures name and value', () {
+      const source = "@JsonKey(name: 'foo', defaultValue: 0)\nclass X {}\n";
+      final symbols = parseFileSymbols(source);
+      final args = symbols.findDeclaration('X')!.annotations.first.arguments;
+      expect(args, hasLength(2));
+      expect(args[0], isA<NamedAnnotationArgumentNode>());
+      final nameArg = args[0] as NamedAnnotationArgumentNode;
+      expect(nameArg.name, equals('name'));
+      expect(nameArg.valueSource, equals("'foo'"));
+      final defaultArg = args[1] as NamedAnnotationArgumentNode;
+      expect(defaultArg.name, equals('defaultValue'));
+      expect(defaultArg.valueSource, equals('0'));
+    });
+
+    test('empty parens → empty arguments list', () {
+      const source = "@JsonSerializable()\nclass X {}\n";
+      final symbols = parseFileSymbols(source);
+      final ann = symbols.findDeclaration('X')!.annotations.first;
+      expect(ann.argumentsSource, equals('()'));
+      expect(ann.arguments, isEmpty);
+    });
+
+    test('mixed positional + named arguments', () {
+      const source = "@Tag('foo', priority: 1)\nclass X {}\n";
+      final symbols = parseFileSymbols(source);
+      final args = symbols.findDeclaration('X')!.annotations.first.arguments;
+      expect(args, hasLength(2));
+      expect(args[0], isA<PositionalAnnotationArgumentNode>());
+      expect(args[1], isA<NamedAnnotationArgumentNode>());
+    });
+  });
+
   group('ProjectModel.resolveSymbol — within a single file', () {
     test('finds a class declared in the current file', () {
       final project = ProjectModel.fromSources({

@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/token.dart';
 
 import '../model/file_symbols.dart';
 import '../model/source_span.dart';
+import 'annotation_capture.dart';
 
 /// Parses a Dart compilation unit's top-level declarations into a
 /// `FileSymbols` snapshot — names declared at the file's top level
@@ -21,41 +22,36 @@ FileSymbols parseFileSymbols(String source) {
   final declarations = <FileSymbolDeclaration>[];
 
   for (final decl in result.unit.declarations) {
+    final annotations = captureAnnotations(decl.metadata, source);
     if (decl is ClassDeclaration) {
-      declarations.add(
-        _makeSymbol(decl.namePart.typeName, decl, DeclarationKind.classKind),
-      );
+      declarations.add(_makeSymbol(decl.namePart.typeName, decl,
+          DeclarationKind.classKind, annotations));
     } else if (decl is MixinDeclaration) {
-      declarations.add(_makeSymbol(decl.name, decl, DeclarationKind.mixin));
-    } else if (decl is EnumDeclaration) {
       declarations.add(
-        _makeSymbol(decl.namePart.typeName, decl, DeclarationKind.enumKind),
-      );
+          _makeSymbol(decl.name, decl, DeclarationKind.mixin, annotations));
+    } else if (decl is EnumDeclaration) {
+      declarations.add(_makeSymbol(
+          decl.namePart.typeName, decl, DeclarationKind.enumKind, annotations));
     } else if (decl is ExtensionDeclaration) {
       final name = decl.name;
       if (name != null) {
-        declarations.add(
-          _makeSymbol(name, decl, DeclarationKind.extensionKind),
-        );
+        declarations.add(_makeSymbol(
+            name, decl, DeclarationKind.extensionKind, annotations));
       }
       // Unnamed extensions don't declare a top-level name.
     } else if (decl is ExtensionTypeDeclaration) {
       // Extension type's name lives on its primary constructor.
-      declarations.add(
-        _makeSymbol(
-          decl.primaryConstructor.typeName,
-          decl,
-          DeclarationKind.extensionType,
-        ),
-      );
+      declarations.add(_makeSymbol(decl.primaryConstructor.typeName, decl,
+          DeclarationKind.extensionType, annotations));
     } else if (decl is FunctionDeclaration) {
       declarations.add(
-        _makeSymbol(decl.name, decl, DeclarationKind.function),
-      );
+          _makeSymbol(decl.name, decl, DeclarationKind.function, annotations));
     } else if (decl is FunctionTypeAlias) {
-      declarations.add(_makeSymbol(decl.name, decl, DeclarationKind.typedef));
+      declarations.add(
+          _makeSymbol(decl.name, decl, DeclarationKind.typedef, annotations));
     } else if (decl is GenericTypeAlias) {
-      declarations.add(_makeSymbol(decl.name, decl, DeclarationKind.typedef));
+      declarations.add(
+          _makeSymbol(decl.name, decl, DeclarationKind.typedef, annotations));
     } else if (decl is TopLevelVariableDeclaration) {
       for (final v in decl.variables.variables) {
         declarations.add(FileSymbolDeclaration(
@@ -63,6 +59,7 @@ FileSymbols parseFileSymbols(String source) {
           nameSpan: SourceSpan(offset: v.name.offset, length: v.name.length),
           declarationSpan: SourceSpan(offset: decl.offset, length: decl.length),
           kind: DeclarationKind.topLevelVariable,
+          annotations: annotations,
         ));
       }
     }
@@ -76,6 +73,7 @@ FileSymbolDeclaration _makeSymbol(
   Token nameToken,
   AstNode declarationNode,
   DeclarationKind kind,
+  List<AnnotationNode> annotations,
 ) {
   return FileSymbolDeclaration(
     name: nameToken.lexeme,
@@ -85,5 +83,6 @@ FileSymbolDeclaration _makeSymbol(
       length: declarationNode.length,
     ),
     kind: kind,
+    annotations: annotations,
   );
 }

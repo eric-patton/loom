@@ -1,6 +1,8 @@
+import 'annotation.dart';
 import 'node.dart' show ParseDiagnostic;
 import 'source_span.dart';
 
+export 'annotation.dart';
 export 'node.dart' show ParseDiagnostic;
 
 /// A modeled Dart class declaration.
@@ -521,38 +523,6 @@ class ClassParameterNode {
   }
 }
 
-/// A modeled annotation attached to a class member or parameter.
-/// `@override`, `@JsonKey(name: 'foo')`, `@freezed`, etc.
-///
-/// M7.2 captures annotations as part of the surrounding member's
-/// `annotations` list; the annotation itself isn't included in the
-/// member's `sourceSpan` calculations because Dart's analyzer treats
-/// annotations as preceding the member declaration. Edit operations
-/// on annotations themselves (add/remove/rename) are deferred to M7.3+.
-class AnnotationNode {
-  const AnnotationNode({
-    required this.name,
-    required this.nameSpan,
-    required this.argumentsSource,
-    required this.argumentsSpan,
-    required this.sourceSpan,
-  });
-
-  /// The annotation name as a single identifier (`'override'`,
-  /// `'JsonKey'`, `'freezed'`). For prefixed annotations
-  /// (`@meta.required`), this captures the full dotted source text.
-  final String name;
-  final SourceSpan nameSpan;
-
-  /// Argument-list source text including parens (`'()'`,
-  /// `"(name: 'x')"`), or null when the annotation has no parens
-  /// (bare `@override`).
-  final String? argumentsSource;
-  final SourceSpan? argumentsSpan;
-
-  /// Span of the full annotation including the leading `@`.
-  final SourceSpan sourceSpan;
-
-  @override
-  String toString() => 'AnnotationNode(@$name${argumentsSource ?? ''})';
-}
+// AnnotationNode (and AnnotationArgumentNode subtypes) live in
+// `annotation.dart` and are re-exported from this file so that the
+// class-structure surface continues to expose them as before.

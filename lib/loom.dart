@@ -21,6 +21,7 @@ export 'src/emission/route_serializer.dart';
 export 'src/emission/source_edit.dart';
 export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
+export 'src/model/annotation.dart';
 export 'src/model/class_structure.dart';
 export 'src/model/directives.dart';
 export 'src/model/file_symbols.dart';

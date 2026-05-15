@@ -8,6 +8,7 @@ import 'package:analyzer/dart/ast/token.dart';
 
 import '../model/class_structure.dart';
 import '../model/source_span.dart';
+import 'annotation_capture.dart' as ann;
 import 'base_visitor.dart' show ParseException;
 
 /// Parses a Dart source string into a `ClassStructureModel`.
@@ -92,7 +93,7 @@ ClassStructureModel parseClassStructure(String source) {
         classSpan: classSpan,
         bodySpan: bodySpan,
         members: members,
-        annotations: _captureAnnotations(declaration.metadata, source),
+        annotations: ann.captureAnnotations(declaration.metadata, source),
       ),
       diagnostics: diagnostics,
     );
@@ -122,7 +123,7 @@ void _appendFields(
   final isVar = keyword != null && keyword.keyword == Keyword.VAR;
   final isLate = member.fields.lateKeyword != null;
   final isStatic = member.isStatic;
-  final annotations = _captureAnnotations(member.metadata, source);
+  final annotations = ann.captureAnnotations(member.metadata, source);
 
   // M7.5: capture keyword spans for qualifier editing.
   final finalKeywordSpan = isFinal
@@ -235,7 +236,7 @@ ClassMethodNode _buildMethodNode(MethodDeclaration member, String source) {
     parameters: params == null
         ? const <ClassParameterNode>[]
         : _captureParameters(params, source),
-    annotations: _captureAnnotations(member.metadata, source),
+    annotations: ann.captureAnnotations(member.metadata, source),
   );
 }
 
@@ -320,7 +321,7 @@ ClassConstructorNode _buildConstructorNode(
     constKeywordSpan: constKeywordSpan,
     factoryKeywordSpan: factoryKeywordSpan,
     parameters: _captureParameters(params, source),
-    annotations: _captureAnnotations(member.metadata, source),
+    annotations: ann.captureAnnotations(member.metadata, source),
   );
 }
 
@@ -392,50 +393,12 @@ List<ClassParameterNode> _captureParameters(
         constKeywordSpan: constKw == null
             ? null
             : SourceSpan(offset: constKw.offset, length: constKw.length),
-        annotations: _captureAnnotations(param.metadata, source),
+        annotations: ann.captureAnnotations(param.metadata, source),
       ),
     );
   }
   return out;
 }
 
-/// Captures each `Annotation` in a metadata list as an `AnnotationNode`.
-/// Handles both bare annotations (`@override`) and call-form annotations
-/// (`@JsonKey(name: 'foo')`); for prefixed annotations (`@meta.required`)
-/// the full dotted name is captured as the `name` field.
-List<AnnotationNode> _captureAnnotations(
-  NodeList<Annotation> metadata,
-  String source,
-) {
-  if (metadata.isEmpty) {
-    return const <AnnotationNode>[];
-  }
-  final out = <AnnotationNode>[];
-  for (final ann in metadata) {
-    final nameNode = ann.name;
-    final nameText = source.substring(
-      nameNode.offset,
-      nameNode.offset + nameNode.length,
-    );
-    final args = ann.arguments;
-    final argsSource = args == null
-        ? null
-        : source.substring(args.offset, args.offset + args.length);
-    final argsSpan = args == null
-        ? null
-        : SourceSpan(offset: args.offset, length: args.length);
-    out.add(
-      AnnotationNode(
-        name: nameText,
-        nameSpan: SourceSpan(
-          offset: nameNode.offset,
-          length: nameNode.length,
-        ),
-        argumentsSource: argsSource,
-        argumentsSpan: argsSpan,
-        sourceSpan: SourceSpan(offset: ann.offset, length: ann.length),
-      ),
-    );
-  }
-  return out;
-}
+// Annotation capture lives in `annotation_capture.dart` so it can be
+// shared with `parseFileSymbols` (M10.0a). Imported as `ann` above.

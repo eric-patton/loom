@@ -1,4 +1,7 @@
+import 'annotation.dart';
 import 'source_span.dart';
+
+export 'annotation.dart';
 
 /// Snapshot of the top-level names declared in a single Dart file.
 /// Built by `parseFileSymbols`.
@@ -27,14 +30,16 @@ class FileSymbols {
 }
 
 /// One top-level declaration's metadata. Doesn't carry the full AST —
-/// just the name and the relevant spans for editing.
+/// just the name, the relevant spans for editing, and any annotations
+/// attached to the declaration.
 class FileSymbolDeclaration {
-  const FileSymbolDeclaration({
+  FileSymbolDeclaration({
     required this.name,
     required this.nameSpan,
     required this.declarationSpan,
     required this.kind,
-  });
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  }) : annotations = List.unmodifiable(annotations);
 
   /// The declared name (e.g. `'MyClass'`, `'helper'`, `'kPi'`).
   final String name;
@@ -49,6 +54,16 @@ class FileSymbolDeclaration {
   /// The declaration kind. Useful for distinguishing classes from
   /// functions, etc.
   final DeclarationKind kind;
+
+  /// Annotations attached to the declaration (`@JsonSerializable()`,
+  /// `@freezed`, `@pragma('vm:entry-point')`, etc.), in source order.
+  /// Empty when the declaration has no annotations.
+  ///
+  /// M10.0a capture. The declaration site of a top-level class /
+  /// function / variable / typedef carries the annotations; the
+  /// individual members within a class are captured separately by
+  /// `parseClassStructure` (M7.2).
+  final List<AnnotationNode> annotations;
 
   @override
   String toString() => 'FileSymbolDeclaration($name: ${kind.name})';
