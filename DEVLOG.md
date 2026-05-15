@@ -8,27 +8,37 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.0 — class-structure modeling (fields only)
-**Last touched:** 2026-05-14 — added the first non-tree-shaped model: class structure. Walks a Dart `ClassDeclaration`'s body and surfaces field declarations as editable nodes; methods, constructors, and getters/setters remain opaque source-span entries (M7.x territory). Deliberately a **separate sealed hierarchy** from the constructor-tree `ModelNode` — the shapes are too different (flat list of members vs. tree of constructor calls) to share a base usefully.
+**Active milestone:** M7.1 — class-structure model deepened with methods + constructors
+**Last touched:** 2026-05-14 — extended the class-structure model from "fields only" (M7.0) to full member coverage. Previously-opaque method and constructor declarations now have dedicated node types capturing their signatures.
 
-**New surface:**
-- `ClassStructureModel { root, diagnostics }` — top-level
-- `ClassStructureNode { className, classSpan, bodySpan, fields, opaqueMemberSpans }`
-- `ClassFieldNode { name, nameSpan, typeName, typeSpan, initializerSource, initializerSpan, isFinal, isVar, isLate, isStatic, sourceSpan }`
-- `parseClassStructure(source)` — finds first `ClassDeclaration` with a `BlockClassBody`; surfaces fields as nodes, other members as opaque spans. Required two analyzer-13 API adaptations: `ClassDeclaration.name` → `namePart.typeName`, and `ClassDeclaration.body` is now a sealed `ClassBody` requiring pattern match on `BlockClassBody`.
-- `ClassStructureEditPlanner` — five operations: `renameField`, `changeFieldType`, `changeFieldInitializer`, `removeField`, `addField`.
+**Sealed `ClassMember` hierarchy** added to replace M7.0's `fields` + `opaqueMemberSpans` split:
+- `ClassFieldNode` — unchanged from M7.0; now extends `ClassMember`
+- `ClassMethodNode` — instance methods, static methods, getters, setters, operators. Captures name, return type, parameters (as raw source text), body span, plus `isStatic` / `isAbstract` / `isGetter` / `isSetter` / `isOperator` / `isAsync` / `isGenerator` flags.
+- `ClassConstructorNode` — default, named, factory, and redirecting constructors. Captures named-constructor segment, parameters source, initializer-list source, body span, plus `isConst` / `isFactory`.
+- `OpaqueClassMember` — catch-all for forward-compat (in practice should be empty for well-formed Dart classes).
 
-**Validation:** 185 tests green (163 + 22 new class-structure tests, parsing + round-trip per operation). 2 hand-crafted fixtures. Scout against flutter/examples (1,214 files): 0 crashes, 0 idempotence failures, 599 class-structure clean parses. Scout against flutter/packages/go_router (117 files): 78 class clean parses, 0 crashes. CLI `loom parse` now four-way auto-detects (widget / route / pipeline / class-structure).
+`ClassStructureNode.members` is the new authoritative list (preserves source order). Backward-compat getters `fields` and `opaqueMemberSpans` keep M7.0 callers working.
 
-**Deliberately omitted from M7.0 (any of these is a future milestone):**
-- Adding a type annotation to an untyped field
-- Adding an initializer to a bare field
-- Edits that target qualifiers (final / var / late / static)
-- Reordering fields
-- Method-signature / constructor / annotation modeling
-- Multi-variable field declarations (`final String a, b;`) — captured as best-effort
+**Edit-planner additions:**
+- `renameMethod` — replace name token
+- `changeMethodReturnType` — replace return type (requires existing)
+- `removeMember` — generic; works for any `ClassMember` subtype. `removeField` now wraps it.
+- `addMember` — generic; appends any member declaration at end of class body. `addField` now wraps it.
+
+**New fixture:** `class_with_constructors.dart` (Money class) exercises four constructor shapes — const default, const named with initializer list, factory with body, factory redirecting `= Money;` — plus operator overload + override method.
+
+**Validation:** 202 tests green (185 → 202, +17 new across parsing + round-trip). dart analyze + dart format clean. Scout against flutter/packages/go_router (117 files): identical to M7.0 — 0 crashes, 0 idempotence failures, 78 class-structure clean parses. The new model captures real method/ctor structure where M7.0 only saw opaque spans.
+
+**Naming collision noted:** analyzer 13 exports its own `ClassMember` (an AST node type). The parser imports `package:analyzer/dart/ast/ast.dart hide ClassMember;` to avoid conflict with the loom-side sealed type.
+
+**Still deferred (parameter and qualifier editing is M7.2 territory):**
+- Adding/removing/editing parameter lists
+- Renaming named constructors
+- Edits to qualifiers (final/var/late/static/const/factory/async)
+- Annotations (`@override`, `@JsonSerializable()`) — captured as part of `sourceSpan` but not modeled
+- Multi-variable field declarations beyond best-effort
 **Blockers:** none
-**Next action:** **Eric review gate for M6 series + M7.0.** Then M7.1 or M8 territory — likely M7.1 to deepen class-structure modeling (method signatures? constructors?), or pivot to M8's function-body / statement modeling which is the next genuinely new shape.
+**Next action:** **Eric review gate for M6 series + M7.0 + M7.1.** Then M7.2 (parameter / qualifier / annotation editing) or M8 (function-body / statement modeling — the next genuinely new shape).
 
 ---
 
@@ -195,7 +205,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M6.1** (shipped 2026-05-14) | Extracted shared scaffolding in three phases: (1) unified sealed `ModelNode` hierarchy (Route node types collapsed into shared `OpaqueNode` / `MethodReferenceNode`); (2) `BaseVisitor` abstract class with three domain hooks; (3) `ListEditHelpers` for byte-level slot edits + `RouteSerializer` sibling of `WidgetSerializer`. Each visitor / edit-planner now ~50–100 lines instead of ~300–450. | Made the kernel genuinely reusable for a third domain — M6.2's next catalog needs ~50 lines, not a copy of the scaffolding. |
 | **M6.2** (shipped 2026-05-14) | Third domain catalog: synthetic Pipeline DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, representative of OutSystems-style declarative workflows. Adding the third domain revealed a hidden duplication in the per-domain serializers (the constructor-call serialization was ~100 lines of identical code in two places); extracted as `ConstructorCallSerializer`. | Validated M6.1's scaffolding actually plugs in a third domain — non-shared per-domain code is ~250 LOC total. The literal M6.2 options from the original plan (test framework, MaterialApp configs, Shelf cascades) turned out to be poor fits for "constructor-tree catalog" (test bodies live in function literals, MaterialApp is already a widget, Shelf is a cascade — different shape). Pipeline DSL is the cleanest demonstration of the OutSystems trajectory. |
 | **M7.0** (shipped 2026-05-14) | Class-structure modeling — **fields only**, first slice. Parse a class's field declarations; methods + constructors stay opaque. Separate sealed hierarchy from constructor-tree `ModelNode` (different shape: flat list of members vs. tree of expressions). Five edit operations: rename / changeType / changeInitializer / remove / addField. ~600 LOC new. | OutSystems-style entity modeling for Drift tables, Freezed unions, json_serializable classes — most of those are field-shaped. |
-| M7.1+ | Deepen class structure: method signatures, constructors, annotations, multi-variable field declarations, edits to qualifiers. | Round out the class-structure model toward Drift / Freezed / json_serializable coverage. |
+| **M7.1** (shipped 2026-05-14) | Method signatures + constructors. Sealed `ClassMember = ClassFieldNode | ClassMethodNode | ClassConstructorNode | OpaqueClassMember`. Edit ops added: renameMethod, changeMethodReturnType, removeMember (polymorphic), addMember (polymorphic). Backward-compat `fields` / `opaqueMemberSpans` getters keep M7.0 callers working. | Methods + constructors are the rest of "class shape" — together with M7.0's fields, this covers virtually all real-world class members. |
+| M7.2+ | Parameter editing, qualifier editing (final/var/late/static/const/factory/async), annotation modeling, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -238,7 +249,8 @@ The first non-tree-shaped model. Validates the kernel handles flat lists of clas
 | File | Source | Lines | Exercises |
 |---|---|---|---|
 | `test/fixtures/class_simple.dart` | hand-crafted | 6 | Four fields with varied qualifiers: `final String`, `final int`, nullable `String?`, `late final DateTime`. No methods/constructors. |
-| `test/fixtures/class_with_methods.dart` | hand-crafted | 14 | Class with both fields and non-field members — constructor, getter, instance method, static const field. Tests that opaque-member spans are captured and don't interfere with field operations. |
+| `test/fixtures/class_with_methods.dart` | hand-crafted | 14 | Class with both fields and non-field members — constructor, getter, instance method, static const field. M7.0 captured opaque spans; M7.1 captures the methods + constructor as modeled nodes. |
+| `test/fixtures/class_with_constructors.dart` | hand-crafted | 22 | M7.1: four constructor shapes — const default, const named with initializer list, factory with body, factory redirecting `= Money;`. Plus operator overload (`operator +`) and override method (`toString`). |
 
 ### Pipeline fixtures (M6.2)
 
@@ -277,6 +289,42 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.1 — class-structure: methods + constructors
+**Worked on:** Deepened the class-structure model from M7.0's "fields only" to full member coverage. Methods (including getters/setters/operators) and constructors (including factories) now have dedicated typed nodes.
+
+**Sealed `ClassMember` hierarchy** replaces M7.0's two parallel lists:
+- `ClassFieldNode` — extends `ClassMember`; unchanged from M7.0
+- `ClassMethodNode` — name + return type + parameters source + body span + flags (isStatic / isAbstract / isGetter / isSetter / isOperator / isAsync / isGenerator)
+- `ClassConstructorNode` — class name + optional named-constructor segment + parameters source + initializer-list source + body span + flags (isConst / isFactory)
+- `OpaqueClassMember` — catch-all, in practice empty for well-formed Dart
+
+`ClassStructureNode.members` is the new authoritative list (preserves source order; pattern-match for kind). Backward-compat getters `fields` and `opaqueMemberSpans` keep M7.0 callers working without churn.
+
+**Edit-planner additions:**
+- `renameMethod(method, newName)` — same shape as `renameField`
+- `changeMethodReturnType(method, newReturnType)` — replace return-type span (requires existing return type)
+- `removeMember(member, source)` — polymorphic over `ClassMember`. `removeField` now wraps it.
+- `addMember(parent, newMemberSource, source)` — polymorphic. `addField` now wraps it.
+
+Parameter editing and qualifier editing remain M7.2 territory — they require either span-level insertion logic (for adding params to a paramless method, etc.) or modeling individual parameter shape.
+
+**Validation:**
+- 202 tests green (was 185 → +17 new). `dart analyze` and `dart format` clean.
+- New fixture `class_with_constructors.dart` (Money class) exercises four constructor shapes: const default, const named with initializer list, factory with body, factory redirecting `= Money;`. Plus operator overload + override method.
+- Scout against flutter/packages/go_router (117 files): **identical numbers to M7.0** — 0 crashes, 0 idempotence failures, 78 class clean parses. M7.1 doesn't change which files parse; it captures more shape inside each.
+
+**Analyzer 13 wrinkles:**
+- `ClassMember` name clash: analyzer 13 exports a `ClassMember` AST-node type that clashes with the loom-side sealed type. Resolved with `import 'package:analyzer/dart/ast/ast.dart' hide ClassMember;` on the parser file. Same defensive pattern used elsewhere when domain names overlap with analyzer's vocabulary.
+- `ConstructorDeclaration.typeName` is `SimpleIdentifier?` — null when using new-syntax `new C()` form. M7.1 falls back to the constructor's first token for the className anchor in that rare case.
+- `MethodDeclaration.body` exposes `isAsynchronous` and `isGenerator` directly — cleaner than reading the body's modifier tokens.
+
+**Learned:**
+- **Generic operations land naturally once node types unify under a sealed base.** `removeMember` and `addMember` work for any `ClassMember` without per-kind dispatch because the only state they need (sourceSpan, class body span) is in the sealed type. Type-specific edits (rename, changeReturnType) stay on the concrete subtypes because they touch concrete-only spans.
+- **Backward-compat getters are essentially free.** The two getters on `ClassStructureNode` (`fields`, `opaqueMemberSpans`) are 2 lines each and let M7.0 callers keep working unchanged. Worth doing whenever a model widening would otherwise force test churn.
+- **The "rule of three" for `_lineIndentBefore` is still pending.** Duplicated across `ListEditHelpers` and `ClassStructureEditPlanner`. Now that M7.1 ships, there are concretely two consumers; a third in M7.2 or M8 will force extraction.
+
+**Next:** Eric review. Then M7.2 (parameter / qualifier / annotation editing) or M8 (function-body modeling).
 
 ### [2026-05-14] M7.0 — class-structure modeling (fields only, first slice)
 **Worked on:** First non-tree-shaped model in the kernel. M6.x's constructor-tree catalogs were all tree-of-expressions; class structure is a flat list of members. Eric picked the "fields only" scope to keep the slice small while validating that the kernel can absorb a genuinely different shape.

@@ -118,38 +118,76 @@ void _printClassStructure(ClassStructureModel model, IOSink sink) {
   final diagSuffix = model.diagnostics.isEmpty
       ? ''
       : ', ${model.diagnostics.length} diagnostic(s)';
+  final fieldCount = root.members.whereType<ClassFieldNode>().length;
+  final methodCount = root.members.whereType<ClassMethodNode>().length;
+  final ctorCount = root.members.whereType<ClassConstructorNode>().length;
+  final opaqueCount = root.members.whereType<OpaqueClassMember>().length;
   sink.writeln(
     'ClassStructureModel(class=${root.className}, '
-    '${root.fields.length} field(s), '
-    '${root.opaqueMemberSpans.length} opaque member(s)$diagSuffix)',
+    '$fieldCount field(s), $methodCount method(s), '
+    '$ctorCount ctor(s), $opaqueCount opaque$diagSuffix)',
   );
   for (final diag in model.diagnostics) {
     sink.writeln(
       '  ! ${diag.message} @${diag.span.offset}+${diag.span.length}',
     );
   }
-  for (final field in root.fields) {
-    final qualifiers = <String>[
-      if (field.isStatic) 'static',
-      if (field.isLate) 'late',
-      if (field.isFinal) 'final',
-      if (field.isVar) 'var',
-    ];
-    final type = field.typeName ?? '';
-    final init =
-        field.initializerSource == null ? '' : ' = ${field.initializerSource}';
-    sink.writeln(
-      '  ${qualifiers.join(' ')}'
-      '${qualifiers.isNotEmpty ? ' ' : ''}'
-      '$type${type.isNotEmpty ? ' ' : ''}'
-      '${field.name}$init',
-    );
+  for (final member in root.members) {
+    sink.writeln('  ${_describeMember(member)}');
   }
-  if (root.opaqueMemberSpans.isNotEmpty) {
-    sink.writeln('  // ${root.opaqueMemberSpans.length} opaque member(s):');
-    for (final span in root.opaqueMemberSpans) {
-      sink.writeln('  //   @${span.offset}+${span.length}');
-    }
+}
+
+String _describeMember(ClassMember member) {
+  switch (member) {
+    case final ClassFieldNode f:
+      final qualifiers = <String>[
+        if (f.isStatic) 'static',
+        if (f.isLate) 'late',
+        if (f.isFinal) 'final',
+        if (f.isVar) 'var',
+      ];
+      final type = f.typeName ?? '';
+      final init =
+          f.initializerSource == null ? '' : ' = ${f.initializerSource}';
+      return [
+            if (qualifiers.isNotEmpty) qualifiers.join(' '),
+            if (type.isNotEmpty) type,
+            f.name,
+          ].join(' ') +
+          init;
+    case final ClassMethodNode m:
+      final kind = m.isGetter
+          ? 'get '
+          : m.isSetter
+              ? 'set '
+              : m.isOperator
+                  ? 'operator '
+                  : '';
+      final ret = m.returnType ?? '';
+      final params = m.parametersSource ?? '';
+      final modifiers = <String>[
+        if (m.isStatic) 'static',
+        if (m.isAbstract) 'abstract',
+      ];
+      return [
+        if (modifiers.isNotEmpty) modifiers.join(' '),
+        if (ret.isNotEmpty) ret,
+        '$kind${m.name}$params',
+      ].join(' ');
+    case final ClassConstructorNode c:
+      final qualifiers = <String>[
+        if (c.isFactory) 'factory',
+        if (c.isConst) 'const',
+      ];
+      final name = c.namedConstructorName == null
+          ? c.className
+          : '${c.className}.${c.namedConstructorName}';
+      return [
+        if (qualifiers.isNotEmpty) qualifiers.join(' '),
+        '$name${c.parametersSource}',
+      ].join(' ');
+    case final OpaqueClassMember o:
+      return '<opaque @${o.sourceSpan.offset}+${o.sourceSpan.length}>';
   }
 }
 

@@ -12,7 +12,11 @@ String _loadFixture(String name) =>
 
 void main() {
   group('invariant 2 - no-op idempotence (class structure)', () {
-    for (final fixture in ['class_simple.dart', 'class_with_methods.dart']) {
+    for (final fixture in [
+      'class_simple.dart',
+      'class_with_methods.dart',
+      'class_with_constructors.dart',
+    ]) {
       test('apply([], source) == source on $fixture', () {
         final source = _loadFixture(fixture);
         final model = parseClassStructure(source);
@@ -108,6 +112,118 @@ void main() {
       final names = reparsed.root.fields.map((f) => f.name).toList();
       expect(names, isNot(contains('email')));
       expect(reparsed.root.fields, hasLength(3));
+    });
+  });
+
+  group('renameMethod (M7.1)', () {
+    test('renames isAdult -> isMinor', () {
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final method = model.root.members.whereType<ClassMethodNode>().firstWhere(
+            (m) => m.name == 'isAdult',
+          );
+
+      final edit = ClassStructureEditPlanner.renameMethod(
+        method: method,
+        newName: 'isMinor',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final names = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .map((m) => m.name)
+          .toList();
+      expect(names, contains('isMinor'));
+      expect(names, isNot(contains('isAdult')));
+    });
+  });
+
+  group('changeMethodReturnType (M7.1)', () {
+    test('changes isAdult return type bool -> Future<bool>', () {
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final method = model.root.members.whereType<ClassMethodNode>().firstWhere(
+            (m) => m.name == 'isAdult',
+          );
+
+      final edit = ClassStructureEditPlanner.changeMethodReturnType(
+        method: method,
+        newReturnType: 'Future<bool>',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final updated = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'isAdult');
+      expect(updated.returnType, equals('Future<bool>'));
+    });
+  });
+
+  group('removeMember (M7.1)', () {
+    test('removes the operator+ method', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members.whereType<ClassMethodNode>().firstWhere(
+            (m) => m.isOperator,
+          );
+
+      final edit = ClassStructureEditPlanner.removeMember(
+        member: op,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      expect(
+        reparsed.root.members
+            .whereType<ClassMethodNode>()
+            .any((m) => m.isOperator),
+        isFalse,
+      );
+    });
+
+    test('removes the Money.zero constructor', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final zero = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == 'zero');
+
+      final edit = ClassStructureEditPlanner.removeMember(
+        member: zero,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final ctors = reparsed.root.members.whereType<ClassConstructorNode>();
+      expect(ctors, hasLength(3));
+      expect(
+        ctors.map((c) => c.namedConstructorName),
+        isNot(contains('zero')),
+      );
+    });
+  });
+
+  group('addMember (M7.1)', () {
+    test('appends a new method to class_simple.dart', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+
+      final edit = ClassStructureEditPlanner.addMember(
+        parent: model.root,
+        newMemberSource: 'String greet() => \'hi, \$name\';',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final greet = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'greet');
+      expect(greet.returnType, equals('String'));
     });
   });
 

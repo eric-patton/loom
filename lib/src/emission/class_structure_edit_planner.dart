@@ -3,42 +3,53 @@ import 'source_edit.dart';
 
 /// Plans `SourceEdit`s for individual class-structure changes.
 ///
-/// M7.0 first slice — five operations:
+/// M7.0 surface (fields-only):
 ///   * `renameField` — change a field's name token
-///   * `changeFieldType` — replace a field's type annotation (requires the
-///     field to already have one)
-///   * `changeFieldInitializer` — replace a field's initializer expression
-///     (requires the field to already have one)
+///   * `changeFieldType` — replace a field's type annotation (requires
+///     the field to already have one)
+///   * `changeFieldInitializer` — replace a field's initializer
+///     expression (requires the field to already have one)
 ///   * `removeField` — delete the entire field declaration including
 ///     trailing whitespace up to (and consuming) the next newline
 ///   * `addField` — append a new field declaration at the end of the
-///     class body, indented to match existing fields (or +2 spaces past
-///     the class declaration's own indent if the body has no fields yet)
+///     class body
 ///
-/// Deliberately omitted from this first slice:
+/// M7.1 surface additions (methods + constructors):
+///   * `renameMethod` — change a method's name token (works on instance/
+///     static methods, getters, setters)
+///   * `changeMethodReturnType` — replace a method's return type
+///     annotation (requires the method to already have one)
+///   * `removeMember` — generic member-removal; works for any
+///     `ClassMember` subtype. `removeField` is a thin wrapper that
+///     delegates to this.
+///   * `addMember` — generic member-append at end of class body.
+///     `addField` is a thin wrapper that delegates to this.
+///
+/// Deliberately omitted (incremental — ship in M7.2+ as fixtures demand):
 ///   * Adding a type annotation to an untyped field
 ///   * Adding an initializer to a bare field
-///   * Reordering fields
-///   * Edits that target field qualifiers (final/var/late/static)
-///   * Multi-variable single-declaration handling
+///   * Renaming a constructor (named ctor segment editing)
+///   * Adding/removing/editing parameters
+///   * Edits to qualifiers (final/var/late/static/const/factory)
+///   * Reordering members
 class ClassStructureEditPlanner {
   ClassStructureEditPlanner._();
+
+  // ----------------------- Field operations -----------------------
 
   static SourceEdit renameField({
     required ClassFieldNode field,
     required String newName,
-  }) {
-    return SourceEdit(
-      offset: field.nameSpan.offset,
-      length: field.nameSpan.length,
-      replacement: newName,
-    );
-  }
+  }) =>
+      SourceEdit(
+        offset: field.nameSpan.offset,
+        length: field.nameSpan.length,
+        replacement: newName,
+      );
 
   /// Replaces the field's type annotation with `newType`. The field must
   /// already have a type annotation; throws `ArgumentError` for untyped
-  /// fields (`var foo;`). Adding a type to an untyped field is a future
-  /// milestone (it requires inserting the type token and a separator).
+  /// fields (`var foo;`).
   static SourceEdit changeFieldType({
     required ClassFieldNode field,
     required String newType,
@@ -47,7 +58,7 @@ class ClassStructureEditPlanner {
     if (span == null) {
       throw ArgumentError(
         'Field "${field.name}" has no type annotation; adding one is not '
-        'supported in M7.0.',
+        'supported in M7.x.',
       );
     }
     return SourceEdit(
@@ -58,9 +69,7 @@ class ClassStructureEditPlanner {
   }
 
   /// Replaces the field's initializer expression with `newInitializerSource`.
-  /// The field must already have an initializer; throws `ArgumentError`
-  /// for bare fields. Adding an initializer to a bare field is a future
-  /// milestone.
+  /// The field must already have an initializer.
   static SourceEdit changeFieldInitializer({
     required ClassFieldNode field,
     required String newInitializerSource,
@@ -69,7 +78,7 @@ class ClassStructureEditPlanner {
     if (span == null) {
       throw ArgumentError(
         'Field "${field.name}" has no initializer; adding one is not '
-        'supported in M7.0.',
+        'supported in M7.x.',
       );
     }
     return SourceEdit(
@@ -79,16 +88,73 @@ class ClassStructureEditPlanner {
     );
   }
 
-  /// Removes the field declaration entirely, including trailing
-  /// whitespace up to and including the next newline. Leaves the
-  /// preceding line of source intact — so removing the second of three
-  /// fields produces `<field1>\n<field3>` rather than `<field1>\n\n<field3>`.
+  /// Convenience wrapper around [removeMember] for field removal.
+  /// Kept for API compat with M7.0 callers.
   static SourceEdit removeField({
     required ClassFieldNode field,
     required String source,
+  }) =>
+      removeMember(member: field, source: source);
+
+  /// Convenience wrapper around [addMember] for field addition.
+  /// Kept for API compat with M7.0 callers.
+  static SourceEdit addField({
+    required ClassStructureNode parent,
+    required String newFieldSource,
+    required String source,
+  }) =>
+      addMember(
+        parent: parent,
+        newMemberSource: newFieldSource,
+        source: source,
+      );
+
+  // ----------------------- Method operations -----------------------
+
+  static SourceEdit renameMethod({
+    required ClassMethodNode method,
+    required String newName,
+  }) =>
+      SourceEdit(
+        offset: method.nameSpan.offset,
+        length: method.nameSpan.length,
+        replacement: newName,
+      );
+
+  /// Replaces a method's return-type annotation with `newReturnType`.
+  /// The method must already have a return type; throws `ArgumentError`
+  /// otherwise (adding return-type annotations to bare methods is
+  /// deferred — it requires inserting the type token and a separator).
+  static SourceEdit changeMethodReturnType({
+    required ClassMethodNode method,
+    required String newReturnType,
   }) {
-    final start = field.sourceSpan.offset;
-    var end = field.sourceSpan.offset + field.sourceSpan.length;
+    final span = method.returnTypeSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Method "${method.name}" has no return type; adding one is not '
+        'supported in M7.x.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newReturnType,
+    );
+  }
+
+  // ----------------------- Generic operations -----------------------
+
+  /// Removes any class member entirely, including trailing whitespace
+  /// up to and including the next newline. Polymorphic over the
+  /// `ClassMember` sealed type — same shape works for fields, methods,
+  /// and constructors.
+  static SourceEdit removeMember({
+    required ClassMember member,
+    required String source,
+  }) {
+    final start = member.sourceSpan.offset;
+    var end = member.sourceSpan.offset + member.sourceSpan.length;
     // Extend over trailing horizontal whitespace + one newline so the
     // gap collapses cleanly. Stops at the first non-whitespace byte.
     while (end < source.length) {
@@ -109,41 +175,33 @@ class ClassStructureEditPlanner {
     );
   }
 
-  /// Inserts `newFieldSource` (e.g. `'final String email;'`) as the last
-  /// field of the class body. Indentation is inferred from an existing
-  /// field if any, otherwise from the class declaration's line indent
-  /// plus two spaces.
+  /// Inserts `newMemberSource` (e.g. `'final String email;'`,
+  /// `'void greet() {}'`, `'Foo.named(this.x);'`) at the end of the
+  /// class body. Indentation is inferred from an existing member if any,
+  /// otherwise from the class declaration's line indent plus two spaces.
   ///
   /// The inserted text does NOT include a leading newline — the planner
   /// adds one when there are existing members in the body, and skips it
-  /// when the body is otherwise empty (so an empty `class Foo {}` ends up
-  /// formatted as `class Foo {\n  final String email;\n}`).
-  static SourceEdit addField({
+  /// when the body is otherwise empty.
+  static SourceEdit addMember({
     required ClassStructureNode parent,
-    required String newFieldSource,
+    required String newMemberSource,
     required String source,
   }) {
-    // Insert position is just before the closing `}` of the body.
     final closeOff = parent.bodySpan.offset + parent.bodySpan.length - 1;
 
-    // Determine indent: prefer an existing field's indent. If the body
-    // is otherwise empty, derive from the class declaration's line plus
-    // two spaces.
-    String fieldIndent;
-    if (parent.fields.isNotEmpty) {
-      fieldIndent = _lineIndentBefore(
-        parent.fields.last.sourceSpan.offset,
-        source,
-      );
-    } else if (parent.opaqueMemberSpans.isNotEmpty) {
-      fieldIndent = _lineIndentBefore(
-        parent.opaqueMemberSpans.last.offset,
+    // Determine indent: prefer the last existing member's indent. If
+    // the body is otherwise empty, derive from the class declaration's
+    // line plus two spaces.
+    String memberIndent;
+    if (parent.members.isNotEmpty) {
+      memberIndent = _lineIndentBefore(
+        parent.members.last.sourceSpan.offset,
         source,
       );
     } else {
-      // Body is empty.
       final outerIndent = _lineIndentBefore(parent.classSpan.offset, source);
-      fieldIndent = '$outerIndent  ';
+      memberIndent = '$outerIndent  ';
     }
 
     // Walk back from `}` to find what's just before it.
@@ -158,26 +216,18 @@ class ClassStructureEditPlanner {
     }
     final hasExistingContent = probe > parent.bodySpan.offset + 1;
 
-    final String replacement;
     if (hasExistingContent) {
-      // Body has at least one member; insert on a fresh line with the
-      // body's indent. Use the same indentation as the existing tail
-      // content so the new field aligns.
-      replacement = '\n$fieldIndent$newFieldSource';
       return SourceEdit(
         offset: probe,
         length: 0,
-        replacement: replacement,
+        replacement: '\n$memberIndent$newMemberSource',
       );
     }
-    // Body has no content (or only whitespace) between `{` and `}`. Emit
-    // `\n<indent>field\n<outerIndent>` so the closing brace ends up on
-    // its own indented line.
     final outerIndent = _lineIndentBefore(parent.classSpan.offset, source);
     return SourceEdit(
       offset: parent.bodySpan.offset + 1,
       length: closeOff - (parent.bodySpan.offset + 1),
-      replacement: '\n$fieldIndent$newFieldSource\n$outerIndent',
+      replacement: '\n$memberIndent$newMemberSource\n$outerIndent',
     );
   }
 
