@@ -7,6 +7,7 @@ library;
 
 export 'src/catalog/pipeline_catalog.dart' show PipelineCatalog, PipelineSpec;
 export 'src/catalog/route_catalog.dart' show RouteCatalog, RouteSpec;
+export 'src/emission/annotation_edit_planner.dart';
 export 'src/emission/class_structure_edit_planner.dart';
 export 'src/emission/constructor_call_serializer.dart';
 export 'src/emission/directives_edit_planner.dart';
