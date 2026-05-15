@@ -1799,6 +1799,95 @@ void use({String? name}) {}
     });
   });
 
+  group('M8.9 — symbol-aware rename for locals + labels', () {
+    test('renameDeclaredVariableWithReferences renames var + references', () {
+      const source = '''
+int f(int input) {
+  final n = input * 2;
+  final m = n + 1;
+  print('n=\$n');
+  return n;
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final vDecl = body.statements[0] as VariableDeclarationStatementNode;
+      final n = vDecl.variables.first;
+
+      final edits =
+          FunctionBodyEditPlanner.renameDeclaredVariableWithReferences(
+        variable: n,
+        functionBody: body,
+        newName: 'value',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, edits);
+
+      // All references to `n` (declaration + 3 uses) should now say
+      // `value`. The other `n` inside `print('n=\$n')` — actually
+      // the `n` inside the string interpolation IS a SimpleIdentifier,
+      // so it gets renamed too. Verify.
+      expect(newSource, contains('final value = input * 2'));
+      expect(newSource, contains('final m = value + 1'));
+      expect(newSource, contains(r"'n=$value'"));
+      expect(newSource, contains('return value'));
+    });
+
+    test('renameForEachLoopVariableWithReferences', () {
+      const source = '''
+int f(List<int> xs) {
+  var total = 0;
+  for (final x in xs) {
+    total = total + x;
+  }
+  return total;
+}
+''';
+      final body = parseFunctionBody(source);
+      final forStmt = body.statements[1] as ForStatementNode;
+
+      final edits =
+          FunctionBodyEditPlanner.renameForEachLoopVariableWithReferences(
+        forStatement: forStmt,
+        newName: 'item',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, edits);
+
+      expect(newSource, contains('for (final item in xs)'));
+      expect(newSource, contains('total = total + item'));
+    });
+
+    test('renameStatementLabelWithReferences updates break + continue refs',
+        () {
+      const source = '''
+void f(List<int> xs) {
+  outer:
+  for (var i = 0; i < xs.length; i++) {
+    if (xs[i] < 0) continue outer;
+    if (xs[i] == 99) break outer;
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final labeled = body.statements[0] as LabeledStatementNode;
+
+      final edits = FunctionBodyEditPlanner.renameStatementLabelWithReferences(
+        labeledStatement: labeled,
+        label: labeled.labels[0],
+        newName: 'mainLoop',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, edits);
+
+      expect(newSource, contains('mainLoop:'));
+      expect(newSource, contains('continue mainLoop'));
+      expect(newSource, contains('break mainLoop'));
+      // Old name shouldn't appear at all.
+      expect(newSource, isNot(contains('outer')));
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =

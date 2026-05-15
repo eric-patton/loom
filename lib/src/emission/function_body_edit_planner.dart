@@ -2,6 +2,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 // Hide analyzer's `PatternField` so the kernel-side `PatternField`
 // (from function_body.dart) wins.
 import 'package:analyzer/dart/ast/ast.dart' hide PatternField;
+import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
 import '../model/function_body.dart';
@@ -817,6 +818,129 @@ class FunctionBodyEditPlanner {
     }
   }
 
+  // ----------------------- Symbol-aware rename — locals + labels (M8.9)
+
+  /// Renames a local variable declared by a `VariableDeclarationStatementNode`
+  /// AND updates all `SimpleIdentifier` references to it within the
+  /// rest of the enclosing function body.
+  ///
+  /// Pass `functionBody` so the op knows the scope to search (everything
+  /// from the variable's declaration to the end of the function body).
+  /// Shadowing isn't tracked — if a nested block re-declares the same
+  /// name, this op renames BOTH. Caller-responsible.
+  ///
+  /// Returns an offset-sorted list of edits.
+  static List<SourceEdit> renameDeclaredVariableWithReferences({
+    required DeclaredVariable variable,
+    required FunctionBodyModel functionBody,
+    required String newName,
+    required String source,
+  }) {
+    final oldName = variable.name;
+    final edits = <SourceEdit>[
+      SourceEdit(
+        offset: variable.nameSpan.offset,
+        length: variable.nameSpan.length,
+        replacement: newName,
+      ),
+    ];
+
+    // Scope: from after the declaration to the end of the function body.
+    final scopeStart = variable.nameSpan.offset + variable.nameSpan.length;
+    final bodyEnd = functionBody.bodySpan.offset + functionBody.bodySpan.length;
+    _collectIdentifierEdits(
+      source: source,
+      regionOffset: scopeStart,
+      regionLength: bodyEnd - scopeStart,
+      oldName: oldName,
+      newName: newName,
+      out: edits,
+    );
+
+    edits.sort((a, b) => a.offset.compareTo(b.offset));
+    return edits;
+  }
+
+  /// Renames a for-each loop variable AND updates references within
+  /// the loop body. Throws when the header is c-style (no loop variable).
+  static List<SourceEdit> renameForEachLoopVariableWithReferences({
+    required ForStatementNode forStatement,
+    required String newName,
+    required String source,
+  }) {
+    final header = forStatement.header;
+    if (header is! ForEachHeader) {
+      throw ArgumentError(
+        'renameForEachLoopVariableWithReferences requires a ForEachHeader.',
+      );
+    }
+    final oldName = header.loopVariableName;
+    final edits = <SourceEdit>[
+      SourceEdit(
+        offset: header.loopVariableSpan.offset,
+        length: header.loopVariableSpan.length,
+        replacement: newName,
+      ),
+    ];
+
+    _collectIdentifierEdits(
+      source: source,
+      regionOffset: forStatement.body.blockSpan.offset,
+      regionLength: forStatement.body.blockSpan.length,
+      oldName: oldName,
+      newName: newName,
+      out: edits,
+    );
+
+    edits.sort((a, b) => a.offset.compareTo(b.offset));
+    return edits;
+  }
+
+  /// Renames a `LabelNode` declaration AND updates all
+  /// `break label;` / `continue label;` references within the labeled
+  /// statement's body.
+  ///
+  /// Walks the AST for `BreakStatement` / `ContinueStatement` nodes
+  /// whose label matches; produces a rename edit for each match plus
+  /// the label declaration itself.
+  static List<SourceEdit> renameStatementLabelWithReferences({
+    required LabeledStatementNode labeledStatement,
+    required LabelNode label,
+    required String newName,
+    required String source,
+  }) {
+    final oldName = label.name;
+    final edits = <SourceEdit>[
+      SourceEdit(
+        offset: label.nameSpan.offset,
+        length: label.nameSpan.length,
+        replacement: newName,
+      ),
+    ];
+
+    final regionStart = labeledStatement.statement.sourceSpan.offset;
+    final regionEnd = labeledStatement.statement.sourceSpan.offset +
+        labeledStatement.statement.sourceSpan.length;
+
+    final result = parseString(content: source, throwIfDiagnostics: false);
+    final visitor = _LabelReferenceCollector(
+      regionStart: regionStart,
+      regionEnd: regionEnd,
+      target: oldName,
+    );
+    result.unit.accept(visitor);
+    for (final ref in visitor.matches) {
+      edits.add(SourceEdit(
+        offset: ref.offset,
+        length: ref.length,
+        replacement: newName,
+      ));
+    }
+
+    edits.sort((a, b) => a.offset.compareTo(b.offset));
+    return edits;
+  }
+
   // ----------------------- For-header ops (M8.2) -----------------
 
   /// Replaces the condition expression of a c-style for-loop header.
@@ -1394,5 +1518,43 @@ class _IdentifierCollector extends RecursiveAstVisitor<void> {
       matches.add(node);
     }
     super.visitSimpleIdentifier(node);
+  }
+}
+
+/// Collects `break label;` / `continue label;` references where the
+/// label name matches `target`. Returns the label-name tokens (not
+/// the full break/continue statement) so each rename edit covers just
+/// the label identifier.
+class _LabelReferenceCollector extends RecursiveAstVisitor<void> {
+  _LabelReferenceCollector({
+    required this.regionStart,
+    required this.regionEnd,
+    required this.target,
+  });
+
+  final int regionStart;
+  final int regionEnd;
+  final String target;
+  final List<Token> matches = [];
+
+  void _check(Token? labelToken) {
+    if (labelToken == null) return;
+    if (labelToken.offset >= regionStart &&
+        labelToken.offset + labelToken.length <= regionEnd &&
+        labelToken.lexeme == target) {
+      matches.add(labelToken);
+    }
+  }
+
+  @override
+  void visitBreakStatement(BreakStatement node) {
+    _check(node.label?.name);
+    super.visitBreakStatement(node);
+  }
+
+  @override
+  void visitContinueStatement(ContinueStatement node) {
+    _check(node.label?.name);
+    super.visitContinueStatement(node);
   }
 }
