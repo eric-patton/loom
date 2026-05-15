@@ -46,10 +46,49 @@ class ClassStructureNode {
     required this.bodySpan,
     required List<ClassMember> members,
     List<AnnotationNode> annotations = const <AnnotationNode>[],
+    this.superclassName,
+    this.superclassSpan,
+    List<String> mixinNames = const <String>[],
+    List<SourceSpan> mixinSpans = const <SourceSpan>[],
+    List<String> interfaceNames = const <String>[],
+    List<SourceSpan> interfaceSpans = const <SourceSpan>[],
   })  : members = List.unmodifiable(members),
-        annotations = List.unmodifiable(annotations);
+        annotations = List.unmodifiable(annotations),
+        mixinNames = List.unmodifiable(mixinNames),
+        mixinSpans = List.unmodifiable(mixinSpans),
+        interfaceNames = List.unmodifiable(interfaceNames),
+        interfaceSpans = List.unmodifiable(interfaceSpans);
 
   final String className;
+
+  /// Superclass name from the `extends` clause, or null when the class
+  /// has no `extends` clause (implicitly extends `Object`). Captured
+  /// as raw source text — preserves generic args (`extends Foo<T>`)
+  /// and prefixes (`extends prefix.Bar`).
+  ///
+  /// M10.1c capture. Pre-M10.1c models had no extends info.
+  final String? superclassName;
+
+  /// Span of the superclass name in source. Null when no `extends`.
+  final SourceSpan? superclassSpan;
+
+  /// Mixin names from the `with` clause, in source order. Each name
+  /// is raw source text (may include generics or prefixes).
+  ///
+  /// M10.1c capture. Empty when the class has no `with` clause.
+  final List<String> mixinNames;
+
+  /// Source spans of each mixin name, aligned with `mixinNames`.
+  final List<SourceSpan> mixinSpans;
+
+  /// Interface names from the `implements` clause, in source order.
+  /// Each name is raw source text.
+  ///
+  /// M10.1c capture. Empty when the class has no `implements` clause.
+  final List<String> interfaceNames;
+
+  /// Source spans of each interface name, aligned with `interfaceNames`.
+  final List<SourceSpan> interfaceSpans;
 
   /// Span of the entire class declaration, from the `class` keyword to
   /// the closing `}` of the body.

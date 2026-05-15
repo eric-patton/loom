@@ -84,6 +84,36 @@ ClassStructureModel parseClassStructure(String source) {
       }
     }
 
+    // Capture extends / with / implements clauses (M10.1c).
+    String? superclassName;
+    SourceSpan? superclassSpan;
+    final extendsClause = declaration.extendsClause;
+    if (extendsClause != null) {
+      final s = extendsClause.superclass;
+      superclassName = source.substring(s.offset, s.offset + s.length);
+      superclassSpan = SourceSpan(offset: s.offset, length: s.length);
+    }
+
+    final mixinNames = <String>[];
+    final mixinSpans = <SourceSpan>[];
+    final withClause = declaration.withClause;
+    if (withClause != null) {
+      for (final m in withClause.mixinTypes) {
+        mixinNames.add(source.substring(m.offset, m.offset + m.length));
+        mixinSpans.add(SourceSpan(offset: m.offset, length: m.length));
+      }
+    }
+
+    final interfaceNames = <String>[];
+    final interfaceSpans = <SourceSpan>[];
+    final implementsClause = declaration.implementsClause;
+    if (implementsClause != null) {
+      for (final i in implementsClause.interfaces) {
+        interfaceNames.add(source.substring(i.offset, i.offset + i.length));
+        interfaceSpans.add(SourceSpan(offset: i.offset, length: i.length));
+      }
+    }
+
     // analyzer 13: `ClassDeclaration.name` was replaced by
     // `namePart` (a `ClassNamePart`), whose `typeName` is the actual
     // class-name token.
@@ -94,6 +124,12 @@ ClassStructureModel parseClassStructure(String source) {
         bodySpan: bodySpan,
         members: members,
         annotations: ann.captureAnnotations(declaration.metadata, source),
+        superclassName: superclassName,
+        superclassSpan: superclassSpan,
+        mixinNames: mixinNames,
+        mixinSpans: mixinSpans,
+        interfaceNames: interfaceNames,
+        interfaceSpans: interfaceSpans,
       ),
       diagnostics: diagnostics,
     );

@@ -298,3 +298,110 @@ String? _stripQuotes(String source) {
   }
   return null;
 }
+
+/// A Drift table class view.
+///
+/// Detection signal: class `extends Table` (the M10.1c `superclassName`
+/// capture). Optionally check for `@DataClassName(...)` /
+/// `@TableIndex(...)` annotations for richer metadata.
+///
+/// Columns are getters whose return type is one of the recognized
+/// Drift column types: `IntColumn`, `TextColumn`, `BoolColumn`,
+/// `RealColumn`, `BlobColumn`, `DateTimeColumn`. The implementation
+/// body (e.g. `integer().autoIncrement()()`) is captured verbatim as
+/// raw source — the kernel doesn't currently model the cascade.
+///
+/// Stretch: in a future milestone, parse the cascade to surface
+/// individual modifiers (autoIncrement, named, withDefault, nullable)
+/// as structured. For M10.1c the body is opaque.
+class DriftTableView {
+  const DriftTableView._({
+    required this.classNode,
+    required this.columns,
+  });
+
+  /// Returns a `DriftTableView` over [model] if it looks like a Drift
+  /// table, or null otherwise.
+  ///
+  /// Recognition rule: class has `extends Table` (case-sensitive).
+  /// This is a name-based match — won't catch tables that extend a
+  /// custom intermediate base class. Callers with such projects
+  /// should subclass or extend recognition manually.
+  static DriftTableView? from(ClassStructureModel model) {
+    final cls = model.root;
+    if (cls.superclassName != 'Table') return null;
+
+    final columns = <DriftColumn>[];
+    for (final member in cls.members) {
+      if (member is! ClassMethodNode) continue;
+      if (!member.isGetter) continue;
+      final returnType = member.returnType;
+      if (returnType == null) continue;
+      final columnType = _columnTypeOf(returnType);
+      if (columnType == null) continue;
+      columns.add(DriftColumn._(member: member, columnType: columnType));
+    }
+
+    return DriftTableView._(
+      classNode: cls,
+      columns: List.unmodifiable(columns),
+    );
+  }
+
+  final ClassStructureNode classNode;
+
+  /// The column getters of the table, in source order.
+  final List<DriftColumn> columns;
+
+  @override
+  String toString() =>
+      'DriftTableView(${classNode.className}, ${columns.length} column(s))';
+}
+
+/// One column in a Drift table — wraps a `ClassMethodNode` (the getter).
+class DriftColumn {
+  const DriftColumn._({required this.member, required this.columnType});
+
+  /// The underlying getter member. Use this for edits.
+  final ClassMethodNode member;
+
+  /// The column type kind, derived from the return type.
+  final DriftColumnType columnType;
+
+  String get name => member.name;
+  SourceSpan get nameSpan => member.nameSpan;
+  SourceSpan? get bodySpan => member.bodySpan;
+
+  @override
+  String toString() => 'DriftColumn($name: ${columnType.name})';
+}
+
+/// The supported Drift column types — corresponds to the return type
+/// of the column getter (`IntColumn`, `TextColumn`, etc.).
+enum DriftColumnType {
+  intColumn,
+  textColumn,
+  boolColumn,
+  realColumn,
+  blobColumn,
+  dateTimeColumn,
+}
+
+DriftColumnType? _columnTypeOf(String returnType) {
+  switch (returnType) {
+    case 'IntColumn':
+      return DriftColumnType.intColumn;
+    case 'TextColumn':
+      return DriftColumnType.textColumn;
+    case 'BoolColumn':
+      return DriftColumnType.boolColumn;
+    case 'RealColumn':
+      return DriftColumnType.realColumn;
+    case 'BlobColumn':
+      return DriftColumnType.blobColumn;
+    case 'DateTimeColumn':
+      return DriftColumnType.dateTimeColumn;
+    default:
+      return null;
+  }
+}
