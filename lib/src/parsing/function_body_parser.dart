@@ -1688,6 +1688,173 @@ ExpressionNode _convertExpression(Expression expr, String source) {
     );
   }
 
+  if (expr is ListLiteral) {
+    final typeArgs = expr.typeArguments;
+    final innerStart = expr.leftBracket.offset + expr.leftBracket.length;
+    final innerEnd = expr.rightBracket.offset;
+    return ListLiteralExpressionNode(
+      constKeywordSpan: expr.constKeyword == null
+          ? null
+          : SourceSpan(
+              offset: expr.constKeyword!.offset,
+              length: expr.constKeyword!.length,
+            ),
+      typeArgumentsSource: typeArgs == null
+          ? null
+          : source.substring(
+              typeArgs.offset,
+              typeArgs.offset + typeArgs.length,
+            ),
+      typeArgumentsSpan: typeArgs == null
+          ? null
+          : SourceSpan(offset: typeArgs.offset, length: typeArgs.length),
+      leftBracketSpan: SourceSpan(
+        offset: expr.leftBracket.offset,
+        length: expr.leftBracket.length,
+      ),
+      elementsSource: source.substring(innerStart, innerEnd),
+      elementsSpan: SourceSpan(
+        offset: innerStart,
+        length: innerEnd - innerStart,
+      ),
+      rightBracketSpan: SourceSpan(
+        offset: expr.rightBracket.offset,
+        length: expr.rightBracket.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is SetOrMapLiteral) {
+    final typeArgs = expr.typeArguments;
+    final innerStart = expr.leftBracket.offset + expr.leftBracket.length;
+    final innerEnd = expr.rightBracket.offset;
+    return SetOrMapLiteralExpressionNode(
+      constKeywordSpan: expr.constKeyword == null
+          ? null
+          : SourceSpan(
+              offset: expr.constKeyword!.offset,
+              length: expr.constKeyword!.length,
+            ),
+      typeArgumentsSource: typeArgs == null
+          ? null
+          : source.substring(
+              typeArgs.offset,
+              typeArgs.offset + typeArgs.length,
+            ),
+      typeArgumentsSpan: typeArgs == null
+          ? null
+          : SourceSpan(offset: typeArgs.offset, length: typeArgs.length),
+      leftBracketSpan: SourceSpan(
+        offset: expr.leftBracket.offset,
+        length: expr.leftBracket.length,
+      ),
+      elementsSource: source.substring(innerStart, innerEnd),
+      elementsSpan: SourceSpan(
+        offset: innerStart,
+        length: innerEnd - innerStart,
+      ),
+      rightBracketSpan: SourceSpan(
+        offset: expr.rightBracket.offset,
+        length: expr.rightBracket.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is RecordLiteral) {
+    final innerStart =
+        expr.leftParenthesis.offset + expr.leftParenthesis.length;
+    final innerEnd = expr.rightParenthesis.offset;
+    return RecordLiteralExpressionNode(
+      constKeywordSpan: expr.constKeyword == null
+          ? null
+          : SourceSpan(
+              offset: expr.constKeyword!.offset,
+              length: expr.constKeyword!.length,
+            ),
+      leftParenSpan: SourceSpan(
+        offset: expr.leftParenthesis.offset,
+        length: expr.leftParenthesis.length,
+      ),
+      fieldsSource: source.substring(innerStart, innerEnd),
+      fieldsSpan: SourceSpan(
+        offset: innerStart,
+        length: innerEnd - innerStart,
+      ),
+      rightParenSpan: SourceSpan(
+        offset: expr.rightParenthesis.offset,
+        length: expr.rightParenthesis.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is FunctionExpression) {
+    final typeParams = expr.typeParameters;
+    final params = expr.parameters;
+    final body = expr.body;
+    final bodyOffset = body.offset;
+    final bodyLength = body.length;
+    return FunctionExpressionNode(
+      typeParametersSource: typeParams == null
+          ? null
+          : source.substring(
+              typeParams.offset,
+              typeParams.offset + typeParams.length,
+            ),
+      typeParametersSpan: typeParams == null
+          ? null
+          : SourceSpan(
+              offset: typeParams.offset,
+              length: typeParams.length,
+            ),
+      parametersSource: params == null
+          ? ''
+          : source.substring(params.offset, params.offset + params.length),
+      parametersSpan: params == null
+          ? SourceSpan(offset: expr.offset, length: 0)
+          : SourceSpan(offset: params.offset, length: params.length),
+      asyncKeywordSpan: body.keyword == null
+          ? null
+          : SourceSpan(
+              offset: body.keyword!.offset,
+              length: body.keyword!.length,
+            ),
+      starSpan: body.star == null
+          ? null
+          : SourceSpan(
+              offset: body.star!.offset,
+              length: body.star!.length,
+            ),
+      bodyKind: body is ExpressionFunctionBody
+          ? FunctionExpressionBodyKind.arrow
+          : FunctionExpressionBodyKind.block,
+      bodySource: source.substring(bodyOffset, bodyOffset + bodyLength),
+      bodySpan: SourceSpan(offset: bodyOffset, length: bodyLength),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is CascadeExpression) {
+    final target = expr.target;
+    final sectionSources = <String>[];
+    final sectionSpans = <SourceSpan>[];
+    for (final section in expr.cascadeSections) {
+      sectionSources.add(
+        source.substring(section.offset, section.offset + section.length),
+      );
+      sectionSpans
+          .add(SourceSpan(offset: section.offset, length: section.length));
+    }
+    return CascadeExpressionNode(
+      target: _convertExpression(target, source),
+      sectionSources: sectionSources,
+      sectionSpans: sectionSpans,
+      sourceSpan: span,
+    );
+  }
+
   return OpaqueExpressionNode(sourceText: raw, sourceSpan: span);
 }
 

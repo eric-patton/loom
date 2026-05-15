@@ -1126,6 +1126,84 @@ class FunctionBodyEditPlanner {
     );
   }
 
+  // ----------------------- Collection + function expr ops (M8.5) -
+
+  /// Replaces the elements of a `ListLiteralExpressionNode` — e.g.
+  /// `[1, 2]` → `[3, 4, 5]`. The new source should NOT include the
+  /// surrounding brackets (they're preserved).
+  static SourceEdit changeListLiteralElements({
+    required ListLiteralExpressionNode expression,
+    required String newElementsSource,
+  }) {
+    return SourceEdit(
+      offset: expression.elementsSpan.offset,
+      length: expression.elementsSpan.length,
+      replacement: newElementsSource,
+    );
+  }
+
+  /// Replaces the elements of a `SetOrMapLiteralExpressionNode`.
+  static SourceEdit changeSetOrMapLiteralElements({
+    required SetOrMapLiteralExpressionNode expression,
+    required String newElementsSource,
+  }) {
+    return SourceEdit(
+      offset: expression.elementsSpan.offset,
+      length: expression.elementsSpan.length,
+      replacement: newElementsSource,
+    );
+  }
+
+  /// Replaces the fields of a `RecordLiteralExpressionNode` — e.g.
+  /// `(1, 2)` → `(3, 4)`.
+  static SourceEdit changeRecordLiteralFields({
+    required RecordLiteralExpressionNode expression,
+    required String newFieldsSource,
+  }) {
+    return SourceEdit(
+      offset: expression.fieldsSpan.offset,
+      length: expression.fieldsSpan.length,
+      replacement: newFieldsSource,
+    );
+  }
+
+  /// Replaces the body of a `FunctionExpressionNode` — e.g. swap an
+  /// arrow body for a block, or change `=> x + 1` to `=> x * 2`.
+  /// The new source must include the body's delimiter (the `=>`
+  /// arrow for arrow forms or the `{ ... }` braces for block forms).
+  static SourceEdit changeFunctionExpressionBody({
+    required FunctionExpressionNode expression,
+    required String newBodySource,
+  }) {
+    return SourceEdit(
+      offset: expression.bodySpan.offset,
+      length: expression.bodySpan.length,
+      replacement: newBodySource,
+    );
+  }
+
+  /// Replaces a single cascade section. `sectionIndex` selects which
+  /// `..section` to rewrite. The new source MUST include the leading
+  /// `..` (or `?..` for null-aware).
+  static SourceEdit replaceCascadeSection({
+    required CascadeExpressionNode expression,
+    required int sectionIndex,
+    required String newSectionSource,
+  }) {
+    if (sectionIndex < 0 || sectionIndex >= expression.sectionSpans.length) {
+      throw ArgumentError(
+        'sectionIndex $sectionIndex out of range '
+        '[0, ${expression.sectionSpans.length})',
+      );
+    }
+    final span = expression.sectionSpans[sectionIndex];
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newSectionSource,
+    );
+  }
+
   // ----------------------- Yield/break/continue ops (M8.1) -------
 
   /// Replaces the expression of a `yield` or `yield*` statement with

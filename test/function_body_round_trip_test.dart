@@ -1646,6 +1646,97 @@ int f(int x) {
     });
   });
 
+  group('M8.5 — collection + function + cascade edits', () {
+    test('idempotence on function_body_with_collections_and_functions.dart',
+        () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('changeListLiteralElements: [1, 2, 3] -> [10, 20, 30]', () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final ll =
+          v.variables.first.initializerExpression! as ListLiteralExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeListLiteralElements(
+        expression: ll,
+        newElementsSource: '10, 20, 30',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('[10, 20, 30]'));
+    });
+
+    test('changeSetOrMapLiteralElements', () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[3] as VariableDeclarationStatementNode;
+      final m = v.variables.first.initializerExpression!
+          as SetOrMapLiteralExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeSetOrMapLiteralElements(
+        expression: m,
+        newElementsSource: "'x': 99",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains("{'x': 99}"));
+    });
+
+    test('changeRecordLiteralFields', () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final r = v.variables.first.initializerExpression!
+          as RecordLiteralExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeRecordLiteralFields(
+        expression: r,
+        newFieldsSource: '42, y: true',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('(42, y: true)'));
+    });
+
+    test('changeFunctionExpressionBody: arrow -> arrow', () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[5] as VariableDeclarationStatementNode;
+      final fe =
+          v.variables.first.initializerExpression! as FunctionExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeFunctionExpressionBody(
+        expression: fe,
+        newBodySource: '=> x * 10',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('(int x) => x * 10'));
+    });
+
+    test('replaceCascadeSection rewrites one section', () {
+      final source =
+          _loadFixture('function_body_with_collections_and_functions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[7] as VariableDeclarationStatementNode;
+      final c =
+          v.variables.first.initializerExpression! as CascadeExpressionNode;
+      expect(c.sectionSources, hasLength(3));
+
+      final edit = FunctionBodyEditPlanner.replaceCascadeSection(
+        expression: c,
+        sectionIndex: 1,
+        newSectionSource: "..write('!')",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains("..write('!')"));
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =

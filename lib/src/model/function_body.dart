@@ -2284,6 +2284,182 @@ class IsExpressionNode extends ExpressionNode {
       'IsExpressionNode($expression is${isNegated ? '!' : ''} $typeSource)';
 }
 
+/// A list literal — `[1, 2, 3]`, `<int>[1, 2]`, `[if (cond) 1]`.
+/// The interior elements are captured as raw source (modeling
+/// collection elements — spreads, if-elements, for-elements — is
+/// deferred).
+class ListLiteralExpressionNode extends ExpressionNode {
+  const ListLiteralExpressionNode({
+    required this.constKeywordSpan,
+    required this.typeArgumentsSource,
+    required this.typeArgumentsSpan,
+    required this.leftBracketSpan,
+    required this.elementsSource,
+    required this.elementsSpan,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the optional leading `const` keyword.
+  final SourceSpan? constKeywordSpan;
+
+  /// Raw source of the type arguments (e.g. `<int>`), or null.
+  final String? typeArgumentsSource;
+  final SourceSpan? typeArgumentsSpan;
+
+  final SourceSpan leftBracketSpan;
+
+  /// Raw source of the elements between `[` and `]` (empty when the
+  /// list is `[]`). Trailing commas + whitespace are preserved.
+  final String elementsSource;
+  final SourceSpan elementsSpan;
+
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ListLiteralExpressionNode([$elementsSource])';
+}
+
+/// A set or map literal — `{1, 2}` (set), `{'a': 1}` (map), `{}`
+/// (empty map). Distinguishing set from map without type resolution
+/// isn't always possible, so this single node covers both. Callers
+/// that need to know can look at the elements source for `:` separators.
+class SetOrMapLiteralExpressionNode extends ExpressionNode {
+  const SetOrMapLiteralExpressionNode({
+    required this.constKeywordSpan,
+    required this.typeArgumentsSource,
+    required this.typeArgumentsSpan,
+    required this.leftBracketSpan,
+    required this.elementsSource,
+    required this.elementsSpan,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan? constKeywordSpan;
+  final String? typeArgumentsSource;
+  final SourceSpan? typeArgumentsSpan;
+  final SourceSpan leftBracketSpan;
+  final String elementsSource;
+  final SourceSpan elementsSpan;
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'SetOrMapLiteralExpressionNode({$elementsSource})';
+}
+
+/// A record literal — `(1, 2)`, `(x: 1, y: 2)`, `(1,)` (single-element
+/// with trailing comma to disambiguate from parenthesized expression).
+class RecordLiteralExpressionNode extends ExpressionNode {
+  const RecordLiteralExpressionNode({
+    required this.constKeywordSpan,
+    required this.leftParenSpan,
+    required this.fieldsSource,
+    required this.fieldsSpan,
+    required this.rightParenSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan? constKeywordSpan;
+  final SourceSpan leftParenSpan;
+  final String fieldsSource;
+  final SourceSpan fieldsSpan;
+  final SourceSpan rightParenSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'RecordLiteralExpressionNode(($fieldsSource))';
+}
+
+/// A function expression — `() => x`, `(x) { return x + 1; }`,
+/// `(x) async => f(x)`, `<T>(T x) => x`. Captures parameters
+/// (including type arguments), optional async/sync* keyword,
+/// and the body (arrow or block, opaque source).
+class FunctionExpressionNode extends ExpressionNode {
+  const FunctionExpressionNode({
+    required this.typeParametersSource,
+    required this.typeParametersSpan,
+    required this.parametersSource,
+    required this.parametersSpan,
+    required this.asyncKeywordSpan,
+    required this.starSpan,
+    required this.bodyKind,
+    required this.bodySource,
+    required this.bodySpan,
+    required this.sourceSpan,
+  });
+
+  /// Raw source of generic type parameters (e.g. `<T>`), or null.
+  final String? typeParametersSource;
+  final SourceSpan? typeParametersSpan;
+
+  /// Raw source of the parameter list INCLUDING the parens.
+  final String parametersSource;
+  final SourceSpan parametersSpan;
+
+  /// Span of the `async` / `sync` keyword if present, null otherwise.
+  final SourceSpan? asyncKeywordSpan;
+
+  /// Span of the `*` for `async*` / `sync*`.
+  final SourceSpan? starSpan;
+
+  /// Whether this is an arrow body (`=> expr`) or a block body
+  /// (`{ ... }`).
+  final FunctionExpressionBodyKind bodyKind;
+
+  /// Raw source of the body. For arrow bodies, includes the `=>` and
+  /// trailing expression (without semicolon). For block bodies,
+  /// includes the surrounding `{` and `}`.
+  final String bodySource;
+  final SourceSpan bodySpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'FunctionExpressionNode($parametersSource $bodySource)';
+}
+
+/// Kind of body a `FunctionExpressionNode` carries.
+enum FunctionExpressionBodyKind { arrow, block }
+
+/// A cascade expression — `x..y..z`, `x..y = 1..z()`. Captures the
+/// target plus one or more cascade sections (each starting with `..`).
+class CascadeExpressionNode extends ExpressionNode {
+  CascadeExpressionNode({
+    required this.target,
+    required List<String> sectionSources,
+    required List<SourceSpan> sectionSpans,
+    required this.sourceSpan,
+  })  : sectionSources = List.unmodifiable(sectionSources),
+        sectionSpans = List.unmodifiable(sectionSpans),
+        assert(
+          sectionSources.length == sectionSpans.length,
+          'sectionSources and sectionSpans must have the same length',
+        );
+
+  final ExpressionNode target;
+
+  /// Raw source of each cascade section, INCLUDING the leading `..`
+  /// (or `?..` for null-aware).
+  final List<String> sectionSources;
+  final List<SourceSpan> sectionSpans;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'CascadeExpressionNode($target${sectionSources.join()})';
+}
+
 /// An expression kind not yet modeled. Preserves the raw source.
 /// Future milestones can promote individual kinds.
 class OpaqueExpressionNode extends ExpressionNode {

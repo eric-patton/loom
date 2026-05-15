@@ -1281,7 +1281,7 @@ void print(Object o) {}
       expect(b.operator, equals('=='));
     });
 
-    test('cascade expression falls through to opaque (deferred)', () {
+    test('cascade expression is CascadeExpressionNode (M8.5)', () {
       const source = '''
 void f(StringBuffer sb) {
   sb..write('a')..write('b');
@@ -1289,8 +1289,11 @@ void f(StringBuffer sb) {
 ''';
       final body = parseFunctionBody(source);
       final stmt = body.statements[0] as ExpressionStatementNode;
-      // Cascades aren't modeled in M8.3; falls back to opaque.
-      expect(stmt.expression, isA<OpaqueExpressionNode>());
+      expect(stmt.expression, isA<CascadeExpressionNode>());
+      final c = stmt.expression as CascadeExpressionNode;
+      expect(c.sectionSources, hasLength(2));
+      expect(c.sectionSources[0], equals("..write('a')"));
+      expect(c.sectionSources[1], equals("..write('b')"));
     });
 
     test('nested binary expression recurses through operand', () {
@@ -1448,8 +1451,8 @@ Stream<int> walk() async* {
       final y0 = body.statements[0] as YieldStatementNode;
       expect(y0.yieldedExpression, isA<LiteralExpressionNode>());
       final y1 = body.statements[1] as YieldStatementNode;
-      // yield* with a list literal — list literal isn't modeled, opaque.
-      expect(y1.yieldedExpression, isA<OpaqueExpressionNode>());
+      // yield* with a list literal — list is modeled in M8.5.
+      expect(y1.yieldedExpression, isA<ListLiteralExpressionNode>());
     });
   });
 
@@ -1538,6 +1541,90 @@ void use(Object o) {}
       final ic = init as InstanceCreationExpressionNode;
       expect(ic.keywordSpan, isNotNull);
       expect(ic.constructorNameSource, equals('Box'));
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_collections_and_functions.dart '
+      '(M8.5)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source = File(
+        'test/fixtures/function_body_with_collections_and_functions.dart',
+      ).readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('[1, 2, 3] is ListLiteralExpressionNode', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<ListLiteralExpressionNode>());
+      final ll = init as ListLiteralExpressionNode;
+      expect(ll.elementsSource, equals('1, 2, 3'));
+      expect(ll.typeArgumentsSource, isNull);
+    });
+
+    test('<int>[10, 20] captures type arguments', () {
+      final v = body.statements[1] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      final ll = init as ListLiteralExpressionNode;
+      expect(ll.typeArgumentsSource, equals('<int>'));
+      expect(ll.elementsSource, equals('10, 20'));
+    });
+
+    test('{1, 2, 3} is SetOrMapLiteralExpressionNode', () {
+      final v = body.statements[2] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<SetOrMapLiteralExpressionNode>());
+      final s = init as SetOrMapLiteralExpressionNode;
+      expect(s.elementsSource, equals('1, 2, 3'));
+    });
+
+    test("{'a': 1, 'b': 2} is also SetOrMapLiteralExpressionNode", () {
+      final v = body.statements[3] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<SetOrMapLiteralExpressionNode>());
+      final m = init as SetOrMapLiteralExpressionNode;
+      expect(m.elementsSource, equals("'a': 1, 'b': 2"));
+    });
+
+    test("(1, 'two', x: 3) is RecordLiteralExpressionNode", () {
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<RecordLiteralExpressionNode>());
+      final r = init as RecordLiteralExpressionNode;
+      expect(r.fieldsSource, equals("1, 'two', x: 3"));
+    });
+
+    test('(int x) => x + 1 is FunctionExpressionNode with arrow body', () {
+      final v = body.statements[5] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<FunctionExpressionNode>());
+      final fe = init as FunctionExpressionNode;
+      expect(fe.parametersSource, equals('(int x)'));
+      expect(fe.bodyKind, equals(FunctionExpressionBodyKind.arrow));
+      expect(fe.bodySource, equals('=> x + 1'));
+    });
+
+    test('(int x) { return x * 2; } is FunctionExpressionNode with block', () {
+      final v = body.statements[6] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      final fe = init as FunctionExpressionNode;
+      expect(fe.bodyKind, equals(FunctionExpressionBodyKind.block));
+      expect(fe.bodySource, startsWith('{'));
+      expect(fe.bodySource, endsWith('}'));
+    });
+
+    test('cascade with 3 sections captures all', () {
+      final v = body.statements[7] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<CascadeExpressionNode>());
+      final c = init as CascadeExpressionNode;
+      expect(c.sectionSources, hasLength(3));
+      // Target is the StringBuffer() instance creation.
+      // Bare StringBuffer() parses as MethodInvocation under parseString.
+      expect(c.target, isA<MethodInvocationExpressionNode>());
     });
   });
 
