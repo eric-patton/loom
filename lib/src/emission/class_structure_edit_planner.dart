@@ -1,5 +1,16 @@
 import '../model/class_structure.dart';
+import '../model/source_span.dart';
 import 'source_edit.dart';
+
+/// Which logical section of a parameter list to operate on.
+///
+/// Dart parameter lists have up to three sections, in this order:
+///   * required positional — bare params before any brackets
+///   * optional positional — params in `[ ... ]` brackets (mutually
+///     exclusive with named in any given list)
+///   * named — params in `{ ... }` braces (mutually exclusive with
+///     optional positional)
+enum ParameterSection { positionalRequired, positionalOptional, named }
 
 /// Plans `SourceEdit`s for individual class-structure changes.
 ///
@@ -212,6 +223,137 @@ class ClassStructureEditPlanner {
     );
   }
 
+  // ----------------------- Parameter add/remove (M7.2.1) -----------
+
+  /// Appends a new parameter at the end of the requested section of
+  /// `parent`'s parameter list. `parent` must be a `ClassMethodNode` or
+  /// `ClassConstructorNode` with a parameter list (throws for getters).
+  ///
+  /// Requires the section to already contain at least one parameter — or,
+  /// for `positionalRequired`, allows the list to be entirely empty or
+  /// to have non-required-positional sections (the new param goes before
+  /// the opening `[` or `{`).
+  ///
+  /// `newParameterSource` is the raw parameter declaration text without
+  /// surrounding separators (e.g., `'required String email'`,
+  /// `'int age = 0'`, `'this.name'`).
+  ///
+  /// Deferred to M7.2.2: appending to an EMPTY `positionalOptional` or
+  /// `named` section (requires inserting `[...]` or `{...}` brackets and
+  /// the preceding `, ` separator).
+  static SourceEdit appendParameter({
+    required ClassMember parent,
+    required String newParameterSource,
+    required ParameterSection section,
+    required String source,
+  }) {
+    final (parameters, paramListSpan) = _unpackParameterList(parent);
+
+    final inSection =
+        parameters.where((p) => _isInSection(p, section)).toList();
+
+    final separator = _detectParamSeparator(parameters, paramListSpan, source);
+
+    if (inSection.isNotEmpty) {
+      // Most common path: insert after the last param in the section.
+      final anchor = inSection.last.sourceSpan.end;
+      return SourceEdit(
+        offset: anchor,
+        length: 0,
+        replacement: '$separator$newParameterSource',
+      );
+    }
+
+    // Section is empty. Only positionalRequired has a working v1
+    // path; the others need section creation.
+    if (section != ParameterSection.positionalRequired) {
+      throw ArgumentError(
+        'Cannot append to empty $section section (requires inserting '
+        'brackets; deferred to M7.2.2). Use raw parametersSpan '
+        'replacement for now if you need to create a new section.',
+      );
+    }
+
+    if (parameters.isEmpty) {
+      // List is `()`. Insert just after the `(`.
+      return SourceEdit(
+        offset: paramListSpan.offset + 1,
+        length: 0,
+        replacement: newParameterSource,
+      );
+    }
+
+    // List has other-section params; positionalRequired section is
+    // empty (e.g., `({named: 1})`). Insert before the section opener
+    // (the `[` or `{`) along with a separator `newParam, `.
+    final firstParam = parameters.first;
+    var probe = firstParam.sourceSpan.offset - 1;
+    while (probe >= 0 && _isWhitespace(source.codeUnitAt(probe))) {
+      probe--;
+    }
+    // probe is now at the `{` or `[` opener (or some unexpected token —
+    // but in well-formed Dart this should always be a section opener).
+    final bracketOffset = probe;
+    return SourceEdit(
+      offset: bracketOffset,
+      length: 0,
+      replacement: '$newParameterSource, ',
+    );
+  }
+
+  /// Removes a parameter from its containing list. Handles three cases:
+  ///
+  /// * Non-first param: walks backward through whitespace and one `,`
+  ///   to find the preceding separator; deletes from there through the
+  ///   param's end.
+  /// * First param with a following param/section: walks forward through
+  ///   `,` and whitespace to find the next significant token; deletes
+  ///   from the param's offset to there. Stops at section openers
+  ///   (`[` or `{`) so the section's brackets stay intact.
+  /// * Sole param (or last in a list with no following sections):
+  ///   deletes just the parameter itself; surrounding brackets remain.
+  ///
+  /// If removing the last parameter in a section drains that section
+  /// to empty, the section's brackets (`[]` or `{}`) are LEFT behind.
+  /// Removing empty section brackets is M7.2.2 territory.
+  static SourceEdit removeParameter({
+    required ClassParameterNode parameter,
+    required String source,
+  }) {
+    var start = parameter.sourceSpan.offset;
+    var end = parameter.sourceSpan.end;
+
+    // Try to find a preceding `,` (skipping whitespace).
+    var backProbe = start - 1;
+    while (backProbe >= 0 && _isWhitespace(source.codeUnitAt(backProbe))) {
+      backProbe--;
+    }
+    if (backProbe >= 0 && source.codeUnitAt(backProbe) == 0x2C) {
+      // Preceding `,` found — include it in the deletion.
+      start = backProbe;
+    } else {
+      // First in list (or section, when no other sections precede).
+      // Consume forward separator: one `,` then whitespace, but only up
+      // to the next non-whitespace non-comma character. Stop short of
+      // section openers (`[`/`{`) so the brackets are preserved.
+      var fwdProbe = end;
+      if (fwdProbe < source.length && source.codeUnitAt(fwdProbe) == 0x2C) {
+        fwdProbe++;
+      }
+      while (fwdProbe < source.length &&
+          _isWhitespace(source.codeUnitAt(fwdProbe))) {
+        fwdProbe++;
+      }
+      end = fwdProbe;
+    }
+
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: '',
+    );
+  }
+
   // ----------------------- Generic operations -----------------------
 
   /// Removes any class member entirely, including trailing whitespace
@@ -299,6 +441,90 @@ class ClassStructureEditPlanner {
       replacement: '\n$memberIndent$newMemberSource\n$outerIndent',
     );
   }
+
+  // ----------------------- Internal helpers -----------------------
+
+  /// Pulls `(parameters, parametersSpan)` out of any modeled
+  /// constructor-or-method node. Throws if the node is not a method or
+  /// constructor, or if it's a getter (which has no parameter list).
+  static (List<ClassParameterNode>, SourceSpan) _unpackParameterList(
+    ClassMember parent,
+  ) {
+    SourceSpan? span;
+    List<ClassParameterNode> parameters;
+    switch (parent) {
+      case final ClassMethodNode m:
+        span = m.parametersSpan;
+        parameters = m.parameters;
+      case final ClassConstructorNode c:
+        span = c.parametersSpan;
+        parameters = c.parameters;
+      case ClassFieldNode():
+      case OpaqueClassMember():
+        throw ArgumentError(
+          'Parameter operations require a method or constructor target; '
+          'got ${parent.runtimeType}.',
+        );
+    }
+    if (span == null) {
+      throw ArgumentError(
+        'Target has no parameter list (likely a getter). '
+        'Use a method with parameters or a constructor instead.',
+      );
+    }
+    return (parameters, span);
+  }
+
+  static bool _isInSection(ClassParameterNode p, ParameterSection s) {
+    switch (s) {
+      case ParameterSection.positionalRequired:
+        return p.isPositional && p.isRequired;
+      case ParameterSection.positionalOptional:
+        return p.isPositional && p.isOptional;
+      case ParameterSection.named:
+        return p.isNamed;
+    }
+  }
+
+  /// Looks at the gap between adjacent parameters to figure out what
+  /// separator pattern to use for an insertion. Falls back to `', '` for
+  /// single-line lists or where the heuristic doesn't apply.
+  static String _detectParamSeparator(
+    List<ClassParameterNode> parameters,
+    SourceSpan paramListSpan,
+    String source,
+  ) {
+    if (parameters.length >= 2) {
+      // The first inter-param gap is the most reliable separator pattern.
+      final between = source.substring(
+        parameters[0].sourceSpan.end,
+        parameters[1].sourceSpan.offset,
+      );
+      // Only adopt the natural separator if it doesn't contain commentary;
+      // a `// ...` between params would otherwise get duplicated.
+      if (!between.contains('//') && !between.contains('/*')) {
+        return between;
+      }
+    }
+    if (parameters.length == 1) {
+      // Multi-line single-param list. Infer indent from the param's line.
+      final listText =
+          source.substring(paramListSpan.offset, paramListSpan.end);
+      if (listText.contains('\n')) {
+        final paramOffset = parameters[0].sourceSpan.offset;
+        var lineStart = paramOffset;
+        while (lineStart > 0 && source.codeUnitAt(lineStart - 1) != 0x0A) {
+          lineStart--;
+        }
+        final indent = source.substring(lineStart, paramOffset);
+        return ',\n$indent';
+      }
+    }
+    return ', ';
+  }
+
+  static bool _isWhitespace(int ch) =>
+      ch == 0x20 || ch == 0x09 || ch == 0x0A || ch == 0x0D;
 
   /// Returns the run of horizontal whitespace immediately preceding
   /// `offset` on its line — i.e. the indentation of `offset`'s line.

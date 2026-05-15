@@ -8,7 +8,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.2 — parameter modeling + annotation capture
+**Active milestone:** M7.2.1 — parameter add/remove operations
 **Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
@@ -33,14 +33,22 @@ Parameter add/remove are deliberately deferred — they require placement logic 
 
 CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
 
+**M7.2.1 surface added (just now):**
+- `ParameterSection` enum: `positionalRequired` | `positionalOptional` | `named`.
+- `appendParameter(parent, newParameterSource, section, source)` — appends to existing non-empty section. For `positionalRequired`, also handles empty list `()` and empty section with following named/optional brackets. Throws on empty `named` / `positionalOptional` (section creation deferred to M7.2.2).
+- `removeParameter(parameter, source)` — handles intra-section deletion. Walks backward for preceding `,` if not first; forward through `,` + whitespace if first. Stops at section openers (`[`/`{`) so brackets stay intact. Empty section's brackets are LEFT behind (removing them is M7.2.2).
+
+Separator detection looks at the gap between adjacent params; falls back to `', '` single-line or `,\n<indent>` multi-line. Handles trailing-comma styles correctly.
+
 **Still deferred:**
-- Parameter add/remove (placement logic for `[]` vs `{}` sections — M7.2.1)
-- Annotation editing (add / remove / replace)
-- Qualifier editing (final/var/late/static/const/factory/async — these are tokens to insert/remove)
-- Renaming named constructors
-- Multi-variable field declarations beyond best-effort
+- Section creation: appending to empty `named` / `positionalOptional` requires inserting `{...}` / `[...]` brackets + `, ` separator. M7.2.2 if real fixtures demand.
+- Removing empty section brackets after a section drains to empty.
+- Annotation editing (add / remove / replace) — M7.3 next.
+- Qualifier editing (final/var/late/static/const/factory/async).
+- Renaming named constructors.
+- Multi-variable field declarations beyond best-effort.
 **Blockers:** none
-**Next action:** **Eric review gate for M6 series + M7.0 + M7.1 + M7.2.** Then M7.3 (annotation editing or qualifier editing) or M8 (function-body / statement modeling — the next genuinely new shape).
+**Next action:** M7.3 — annotation edit operations (next commit in this session). Then Eric review gate for M6 series + M7.0 + M7.1 + M7.2 + M7.2.1 + M7.3.
 
 ---
 
@@ -209,7 +217,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M7.0** (shipped 2026-05-14) | Class-structure modeling — **fields only**, first slice. Parse a class's field declarations; methods + constructors stay opaque. Separate sealed hierarchy from constructor-tree `ModelNode` (different shape: flat list of members vs. tree of expressions). Five edit operations: rename / changeType / changeInitializer / remove / addField. ~600 LOC new. | OutSystems-style entity modeling for Drift tables, Freezed unions, json_serializable classes — most of those are field-shaped. |
 | **M7.1** (shipped 2026-05-14) | Method signatures + constructors. Sealed `ClassMember = ClassFieldNode | ClassMethodNode | ClassConstructorNode | OpaqueClassMember`. Edit ops added: renameMethod, changeMethodReturnType, removeMember (polymorphic), addMember (polymorphic). Backward-compat `fields` / `opaqueMemberSpans` getters keep M7.0 callers working. | Methods + constructors are the rest of "class shape" — together with M7.0's fields, this covers virtually all real-world class members. |
 | **M7.2** (shipped 2026-05-14) | Parameter modeling + annotation capture. `ClassParameterNode` (name / type / default / kind flags) replaces M7.1's `parametersSource` blob. `AnnotationNode` attached to members, parameters, and `ClassStructureNode` itself. Edit ops added: renameParameter, changeParameterType, changeParameterDefault. New fixture `class_freezed_like.dart` exercises the Freezed/json_serializable shape. | Unlocks Freezed-style entity editing where "fields" are actually factory-constructor parameters. Captures the annotations that codegen pipelines key off. |
-| M7.3+ | Parameter add/remove (positional vs `[]` vs `{}` placement, comma handling), annotation editing, qualifier editing (final/var/late/static/const/factory/async), renaming named constructors, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
+| **M7.2.1** (shipped 2026-05-14) | Parameter add/remove. `appendParameter` to existing section (creates within empty `positionalRequired` if other sections exist; throws on empty `named`/`positionalOptional` for now). `removeParameter` handles intra-section deletion with separator cleanup, leaves empty brackets behind. | The "add a field" / "remove a field" operations for Freezed-style entities where fields-as-params is the modeling layer. |
+| M7.3+ | Annotation editing, qualifier editing, section creation (M7.2.2), renaming named constructors, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -293,6 +302,42 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.2.1 — parameter add/remove
+**Worked on:** Completed the parameter editing surface started in M7.2. Add and remove operations handle the cases the M7.2 commit deferred: section-aware insertion at end of an existing section, deletion with separator + (some) bracket awareness.
+
+**`ParameterSection` enum:** `positionalRequired` | `positionalOptional` | `named`. Maps to the three logical sections of a Dart parameter list. The optional-positional (`[...]`) and named (`{...}`) sections are mutually exclusive in any given list, but both can coexist with required positional.
+
+**`appendParameter(parent, newParameterSource, section, source):`**
+- Common path: section is non-empty. Find the last param in that section, insert after it with detected separator.
+- `positionalRequired` is empty AND list is `()`: insert just after `(`.
+- `positionalRequired` is empty AND list has other sections (`({named: 1})`): insert `newParam, ` BEFORE the `{` / `[` opener.
+- `named` or `positionalOptional` is empty: throws. Section creation requires inserting `{...}` / `[...]` brackets + the `, ` separator and is deferred to M7.2.2.
+
+Separator detection looks at the gap between two adjacent params if available, else heuristically picks `,\n<indent>` for multi-line or `, ` for single-line lists. Skips natural-separator adoption if the gap contains `//` or `/*` (would duplicate comments on every insert).
+
+**`removeParameter(parameter, source):`** generic intra-section deletion.
+- Back-walks for a preceding `,` (through whitespace): if found, deletion includes that `, ...` separator → deletes preceding-separator + param.
+- If no preceding `,` (param is first overall, OR first in a section with no required-positional precursors): forward-walks through `,` + whitespace from `param.end`. Stops at section openers (`[`/`{`) so the brackets stay intact.
+- Empty-section bracket cleanup is deferred (M7.2.2).
+
+**Edge cases verified by tests:**
+- Middle of multi-line named section: clean removal.
+- First named in multi-line list (with no positionals): just deletes the param + following `,` and whitespace, leaving the `{}` open at the start of the named section.
+- Sole parameter: just deletes the param itself; surrounding parens / brackets remain.
+- Append throws on getter (no parameter list) — properly rejected.
+- Append throws on empty `named` section — clear error message about deferral.
+
+**Validation:**
+- 218 tests green (was 210, +8 new on parameter add/remove).
+- `dart analyze` and `dart format` clean.
+- Scout against `flutter/packages/go_router` (117 files): unchanged — 0 crashes, 0 idempotence failures, 78 class clean parses. M7.2.1 is edit-only; doesn't change which files parse.
+
+**Learned:**
+- **The "first param in list / first in section but not list" distinction is naturally handled by walking source for `,`.** I'd initially worried about needing a section-position concept; the back-walk through whitespace + `,` does the right thing without needing section state.
+- **Bracket-cleanup is the genuinely hard part.** Removing `{a}` to get `()` requires removing the `{}` AND the preceding `, ` separator. Removing `[a]` similarly. The current M7.2.1 implementation deliberately leaves empty `{}` / `[]` behind — they re-parse fine, just look ugly. M7.2.2 can clean up.
+
+**Next:** M7.3 (annotation editing) — next commit in this session.
 
 ### [2026-05-14] M7.2 — parameter modeling + annotation capture
 **Worked on:** Deepened class-structure further by modeling individual parameters within method/constructor parameter lists (replacing M7.1's `parametersSource: String` blob) and by capturing annotations on every modeled scope — class, member, parameter.

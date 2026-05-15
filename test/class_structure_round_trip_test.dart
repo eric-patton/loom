@@ -315,6 +315,183 @@ void main() {
     });
   });
 
+  group('appendParameter (M7.2.1)', () {
+    test('appends a new named parameter to Person Freezed ctor', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+
+      final edit = ClassStructureEditPlanner.appendParameter(
+        parent: ctor,
+        newParameterSource: 'this.email = const ""',
+        section: ParameterSection.named,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final names = reparsedCtor.parameters.map((p) => p.name).toList();
+      expect(names, contains('email'));
+      // Existing params still present + in source order.
+      expect(names, equals(['firstName', 'lastName', 'age', 'email']));
+    });
+
+    test('appends a required positional to Money operator+', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+
+      final edit = ClassStructureEditPlanner.appendParameter(
+        parent: op,
+        newParameterSource: 'String label',
+        section: ParameterSection.positionalRequired,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedOp = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      expect(reparsedOp.parameters.map((p) => p.name).toList(),
+          equals(['other', 'label']));
+    });
+
+    test('appendParameter throws on getter (no parameter list)', () {
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final getter = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isGetter);
+
+      expect(
+        () => ClassStructureEditPlanner.appendParameter(
+          parent: getter,
+          newParameterSource: 'String x',
+          section: ParameterSection.positionalRequired,
+          source: source,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('appendParameter throws when section is empty (non-positional)', () {
+      // class_with_constructors.dart's operator+ has no named section.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+
+      expect(
+        () => ClassStructureEditPlanner.appendParameter(
+          parent: op,
+          newParameterSource: 'required String x',
+          section: ParameterSection.named,
+          source: source,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+
+  group('removeParameter (M7.2.1)', () {
+    test('removes a middle named parameter', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final lastName = ctor.parameters.firstWhere((p) => p.name == 'lastName');
+
+      final edit = ClassStructureEditPlanner.removeParameter(
+        parameter: lastName,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(reparsedCtor.parameters.map((p) => p.name).toList(),
+          equals(['firstName', 'age']));
+    });
+
+    test('removes the first named parameter', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final firstName =
+          ctor.parameters.firstWhere((p) => p.name == 'firstName');
+
+      final edit = ClassStructureEditPlanner.removeParameter(
+        parameter: firstName,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(reparsedCtor.parameters.map((p) => p.name).toList(),
+          equals(['lastName', 'age']));
+    });
+
+    test('removes the last named parameter', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final age = ctor.parameters.firstWhere((p) => p.name == 'age');
+
+      final edit = ClassStructureEditPlanner.removeParameter(
+        parameter: age,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(reparsedCtor.parameters.map((p) => p.name).toList(),
+          equals(['firstName', 'lastName']));
+    });
+
+    test('removes the sole parameter of operator+', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      final other = op.parameters.single;
+
+      final edit = ClassStructureEditPlanner.removeParameter(
+        parameter: other,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedOp = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      expect(reparsedOp.parameters, isEmpty);
+    });
+  });
+
   group('addField', () {
     test('appends new field to a class with existing fields', () {
       final source = _loadFixture('class_simple.dart');
