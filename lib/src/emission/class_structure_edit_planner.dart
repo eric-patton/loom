@@ -53,20 +53,27 @@ enum ParameterSection { positionalRequired, positionalOptional, named }
 ///   * `addMemberAnnotation` — prepend annotation before member
 ///   * `addParameterAnnotation` — inline annotation before parameter
 ///   * `removeAnnotation` — delete annotation + adjacent whitespace/newline
-///   * `replaceAnnotationArguments` — replace `(...)` portion (requires
-///     existing args list)
+///   * `replaceAnnotationArguments` — replace `(...)` portion
 ///
-/// Deliberately omitted (incremental — ship in M7.2.2 / M7.4+ as
-/// fixtures demand):
-///   * Section creation (appending to empty `named`/`positionalOptional`)
-///   * Empty-section bracket cleanup after `removeParameter` drains a section
-///   * Edits to parameter qualifiers (final / const / required)
+/// M7.4 surface additions (parameter section creation, bracket cleanup,
+/// bare-annotation args, constructor renaming):
+///   * `appendParameter` now creates empty `named` / `positionalOptional`
+///     sections by inserting `{...}` / `[...]` brackets when needed.
+///   * `removeParameter(parameter, source, parent)` — when `parent` is
+///     passed and the removed param is the only one in its section, the
+///     deletion extends to include the section brackets + preceding `, `.
+///   * `replaceAnnotationArguments` now inserts new arguments when the
+///     annotation is bare (no existing parens).
+///   * `renameNamedConstructor` — replace the `.named` segment.
+///
+/// Deliberately deferred to M7.5+ (smaller surface remaining):
+///   * Edits to qualifiers (final/var/late/static/const/factory/async) —
+///     requires model surgery to capture keyword spans
 ///   * Adding a type annotation to an untyped field or parameter
 ///   * Adding an initializer to a bare field
 ///   * Adding a default to a parameter without one
-///   * Adding `(...)` to a bare annotation
-///   * Renaming a constructor (named ctor segment editing)
-///   * Edits to qualifiers (final/var/late/static/const/factory)
+///   * Converting an unnamed constructor into a named one
+///   * Multi-variable field declarations beyond best-effort
 ///   * Reordering members
 class ClassStructureEditPlanner {
   ClassStructureEditPlanner._();
@@ -276,45 +283,72 @@ class ClassStructureEditPlanner {
       );
     }
 
-    // Section is empty. Only positionalRequired has a working v1
-    // path; the others need section creation.
-    if (section != ParameterSection.positionalRequired) {
-      throw ArgumentError(
-        'Cannot append to empty $section section (requires inserting '
-        'brackets; deferred to M7.2.2). Use raw parametersSpan '
-        'replacement for now if you need to create a new section.',
+    // Section is empty. Three cases:
+    //   * positionalRequired: insert before any existing `{}` / `[]`
+    //     section, or just after `(` when the list is `()`.
+    //   * named: section creation — wrap newParam in `{}` brackets.
+    //   * positionalOptional: section creation — wrap in `[]` brackets.
+    if (section == ParameterSection.positionalRequired) {
+      if (parameters.isEmpty) {
+        // List is `()`. Insert just after the `(`.
+        return SourceEdit(
+          offset: paramListSpan.offset + 1,
+          length: 0,
+          replacement: newParameterSource,
+        );
+      }
+      // List has other-section params; positionalRequired section is
+      // empty (e.g., `({named: 1})`). Insert before the section opener
+      // (the `[` or `{`) along with a separator `newParam, `.
+      final firstParam = parameters.first;
+      var probe = firstParam.sourceSpan.offset - 1;
+      while (probe >= 0 && _isWhitespace(source.codeUnitAt(probe))) {
+        probe--;
+      }
+      // probe is now at the `{` or `[` opener (or some unexpected token —
+      // but in well-formed Dart this should always be a section opener).
+      final bracketOffset = probe;
+      return SourceEdit(
+        offset: bracketOffset,
+        length: 0,
+        replacement: '$newParameterSource, ',
       );
     }
 
+    // M7.4: section creation for `named` / `positionalOptional`.
+    final (open, close) =
+        section == ParameterSection.named ? ('{', '}') : ('[', ']');
+    final bracketed = '$open$newParameterSource$close';
+
     if (parameters.isEmpty) {
-      // List is `()`. Insert just after the `(`.
+      // `()` becomes `({newParam})` / `([newParam])`. Insert just after `(`.
       return SourceEdit(
         offset: paramListSpan.offset + 1,
         length: 0,
-        replacement: newParameterSource,
+        replacement: bracketed,
       );
     }
 
-    // List has other-section params; positionalRequired section is
-    // empty (e.g., `({named: 1})`). Insert before the section opener
-    // (the `[` or `{`) along with a separator `newParam, `.
-    final firstParam = parameters.first;
-    var probe = firstParam.sourceSpan.offset - 1;
-    while (probe >= 0 && _isWhitespace(source.codeUnitAt(probe))) {
-      probe--;
-    }
-    // probe is now at the `{` or `[` opener (or some unexpected token —
-    // but in well-formed Dart this should always be a section opener).
-    final bracketOffset = probe;
+    // List has positional params; append `, {newParam}` / `, [newParam]`
+    // after the last param.
+    final lastParam = parameters.last;
     return SourceEdit(
-      offset: bracketOffset,
+      offset: lastParam.sourceSpan.end,
       length: 0,
-      replacement: '$newParameterSource, ',
+      replacement: ', $bracketed',
     );
   }
 
-  /// Removes a parameter from its containing list. Handles three cases:
+  /// Removes a parameter from its containing list.
   ///
+  /// When `parent` is supplied, the planner also cleans up empty section
+  /// brackets: if the removed parameter is the only one in its named or
+  /// optional-positional section, the deletion extends to include the
+  /// `{...}` / `[...]` brackets and the preceding `, ` separator.
+  /// Without `parent`, the deletion is intra-section only and leaves
+  /// empty brackets behind (M7.2.1 behavior).
+  ///
+  /// Three intra-section cases:
   /// * Non-first param: walks backward through whitespace and one `,`
   ///   to find the preceding separator; deletes from there through the
   ///   param's end.
@@ -324,14 +358,25 @@ class ClassStructureEditPlanner {
   ///   (`[` or `{`) so the section's brackets stay intact.
   /// * Sole param (or last in a list with no following sections):
   ///   deletes just the parameter itself; surrounding brackets remain.
-  ///
-  /// If removing the last parameter in a section drains that section
-  /// to empty, the section's brackets (`[]` or `{}`) are LEFT behind.
-  /// Removing empty section brackets is M7.2.2 territory.
   static SourceEdit removeParameter({
     required ClassParameterNode parameter,
     required String source,
+    ClassMember? parent,
   }) {
+    // M7.4: when `parent` is provided, detect "last param in section"
+    // and extend the deletion to include the section brackets.
+    if (parent != null) {
+      final section = _sectionOf(parameter);
+      if (section != ParameterSection.positionalRequired) {
+        final (parameters, paramListSpan) = _unpackParameterList(parent);
+        final inSection =
+            parameters.where((p) => _isInSection(p, section)).toList();
+        if (inSection.length == 1 && identical(inSection.first, parameter)) {
+          return _removeAndDrainSection(parameter, paramListSpan, source);
+        }
+      }
+    }
+
     var start = parameter.sourceSpan.offset;
     var end = parameter.sourceSpan.end;
 
@@ -363,6 +408,33 @@ class ClassStructureEditPlanner {
       offset: start,
       length: end - start,
       replacement: '',
+    );
+  }
+
+  // ----------------------- Constructor operations (M7.4) --------
+
+  /// Renames a named constructor's segment after the dot. For
+  /// `Money.zero()`, calling `renameNamedConstructor(zero, 'empty')`
+  /// produces `Money.empty()`.
+  ///
+  /// Requires the constructor to already be named; throws otherwise.
+  /// Converting an unnamed constructor into a named one would require
+  /// inserting the `.` separator and is deferred (M7.5+).
+  static SourceEdit renameNamedConstructor({
+    required ClassConstructorNode constructor,
+    required String newName,
+  }) {
+    final span = constructor.namedConstructorSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Constructor has no named segment to rename. Converting an '
+        'unnamed constructor into a named one is deferred.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newName,
     );
   }
 
@@ -449,19 +521,23 @@ class ClassStructureEditPlanner {
 
   /// Replaces an annotation's arguments with `newArgumentsSource`. The
   /// new source should include the surrounding parentheses
-  /// (`'(name: \"foo\")'`). Requires the annotation to already have an
-  /// arguments list; throws otherwise (adding parens to a bare
-  /// annotation is deferred to a future milestone).
+  /// (`'(name: \"foo\")'`).
+  ///
+  /// M7.4: when the annotation is bare (`@override` with no parens), the
+  /// new source is INSERTED right after the annotation name. Useful for
+  /// upgrading a bare marker annotation into a configured one without
+  /// removing-and-re-adding.
   static SourceEdit replaceAnnotationArguments({
     required AnnotationNode annotation,
     required String newArgumentsSource,
   }) {
     final span = annotation.argumentsSpan;
     if (span == null) {
-      throw ArgumentError(
-        'Annotation @${annotation.name} has no arguments list to replace. '
-        'Adding `(...)` to a bare annotation is deferred to a future '
-        'milestone.',
+      // Bare annotation: insert new args after the name.
+      return SourceEdit(
+        offset: annotation.nameSpan.offset + annotation.nameSpan.length,
+        length: 0,
+        replacement: newArgumentsSource,
       );
     }
     return SourceEdit(
@@ -601,6 +677,71 @@ class ClassStructureEditPlanner {
       case ParameterSection.named:
         return p.isNamed;
     }
+  }
+
+  static ParameterSection _sectionOf(ClassParameterNode p) {
+    if (p.isNamed) {
+      return ParameterSection.named;
+    }
+    if (p.isPositional && p.isOptional) {
+      return ParameterSection.positionalOptional;
+    }
+    return ParameterSection.positionalRequired;
+  }
+
+  /// Removes a parameter that's the SOLE member of its `{}` or `[]`
+  /// section along with the surrounding brackets and the preceding `, `
+  /// separator (if any). Used by `removeParameter` when the M7.4
+  /// `parent`-aware path detects a section drain.
+  static SourceEdit _removeAndDrainSection(
+    ClassParameterNode parameter,
+    SourceSpan paramListSpan,
+    String source,
+  ) {
+    // Walk backward from the param's offset through whitespace; the
+    // first non-whitespace byte should be the `{` or `[` opener.
+    var bracketOpen = parameter.sourceSpan.offset - 1;
+    while (bracketOpen >= 0 && _isWhitespace(source.codeUnitAt(bracketOpen))) {
+      bracketOpen--;
+    }
+    // Walk forward from the param's end through optional trailing `,`
+    // then whitespace; the first non-whitespace byte should be the
+    // section closer `}` or `]`.
+    var bracketClose = parameter.sourceSpan.end;
+    if (bracketClose < source.length &&
+        source.codeUnitAt(bracketClose) == 0x2C) {
+      bracketClose++;
+    }
+    while (bracketClose < source.length &&
+        _isWhitespace(source.codeUnitAt(bracketClose))) {
+      bracketClose++;
+    }
+
+    // Default delete-start is the bracket itself. If a `, ` separator
+    // precedes the bracket, extend back to include it.
+    var deleteStart = bracketOpen;
+    var probe = bracketOpen - 1;
+    while (probe >= 0 && _isWhitespace(source.codeUnitAt(probe))) {
+      probe--;
+    }
+    if (probe >= 0 && source.codeUnitAt(probe) == 0x2C) {
+      deleteStart = probe;
+    }
+
+    // Sanity: deletion must stay within the parameter list span.
+    if (deleteStart < paramListSpan.offset ||
+        bracketClose >= paramListSpan.offset + paramListSpan.length) {
+      throw StateError(
+        'Section-drain bracket-cleanup walked outside the parameter '
+        'list span; likely malformed source.',
+      );
+    }
+
+    return SourceEdit(
+      offset: deleteStart,
+      length: bracketClose - deleteStart + 1, // +1 to consume the closer
+      replacement: '',
+    );
   }
 
   /// Looks at the gap between adjacent parameters to figure out what

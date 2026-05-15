@@ -382,24 +382,9 @@ void main() {
       );
     });
 
-    test('appendParameter throws when section is empty (non-positional)', () {
-      // class_with_constructors.dart's operator+ has no named section.
-      final source = _loadFixture('class_with_constructors.dart');
-      final model = parseClassStructure(source);
-      final op = model.root.members
-          .whereType<ClassMethodNode>()
-          .firstWhere((m) => m.isOperator);
-
-      expect(
-        () => ClassStructureEditPlanner.appendParameter(
-          parent: op,
-          newParameterSource: 'required String x',
-          section: ParameterSection.named,
-          source: source,
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
-    });
+    // NOTE: As of M7.4, appending to an empty named/positionalOptional
+    // section no longer throws — it creates the section. See M7.4
+    // section-creation tests below for the new behavior.
   });
 
   group('removeParameter (M7.2.1)', () {
@@ -489,6 +474,226 @@ void main() {
           .whereType<ClassMethodNode>()
           .firstWhere((m) => m.isOperator);
       expect(reparsedOp.parameters, isEmpty);
+    });
+  });
+
+  group('appendParameter section creation (M7.4)', () {
+    test('creates a named section on operator+', () {
+      // operator+ has positional `(Money other)` and no named section.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+
+      final edit = ClassStructureEditPlanner.appendParameter(
+        parent: op,
+        newParameterSource: 'String? label',
+        section: ParameterSection.named,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedOp = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      expect(reparsedOp.parameters, hasLength(2));
+      final label = reparsedOp.parameters[1];
+      expect(label.name, equals('label'));
+      expect(label.isNamed, isTrue);
+    });
+
+    test('creates a named section on a parameterless method', () {
+      // class_with_methods.dart has `bool isAdult() { ... }` — empty list.
+      final source = _loadFixture('class_with_methods.dart');
+      final model = parseClassStructure(source);
+      final method = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'isAdult');
+
+      final edit = ClassStructureEditPlanner.appendParameter(
+        parent: method,
+        newParameterSource: 'bool strict = false',
+        section: ParameterSection.named,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedMethod = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'isAdult');
+      expect(reparsedMethod.parameters, hasLength(1));
+      expect(reparsedMethod.parameters.first.isNamed, isTrue);
+      expect(reparsedMethod.parameters.first.name, equals('strict'));
+    });
+
+    test('creates an optional positional section on operator+', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+
+      final edit = ClassStructureEditPlanner.appendParameter(
+        parent: op,
+        newParameterSource: 'String label = ""',
+        section: ParameterSection.positionalOptional,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedOp = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      expect(reparsedOp.parameters, hasLength(2));
+      final label = reparsedOp.parameters[1];
+      expect(label.isOptional, isTrue);
+      expect(label.isPositional, isTrue);
+    });
+  });
+
+  group('removeParameter section drain (M7.4)', () {
+    test('removes sole named param plus surrounding {}', () {
+      // First add a named param to operator+, then remove it. After
+      // removal, the {} should be gone.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+
+      // Step 1: create the named section.
+      final addEdit = ClassStructureEditPlanner.appendParameter(
+        parent: op,
+        newParameterSource: 'String? label',
+        section: ParameterSection.named,
+        source: source,
+      );
+      final afterAdd = applySourceEdits(source, [addEdit]);
+
+      // Step 2: re-parse, remove the sole named param WITH parent for cleanup.
+      final addedModel = parseClassStructure(afterAdd);
+      final addedOp = addedModel.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      final label = addedOp.parameters.firstWhere((p) => p.name == 'label');
+
+      final removeEdit = ClassStructureEditPlanner.removeParameter(
+        parameter: label,
+        parent: addedOp,
+        source: afterAdd,
+      );
+      final afterRemove = applySourceEdits(afterAdd, [removeEdit]);
+
+      // The operator's parameter list should be back to `(Money other)`
+      // shape — no `{}` brackets left behind on operator+. (The class
+      // has many `{}` in method bodies; only the operator+'s param list
+      // matters here.)
+      final reparsedFinal = parseClassStructure(afterRemove);
+      final reparsedOp = reparsedFinal.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      expect(reparsedOp.parameters, hasLength(1));
+      expect(reparsedOp.parameters.first.name, equals('other'));
+      // The param list source should have no `{` or `}`.
+      final paramsSource = afterRemove.substring(
+        reparsedOp.parametersSpan!.offset,
+        reparsedOp.parametersSpan!.offset + reparsedOp.parametersSpan!.length,
+      );
+      expect(paramsSource.contains('{'), isFalse,
+          reason: 'param list still has `{`: $paramsSource');
+      expect(paramsSource.contains('}'), isFalse,
+          reason: 'param list still has `}`: $paramsSource');
+    });
+
+    test('removing one of two named params leaves brackets intact', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final age = ctor.parameters.firstWhere((p) => p.name == 'age');
+
+      final edit = ClassStructureEditPlanner.removeParameter(
+        parameter: age,
+        parent: ctor,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // The {} should still be there (firstName + lastName remain).
+      expect(newSource.contains('{'), isTrue);
+      expect(newSource.contains('}'), isTrue);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      expect(reparsedCtor.parameters, hasLength(2));
+    });
+  });
+
+  group('replaceAnnotationArguments for bare annotation (M7.4)', () {
+    test('inserts (...) after @freezed', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final freezed = model.root.annotations.first;
+      expect(freezed.argumentsSource, isNull);
+
+      final edit = ClassStructureEditPlanner.replaceAnnotationArguments(
+        annotation: freezed,
+        newArgumentsSource: '(unionKey: "type")',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      expect(
+        reparsed.root.annotations.first.argumentsSource,
+        equals('(unionKey: "type")'),
+      );
+    });
+  });
+
+  group('renameNamedConstructor (M7.4)', () {
+    test('renames Money.zero -> Money.empty', () {
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final zero = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == 'zero');
+
+      final edit = ClassStructureEditPlanner.renameNamedConstructor(
+        constructor: zero,
+        newName: 'empty',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final names = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .map((c) => c.namedConstructorName)
+          .toList();
+      expect(names, contains('empty'));
+      expect(names, isNot(contains('zero')));
+    });
+
+    test('throws on unnamed constructor', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final unnamed = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+
+      expect(
+        () => ClassStructureEditPlanner.renameNamedConstructor(
+          constructor: unnamed,
+          newName: 'foo',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 
@@ -626,21 +831,9 @@ void main() {
       );
     });
 
-    test('replaceAnnotationArguments throws on bare annotation', () {
-      final source = _loadFixture('class_freezed_like.dart');
-      final model = parseClassStructure(source);
-      // The class-level @freezed is bare (no args).
-      final freezed = model.root.annotations.first;
-      expect(freezed.argumentsSource, isNull);
-
-      expect(
-        () => ClassStructureEditPlanner.replaceAnnotationArguments(
-          annotation: freezed,
-          newArgumentsSource: '()',
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
-    });
+    // NOTE: As of M7.4, replaceAnnotationArguments on a bare annotation
+    // INSERTS new arguments rather than throwing. See the M7.4
+    // "replaceAnnotationArguments for bare annotation" group below.
   });
 
   group('addField', () {

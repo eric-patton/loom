@@ -8,7 +8,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.3 — annotation edit operations
+**Active milestone:** M7.4 — closing M7 gaps (section creation, bracket cleanup, bare-annotation args, constructor rename)
 **Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
@@ -33,24 +33,22 @@ Parameter add/remove are deliberately deferred — they require placement logic 
 
 CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
 
-**M7.3 surface added (just now):**
-- `addClassAnnotation(parent, annotationSource, source)` — prepend annotation before class declaration, on its own line with class indent.
-- `addMemberAnnotation(member, annotationSource, source)` — prepend annotation before any class member, on its own line with member indent.
-- `addParameterAnnotation(parameter, annotationSource)` — inline annotation before parameter, space-separated (most common Dart style).
-- `removeAnnotation(annotation, source)` — delete annotation + trailing horizontal whitespace + up to one newline (collapses line cleanly).
-- `replaceAnnotationArguments(annotation, newArgumentsSource)` — replace `(...)` portion of an annotation. Requires existing arguments list; adding parens to a bare annotation is deferred.
+**M7.4 surface added (just now):**
+- `appendParameter` now creates empty `named` / `positionalOptional` sections — inserts `{newParam}` / `[newParam]` brackets, with `, ` separator from any preceding positional content.
+- `removeParameter(parameter, source, parent)` — when `parent` is supplied and the removed param is the SOLE member of its named or optional-positional section, the deletion extends through the surrounding `{...}` / `[...]` brackets AND the preceding `, ` separator. Without `parent`, M7.2.1 intra-section behavior is preserved.
+- `replaceAnnotationArguments` now INSERTS new arguments when the annotation is bare (no existing parens), instead of throwing.
+- `renameNamedConstructor(constructor, newName)` — replace the `.named` segment of a constructor declaration.
 
-Combined with M7.2 annotation capture, the kernel now has a complete add/inspect/edit/remove story for annotations on classes, members, and parameters — the surface entity-modeling tools need most.
-
-**Still deferred (smaller surface remaining):**
-- Section creation: appending to empty `named` / `positionalOptional` requires inserting `{...}` / `[...]` brackets + `, ` separator. M7.4 if real fixtures demand.
-- Removing empty section brackets after a section drains to empty.
-- Adding `(...)` arguments to a bare annotation (only edit type missing).
-- Qualifier editing (final/var/late/static/const/factory/async).
-- Renaming named constructors.
+Deliberately deferred (each requires either model surgery or substantial new logic):
+- **Qualifier editing** (final/var/late/static/const/factory/async) — requires capturing keyword spans in the model. M7.5 if real fixtures demand.
+- Adding a type annotation to an untyped field or parameter — requires insertion logic.
+- Adding an initializer to a bare field; adding a default to a parameter without one.
+- Converting an unnamed constructor into a named one.
 - Multi-variable field declarations beyond best-effort.
+- Reordering members.
+
 **Blockers:** none
-**Next action:** **Eric review gate for the full M6 + M7 series.** Then M8 (function-body / statement modeling — genuinely new shape) or fill in remaining M7 gaps (qualifier editing, section creation, ctor renaming) per real-world needs.
+**Next action:** **Eric review gate for the full M6 + M7 series.** The M7 surface is now functionally complete for the common entity-modeling workflows (Freezed, json_serializable, Drift tables). M8 (function-body / statement modeling — genuinely new shape) is the next natural direction.
 
 ---
 
@@ -221,7 +219,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M7.2** (shipped 2026-05-14) | Parameter modeling + annotation capture. `ClassParameterNode` (name / type / default / kind flags) replaces M7.1's `parametersSource` blob. `AnnotationNode` attached to members, parameters, and `ClassStructureNode` itself. Edit ops added: renameParameter, changeParameterType, changeParameterDefault. New fixture `class_freezed_like.dart` exercises the Freezed/json_serializable shape. | Unlocks Freezed-style entity editing where "fields" are actually factory-constructor parameters. Captures the annotations that codegen pipelines key off. |
 | **M7.2.1** (shipped 2026-05-14) | Parameter add/remove. `appendParameter` to existing section (creates within empty `positionalRequired` if other sections exist; throws on empty `named`/`positionalOptional` for now). `removeParameter` handles intra-section deletion with separator cleanup, leaves empty brackets behind. | The "add a field" / "remove a field" operations for Freezed-style entities where fields-as-params is the modeling layer. |
 | **M7.3** (shipped 2026-05-14) | Annotation editing. `addClassAnnotation`, `addMemberAnnotation`, `addParameterAnnotation` (each with appropriate formatting — newline for class/member, inline for parameter). `removeAnnotation` cleans up trailing whitespace/newline. `replaceAnnotationArguments` swaps the `(...)` portion. | Codegen-driven entity classes (Freezed / json_serializable / Drift) live and die by their annotations. This makes them first-class editable. |
-| M7.4+ | Qualifier editing, section creation, ctor renaming, multi-variable field declarations. | Round out the M7 surface for full Drift / Freezed / json_serializable / Riverpod codegen coverage. |
+| **M7.4** (shipped 2026-05-14) | Closing M7 gaps. `appendParameter` now creates `{}` / `[]` sections when needed; `removeParameter(parameter, source, parent)` drains empty sections; `replaceAnnotationArguments` now inserts on bare annotations; `renameNamedConstructor` replaces the `.named` segment. | M7 is functionally complete for common entity-modeling workflows. Remaining gaps (qualifier editing, untyped/uninitialized insertions, ctor unnamed→named) require model surgery and ship as M7.5 only if fixtures demand. |
+| M7.5+ | Qualifier editing (final/var/late/static/const/factory/async — requires capturing keyword spans in the model), adding type/initializer/default tokens to bare members, multi-variable field declarations. | Round out the M7 surface for the remaining ~10% of edge cases. Deferred until real fixtures demand. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -305,6 +304,53 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.4 — closing M7 gaps (section creation, bracket cleanup, bare-annotation args, ctor rename)
+**Worked on:** Eric asked to "finish up any M7 gaps in one go, if possible." Surveyed the still-deferred list across M7.0 / M7.1 / M7.2 / M7.2.1 / M7.3 entries. Four gaps were genuinely closable without model surgery; one (qualifier editing) requires capturing keyword spans on `ClassFieldNode` / `ClassMethodNode` / `ClassConstructorNode` / `ClassParameterNode` and is deferred to M7.5.
+
+**Four operations:**
+
+1. **Section creation in `appendParameter`.** Previously threw when the target section (`named` or `positionalOptional`) was empty. Now inserts the `{newParam}` / `[newParam]` brackets and prefixes with `, ` if positional params precede.
+   - Edge case: empty list `()` → wraps newParam in brackets directly inside `(...)`.
+   - Edge case: only positional params → inserts after the last positional with `, ` separator.
+
+2. **Empty-section bracket cleanup in `removeParameter`.** Added optional `parent` parameter (M7.2.1's signature kept `parameter` + `source` only). When `parent` is supplied AND the removed param is the SOLE member of its named/optional-positional section, the deletion extends back through the section brackets AND any preceding `, ` separator.
+   - No behavior change for callers that don't pass `parent` — intra-section deletion still leaves empty brackets behind.
+   - Algorithm: walk backward from `parameter.offset` through whitespace to find `{`/`[` opener; walk forward through optional trailing `,` + whitespace to find `}`/`]` closer; extend back through preceding `, ` separator if any.
+
+3. **`replaceAnnotationArguments` for bare annotations.** Previously threw on bare `@override` (no parens to replace). Now INSERTS the new arguments after the annotation name. Symmetric with the existing replace-when-args-exist path; just two cases in the same function.
+
+4. **`renameNamedConstructor`.** Replaces `ctor.namedConstructorSpan`. Throws on unnamed constructors (converting unnamed → named requires inserting the `.` separator, deferred).
+
+**Validation:**
+- 231 tests green (was 225, +6 new — 3 section-creation, 2 section-drain, 1 bare-annotation, 1 ctor rename + 1 negative case for unnamed-ctor).
+- Two M7.2.1 / M7.3 tests that previously asserted `throws` were updated since M7.4 implements the formerly-deferred behavior.
+- `dart analyze` and `dart format` clean.
+- Scout against `flutter/packages/go_router` (117 files): unchanged — 0 crashes, 0 idempotence failures, 78 class clean parses.
+
+**Decision: qualifier editing deferred to M7.5.** It needs keyword spans on every relevant node type (ClassFieldNode for `final`/`var`/`late`/`static`, ClassMethodNode for `static`, ClassConstructorNode for `const`/`factory`, ClassParameterNode for `required`/`final`/`const`). That's substantive model surgery — adding 4-5 nullable `SourceSpan` fields across four node classes and updating the parser to populate them. Not hard, just bigger than the rest of M7.4. Ships as M7.5 if real fixtures demand qualifier toggles.
+
+**Other deferrals (the genuine "long tail" of M7 — each rare in real code):**
+- Adding a type annotation to an untyped field or parameter
+- Adding an initializer to a bare field
+- Adding a default value to a parameter without one
+- Converting an unnamed constructor into a named one
+- Multi-variable field declarations beyond best-effort
+- Reordering members
+
+These are all token-insertion edits with separator handling. Each is small; together they'd bloat the surface. Will ship ad-hoc when real-world consumers ask for them.
+
+**M7 series summary** (six commits across this session):
+- M7.0: fields only
+- M7.1: + methods + constructors
+- M7.2: + parameter modeling + annotation capture
+- M7.2.1: + parameter add/remove
+- M7.3: + annotation editing
+- M7.4: + section creation, bracket cleanup, bare-annotation args, ctor rename
+
+The kernel now has functionally complete class-structure editing for the common entity-modeling workflows: Freezed-shaped classes, json_serializable-shaped classes, Drift tables (modeled as class-with-getters). Real-world entity files can be inspected and edited end-to-end through the kernel without raw source manipulation.
+
+**Next:** Eric review of the full M6 + M7 series (substantial — ~14 commits since the last review gate). Then M8 (function-body / statement modeling — the next genuinely new shape after constructor trees, flat member lists, and now-complete class structure).
 
 ### [2026-05-14] M7.3 — annotation edit operations
 **Worked on:** Completed the annotation surface — M7.2 captured them; M7.3 makes them editable. Together this closes the loop on entity-modeling needs: codegen-driven classes (Freezed / json_serializable / Drift) can now be inspected AND modified through the kernel without raw source manipulation.
