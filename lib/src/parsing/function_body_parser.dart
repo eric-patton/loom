@@ -55,7 +55,15 @@ FunctionBodyModel parseFunctionBody(String source, {SourceSpan? bodySpan}) {
     );
   }
 
-  final block = body.block;
+  return FunctionBodyModel(
+    body: _convertBlock(body.block, source),
+    diagnostics: diagnostics,
+  );
+}
+
+/// Converts an analyzer `Block` to a `StatementBlock`. Shared between
+/// function bodies and nested then/else blocks of `IfStatementNode`.
+StatementBlock _convertBlock(Block block, String source) {
   final outerSpan = SourceSpan(offset: block.offset, length: block.length);
   final innerStart = block.leftBracket.offset + block.leftBracket.length;
   final innerLength = block.rightBracket.offset - innerStart;
@@ -66,11 +74,10 @@ FunctionBodyModel parseFunctionBody(String source, {SourceSpan? bodySpan}) {
     statements.add(_convertStatement(stmt, source));
   }
 
-  return FunctionBodyModel(
-    bodySpan: outerSpan,
+  return StatementBlock(
+    blockSpan: outerSpan,
     innerSpan: innerSpan,
     statements: statements,
-    diagnostics: diagnostics,
   );
 }
 
@@ -109,9 +116,64 @@ StatementNode _convertStatement(Statement stmt, String source) {
       sourceSpan: span,
     );
   }
-  // Anything else (if/for/while/try/switch/...) — preserve verbatim.
+  if (stmt is IfStatement) {
+    final asIf = _tryConvertIfStatement(stmt, source, span);
+    if (asIf != null) return asIf;
+    // Fall through to opaque if the if-statement shape isn't supported
+    // (bare-statement body, `else if` chain, etc.).
+  }
+  // Anything else (for/while/try/switch/...) or an unsupported if-shape
+  // — preserve verbatim.
   return OpaqueStatementNode(
     sourceText: source.substring(stmt.offset, stmt.offset + stmt.length),
+    sourceSpan: span,
+  );
+}
+
+/// Attempts to convert an `IfStatement` into an `IfStatementNode`.
+/// Returns null when the shape isn't supported by M8.0b: a non-block
+/// then statement, an else clause that's neither null nor a block
+/// (e.g. `else if`), etc. Callers fall through to `OpaqueStatementNode`
+/// for the unsupported cases.
+IfStatementNode? _tryConvertIfStatement(
+  IfStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final thenStmt = stmt.thenStatement;
+  if (thenStmt is! Block) {
+    return null;
+  }
+  final elseStmt = stmt.elseStatement;
+  // Allowed: no else, or else-block. Reject `else if` (where elseStmt is
+  // another IfStatement) and `else <bareStatement>;`.
+  if (elseStmt != null && elseStmt is! Block) {
+    return null;
+  }
+
+  final condition = stmt.expression;
+  final conditionSpan =
+      SourceSpan(offset: condition.offset, length: condition.length);
+  final conditionSource = source.substring(
+    condition.offset,
+    condition.offset + condition.length,
+  );
+
+  return IfStatementNode(
+    ifKeywordSpan: SourceSpan(
+      offset: stmt.ifKeyword.offset,
+      length: stmt.ifKeyword.length,
+    ),
+    conditionSource: conditionSource,
+    conditionSpan: conditionSpan,
+    thenBlock: _convertBlock(thenStmt, source),
+    elseKeywordSpan: stmt.elseKeyword == null
+        ? null
+        : SourceSpan(
+            offset: stmt.elseKeyword!.offset,
+            length: stmt.elseKeyword!.length,
+          ),
+    elseBlock: elseStmt is Block ? _convertBlock(elseStmt, source) : null,
     sourceSpan: span,
   );
 }

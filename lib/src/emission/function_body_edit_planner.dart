@@ -1,9 +1,10 @@
 import '../model/function_body.dart';
 import 'source_edit.dart';
 
-/// Plans `SourceEdit`s for individual function-body changes (M8.0a).
+/// Plans `SourceEdit`s for individual function-body changes (M8.0a/b).
 ///
-/// Statement operations:
+/// Statement-list operations (work on any `StatementBlock` — function
+/// body OR nested if-then/if-else blocks):
 ///   * `addStatement` — insert a new statement at a given index.
 ///   * `removeStatement` — delete a statement + trailing whitespace.
 ///   * `replaceStatement` — replace a whole statement's source.
@@ -19,7 +20,16 @@ import 'source_edit.dart';
 ///     (requires existing expression; bare `return;` adds need a
 ///     separate operation, deferred).
 ///
-/// Deliberately deferred (M8.0b / M8.1+):
+/// If-statement operations (M8.0b):
+///   * `changeIfCondition` — replace the condition expression.
+///   * Then/else block edits work via the `StatementBlock`-taking
+///     ops above (`addStatement`, `removeStatement`, etc.) —
+///     `IfStatementNode.thenBlock` / `elseBlock` plug right in.
+///
+/// Deliberately deferred (M8.0c / M8.1+):
+///   * `else if` chains — currently opaqued by the parser.
+///   * Bare-statement if bodies (`if (cond) doIt();`) — opaqued.
+///   * Other control flow: for, while, switch, try.
 ///   * Editing inside `ExpressionStatement.expressionSource` —
 ///     requires modeling expression structure.
 ///   * Adding type annotation to an untyped variable declaration.
@@ -31,38 +41,42 @@ class FunctionBodyEditPlanner {
   // ----------------------- Statement-list ops ---------------------
 
   /// Inserts `newStatementSource` (e.g. `'print(x);'`) at position
-  /// `index` in the body's statement list. Indices in
-  /// `[0, body.statements.length]` are valid; `body.statements.length`
+  /// `index` in the given block's statement list. Indices in
+  /// `[0, block.statements.length]` are valid; `block.statements.length`
   /// appends.
   ///
+  /// `block` can be a function body's top-level block OR any nested
+  /// block (e.g. the then/else block of an `IfStatementNode`). The
+  /// operation works recursively without special-casing.
+  ///
   /// Indentation is inferred from an existing statement (if any),
-  /// otherwise derived from the body's brace position.
+  /// otherwise derived from the block's brace position.
   static SourceEdit addStatement({
-    required FunctionBodyModel parent,
+    required StatementBlock block,
     required int index,
     required String newStatementSource,
     required String source,
   }) {
-    if (index < 0 || index > parent.statements.length) {
+    if (index < 0 || index > block.statements.length) {
       throw ArgumentError(
-        'Insert index $index out of range [0, ${parent.statements.length}]',
+        'Insert index $index out of range [0, ${block.statements.length}]',
       );
     }
 
-    // Empty body: `{}` → `{\n  newStmt;\n}` with inferred indent.
-    if (parent.statements.isEmpty) {
-      final outerIndent = _lineIndentBefore(parent.bodySpan.offset, source);
+    // Empty block: `{}` → `{\n  newStmt;\n}` with inferred indent.
+    if (block.statements.isEmpty) {
+      final outerIndent = _lineIndentBefore(block.blockSpan.offset, source);
       final innerIndent = '$outerIndent  ';
       return SourceEdit(
-        offset: parent.innerSpan.offset,
-        length: parent.innerSpan.length,
+        offset: block.innerSpan.offset,
+        length: block.innerSpan.length,
         replacement: '\n$innerIndent$newStatementSource\n$outerIndent',
       );
     }
 
-    if (index < parent.statements.length) {
+    if (index < block.statements.length) {
       // Insert before the existing statement at `index`.
-      final next = parent.statements[index];
+      final next = block.statements[index];
       final indent = _lineIndentBefore(next.sourceSpan.offset, source);
       return SourceEdit(
         offset: next.sourceSpan.offset,
@@ -71,7 +85,7 @@ class FunctionBodyEditPlanner {
       );
     }
     // Append after the last statement.
-    final last = parent.statements.last;
+    final last = block.statements.last;
     final indent = _lineIndentBefore(last.sourceSpan.offset, source);
     return SourceEdit(
       offset: last.sourceSpan.offset + last.sourceSpan.length,
@@ -172,6 +186,22 @@ class FunctionBodyEditPlanner {
       offset: span.offset,
       length: span.length,
       replacement: newInitializerSource,
+    );
+  }
+
+  // ----------------------- If-statement ops (M8.0b) --------------
+
+  /// Replaces the condition expression of an `if (cond) { ... }`
+  /// statement with `newConditionSource`. The new source should NOT
+  /// include the surrounding parentheses — they're preserved verbatim.
+  static SourceEdit changeIfCondition({
+    required IfStatementNode statement,
+    required String newConditionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.conditionSpan.offset,
+      length: statement.conditionSpan.length,
+      replacement: newConditionSource,
     );
   }
 

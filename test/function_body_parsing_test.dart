@@ -82,6 +82,92 @@ void main() {
     });
   });
 
+  group('parseFunctionBody on function_body_with_if.dart (M8.0b)', () {
+    late FunctionBodyModel body;
+    late String source;
+
+    setUpAll(() {
+      source =
+          File('test/fixtures/function_body_with_if.dart').readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('finds the classify function body (4 statements)', () {
+      // var clamped = ...; log(...); if (...) { ... } else { ... };
+      expect(body.statements, hasLength(3));
+      // No top-level return statement — the if/else covers both paths.
+    });
+
+    test('third statement is the if/else, modeled as IfStatementNode', () {
+      final stmt = body.statements[2];
+      expect(stmt, isA<IfStatementNode>());
+      final ifStmt = stmt as IfStatementNode;
+      expect(ifStmt.conditionSource, equals('clamped >= 90'));
+    });
+
+    test('then block has two statements (log + return)', () {
+      final ifStmt = body.statements[2] as IfStatementNode;
+      expect(ifStmt.thenBlock.statements, hasLength(2));
+      expect(ifStmt.thenBlock.statements[0], isA<ExpressionStatementNode>());
+      expect(ifStmt.thenBlock.statements[1], isA<ReturnStatementNode>());
+    });
+
+    test('else block has one return statement', () {
+      final ifStmt = body.statements[2] as IfStatementNode;
+      expect(ifStmt.elseBlock, isNotNull);
+      expect(ifStmt.elseBlock!.statements, hasLength(1));
+      expect(ifStmt.elseBlock!.statements.first, isA<ReturnStatementNode>());
+    });
+
+    test('then/else block spans cover their braces', () {
+      final ifStmt = body.statements[2] as IfStatementNode;
+      final thenText = source.substring(
+        ifStmt.thenBlock.blockSpan.offset,
+        ifStmt.thenBlock.blockSpan.offset + ifStmt.thenBlock.blockSpan.length,
+      );
+      expect(thenText, startsWith('{'));
+      expect(thenText, endsWith('}'));
+
+      final elseText = source.substring(
+        ifStmt.elseBlock!.blockSpan.offset,
+        ifStmt.elseBlock!.blockSpan.offset + ifStmt.elseBlock!.blockSpan.length,
+      );
+      expect(elseText, startsWith('{'));
+      expect(elseText, endsWith('}'));
+    });
+  });
+
+  group('parseFunctionBody — if with bare body falls through to opaque', () {
+    test('bare-statement then-body opaqued', () {
+      const source = '''
+void f() {
+  if (true) doIt();
+}
+void doIt() {}
+''';
+      final body = parseFunctionBody(source);
+      expect(body.statements, hasLength(1));
+      expect(body.statements.first, isA<OpaqueStatementNode>());
+    });
+
+    test('else if chain opaqued (whole if-statement)', () {
+      const source = '''
+void f() {
+  if (true) {
+    a();
+  } else if (false) {
+    b();
+  }
+}
+void a() {}
+void b() {}
+''';
+      final body = parseFunctionBody(source);
+      expect(body.statements, hasLength(1));
+      expect(body.statements.first, isA<OpaqueStatementNode>());
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';

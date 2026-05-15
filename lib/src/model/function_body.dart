@@ -19,31 +19,60 @@ export 'node.dart' show ParseDiagnostic;
 /// hierarchy would dilute the semantics of both.
 class FunctionBodyModel {
   const FunctionBodyModel({
-    required this.bodySpan,
-    required this.innerSpan,
-    required this.statements,
+    required this.body,
     this.diagnostics = const <ParseDiagnostic>[],
   });
 
-  /// Span of the full body, from the opening `{` to the closing `}`
-  /// (inclusive).
-  final SourceSpan bodySpan;
-
-  /// Span of the body's interior — between `{` and `}` (exclusive of the
-  /// braces themselves). Used as the anchor for `addStatement` to know
-  /// where to insert.
-  final SourceSpan innerSpan;
-
-  /// Statements in source order. Pattern-match on subtype to distinguish
-  /// declared variables, expression statements, return statements, and
-  /// opaque pass-through.
-  final List<StatementNode> statements;
+  /// The function's top-level statement block. Always present.
+  final StatementBlock body;
 
   final List<ParseDiagnostic> diagnostics;
+
+  /// Backward-compat shortcut to the top-level statement list.
+  List<StatementNode> get statements => body.statements;
+
+  /// Backward-compat shortcut to the brace-inclusive body span.
+  SourceSpan get bodySpan => body.blockSpan;
+
+  /// Backward-compat shortcut to the brace-exclusive inner span.
+  SourceSpan get innerSpan => body.innerSpan;
 
   @override
   String toString() => 'FunctionBodyModel(${statements.length} statement(s)'
       '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
+}
+
+/// A `{ ... }` block of statements. Shared concept between
+/// `FunctionBodyModel.body` and the then/else blocks of an
+/// `IfStatementNode` (and, future M8.x slices, for/while/try blocks).
+///
+/// Extracted in M8.0b once if-statement modeling forced the statement-
+/// list ops to work recursively. Same role as `ListSlotStyle` in the
+/// widget catalog — captures the surrounding-source structure so that
+/// `addStatement` / `removeStatement` can target the right insertion
+/// point regardless of how deeply nested the block is.
+class StatementBlock {
+  StatementBlock({
+    required this.blockSpan,
+    required this.innerSpan,
+    required List<StatementNode> statements,
+  }) : statements = List.unmodifiable(statements);
+
+  /// Span of the full block, including the surrounding `{` and `}`.
+  final SourceSpan blockSpan;
+
+  /// Span of the block's interior — between `{` and `}` (exclusive of
+  /// the braces themselves). Used as the anchor for `addStatement` when
+  /// the block is otherwise empty.
+  final SourceSpan innerSpan;
+
+  /// Statements in source order. Pattern-match on subtype to distinguish
+  /// declared variables, expression statements, return statements, and
+  /// (M8.0b+) control-flow statements.
+  final List<StatementNode> statements;
+
+  @override
+  String toString() => 'StatementBlock(${statements.length} statement(s))';
 }
 
 /// Base type for a function-body statement.
@@ -183,9 +212,65 @@ class ReturnStatementNode extends StatementNode {
       '${expressionSource ?? ''})';
 }
 
-/// A statement kind not yet modeled by M8.0a — `if`, `for`, `while`,
-/// `switch`, `try`, etc. Preserves the source verbatim through any
-/// edit to surrounding statements; the kernel makes no guarantees
+/// A modeled `if (cond) { ... } [else { ... }]` statement.
+///
+/// **Scope (M8.0b first slice):** only fully-braced if/else are
+/// modeled. Bare-statement bodies (`if (cond) doIt();`) and `else if`
+/// chains fall through to `OpaqueStatementNode`. Most real-world Dart
+/// uses braces; `else if` ships as M8.0c.
+///
+/// The condition is captured as raw source — M8.0b doesn't model
+/// expression structure. The then/else bodies are full `StatementBlock`s
+/// so existing statement-list ops (`addStatement`, `removeStatement`,
+/// etc.) work recursively on them.
+class IfStatementNode extends StatementNode {
+  const IfStatementNode({
+    required this.ifKeywordSpan,
+    required this.conditionSource,
+    required this.conditionSpan,
+    required this.thenBlock,
+    required this.elseKeywordSpan,
+    required this.elseBlock,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `if` keyword token.
+  final SourceSpan ifKeywordSpan;
+
+  /// The condition expression as raw source text (without surrounding
+  /// parens).
+  final String conditionSource;
+
+  /// Span of just the condition expression (excluding the `(` and `)`).
+  final SourceSpan conditionSpan;
+
+  /// The `{ ... }` block executed when the condition is true.
+  final StatementBlock thenBlock;
+
+  /// Span of the `else` keyword token, when an `else` clause is present.
+  /// Null otherwise.
+  final SourceSpan? elseKeywordSpan;
+
+  /// The `else { ... }` block, or null if there's no `else` clause.
+  /// (For `else if` — not modeled in M8.0b — the entire if-statement
+  /// falls through to `OpaqueStatementNode`, so this never wraps a
+  /// nested if.)
+  final StatementBlock? elseBlock;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'IfStatementNode('
+      'cond=$conditionSource, '
+      '${thenBlock.statements.length} then-stmt(s)'
+      '${elseBlock == null ? '' : ', ${elseBlock!.statements.length} else-stmt(s)'})';
+}
+
+/// A statement kind not yet modeled — `for`, `while`, `switch`, `try`,
+/// etc. (and `if` with bare-statement body or `else if` chain, which
+/// M8.0b explicitly punts on). Preserves the source verbatim through
+/// any edit to surrounding statements; the kernel makes no guarantees
 /// about edits that would target opaque content.
 class OpaqueStatementNode extends StatementNode {
   const OpaqueStatementNode({

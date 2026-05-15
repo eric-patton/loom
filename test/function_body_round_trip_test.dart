@@ -89,7 +89,7 @@ void main() {
       // body has 5 statements; index 4 is the return. Insert at 4 to
       // place the new statement BEFORE return.
       final edit = FunctionBodyEditPlanner.addStatement(
-        parent: body,
+        block: body.body,
         index: 4,
         newStatementSource: 'log(\'success: \$id\');',
         source: source,
@@ -111,7 +111,7 @@ void main() {
       final originalCount = body.statements.length;
 
       final edit = FunctionBodyEditPlanner.addStatement(
-        parent: body,
+        block: body.body,
         index: originalCount,
         newStatementSource: 'audit(id);',
         source: source,
@@ -142,6 +142,88 @@ void main() {
       // The saveUser call is now at index 2.
       final saveStmt = reparsed.statements[2] as ExpressionStatementNode;
       expect(saveStmt.expressionSource, startsWith('saveUser('));
+    });
+  });
+
+  group('if-statement edits (M8.0b)', () {
+    test('idempotence on function_body_with_if.dart', () {
+      final source = _loadFixture('function_body_with_if.dart');
+      final body = parseFunctionBody(source);
+      final result = applySourceEdits(source, const <SourceEdit>[]);
+      expect(result, equals(source));
+      expect(body.statements, isNotEmpty);
+    });
+
+    test('changeIfCondition rewrites the condition expression', () {
+      final source = _loadFixture('function_body_with_if.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[2] as IfStatementNode;
+      expect(ifStmt.conditionSource, equals('clamped >= 90'));
+
+      final edit = FunctionBodyEditPlanner.changeIfCondition(
+        statement: ifStmt,
+        newConditionSource: 'clamped == 100',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedIf = reparsed.statements[2] as IfStatementNode;
+      expect(reparsedIf.conditionSource, equals('clamped == 100'));
+    });
+
+    test('addStatement into the then-block (recursive)', () {
+      final source = _loadFixture('function_body_with_if.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[2] as IfStatementNode;
+      expect(ifStmt.thenBlock.statements, hasLength(2));
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: ifStmt.thenBlock,
+        index: 0,
+        newStatementSource: 'audit(clamped);',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedIf = reparsed.statements[2] as IfStatementNode;
+      expect(reparsedIf.thenBlock.statements, hasLength(3));
+      final first =
+          reparsedIf.thenBlock.statements.first as ExpressionStatementNode;
+      expect(first.expressionSource, equals('audit(clamped)'));
+    });
+
+    test('removeStatement from the else-block', () {
+      // Add another statement to else, then remove it.
+      final source = _loadFixture('function_body_with_if.dart');
+      final body = parseFunctionBody(source);
+      final ifStmt = body.statements[2] as IfStatementNode;
+
+      // First, insert a logging call into the else block (index 0).
+      final addEdit = FunctionBodyEditPlanner.addStatement(
+        block: ifStmt.elseBlock!,
+        index: 0,
+        newStatementSource: 'log(\'lower path\');',
+        source: source,
+      );
+      final intermediate = applySourceEdits(source, [addEdit]);
+
+      // Re-parse, remove the log call.
+      final intermediateBody = parseFunctionBody(intermediate);
+      final intermediateIf = intermediateBody.statements[2] as IfStatementNode;
+      expect(intermediateIf.elseBlock!.statements, hasLength(2));
+
+      final logStmt = intermediateIf.elseBlock!.statements.first;
+      final removeEdit = FunctionBodyEditPlanner.removeStatement(
+        statement: logStmt,
+        source: intermediate,
+      );
+      final finalSource = applySourceEdits(intermediate, [removeEdit]);
+
+      final finalBody = parseFunctionBody(finalSource);
+      final finalIf = finalBody.statements[2] as IfStatementNode;
+      expect(finalIf.elseBlock!.statements, hasLength(1));
+      expect(finalIf.elseBlock!.statements.first, isA<ReturnStatementNode>());
     });
   });
 

@@ -8,7 +8,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0a — function-body modeling (first slice: sequential statements + return)
+**Active milestone:** M8.0b — control flow: if/else (with recursive block editing)
 **Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
@@ -33,7 +33,34 @@ Parameter add/remove are deliberately deferred — they require placement logic 
 
 CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
 
-**M8.0a surface added (just now):** the third entirely new shape after constructor trees and class-member lists. Models the *inside* of a function body — the sequence of statements that constitute the code.
+**M8.0b surface added (just now):** extends M8.0a with `if (cond) { ... } else { ... }` modeling, plus a refactor that makes statement-list operations recursive into nested blocks.
+
+**Refactor: extract `StatementBlock`** from `FunctionBodyModel`. The old model directly held `bodySpan`/`innerSpan`/`statements`; now it holds `body: StatementBlock`, and `StatementBlock` is the shared concept of "a `{ ... }` block of statements with brace spans." Backward-compat shortcuts (`statements`, `bodySpan`, `innerSpan`) preserve M8.0a API. This refactor was necessary because `IfStatementNode`'s then/else clauses are themselves blocks of statements, and forcing the same code path for function-body and nested-block editing required a shared shape.
+
+**`IfStatementNode` added** to the `StatementNode` sealed type. Captures:
+- `ifKeywordSpan`, `conditionSource`, `conditionSpan` — the `if (...)` header.
+- `thenBlock: StatementBlock` — always a braced block in M8.0b.
+- `elseKeywordSpan: SourceSpan?`, `elseBlock: StatementBlock?` — optional braced `else { ... }`.
+
+**Parser scope (deliberately tight):** only fully-braced if/else are modeled. Bare-statement bodies (`if (cond) doIt();`) and `else if` chains fall through to `OpaqueStatementNode`. Most real-world Dart uses braces; `else if` ships as M8.0c. The parser's `_tryConvertIfStatement` returns `null` for unsupported shapes, falling through to the opaque path cleanly.
+
+**Edit ops:**
+- `addStatement` / `removeStatement` / `replaceStatement` now take `StatementBlock` (not `FunctionBodyModel`) — same code path works for the function body OR any nested then/else block. Caller just passes the relevant block.
+- New `changeIfCondition(statement, newConditionSource)` replaces the condition expression in-place (preserves the surrounding parens).
+
+**Validation:** 274 tests green (was 263, +11 new across parse + round-trip). New fixture `function_body_with_if.dart` exercises a `classify(score)` function with a 2-statement then-block and a 1-statement else-block. Tests include recursive `addStatement` into a nested then-block and `removeStatement` from an else-block — confirming the `StatementBlock`-taking ops actually work without special-casing the outer body.
+
+**Deliberately deferred (M8.0c+):**
+- `else if` chains (currently the entire if-statement opaques).
+- Bare-statement if bodies.
+- For loops (`for (var i = ...)`, `for (var x in ...)`).
+- While / do-while.
+- Switch (including pattern matching).
+- Try / catch / finally.
+- Throw, yield, break, continue.
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b series (18 commits total). Then M8.0c — additional control flow as concrete fixtures demand. The `StatementBlock` extraction makes adding for/while/etc. structurally similar to how `IfStatementNode` was added in M8.0b.
 
 **New separate sealed hierarchy** (`StatementNode`), independent from `ModelNode` (constructor trees) and `ClassMember` (flat class structure). Three modeled statement kinds + opaque catch-all:
 - `VariableDeclarationStatementNode` — `var x = 1; final int y = 2; late T z;` etc. with `typeName`/`typeSpan`, qualifier flags, and a list of `DeclaredVariable`s (handles multi-variable declarations like `var a = 1, b = 2;`).
@@ -241,7 +268,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M7.5** (shipped 2026-05-14) | Qualifier editing. Added 10 keyword-span fields across the class-structure node types; 16 add/remove operations covering field final/late/static, method static, ctor const/factory, parameter required/final. Insertion respects canonical ordering. M7 is now feature-complete for class-structure editing. | Closes the entity-modeling surface — toggling `static`, `late`, `final`, `required` etc. is a common need for Freezed / json_serializable / Drift tooling. |
 | Future M7.x | Ad-hoc additions only if real fixtures demand: adding type to untyped fields/params, adding initializer to bare fields, adding default to bare params, unnamed→named ctor conversion, multi-variable field decls beyond best-effort, member reordering. | Long-tail edge cases. |
 | **M8.0a** (shipped 2026-05-14) | Function-body modeling, first slice. Sealed `StatementNode = VariableDeclarationStatementNode | ExpressionStatementNode | ReturnStatementNode | OpaqueStatementNode`. `parseFunctionBody` finds a function body by default or by explicit span. `FunctionBodyEditPlanner` — 7 ops covering statement list, variable decls, return expression. ~700 LOC. | Sequential business logic — `do A; do B; return X`. Most OutSystems-style flows are sequential procedural code. |
-| M8.0b+ | Control flow (if/for/while/switch/try), expression-internal structure, qualifier editing for vars, statement reordering, nested function declarations. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0b** (shipped 2026-05-14) | Control flow: `if (cond) { ... } else { ... }`. Extracted `StatementBlock` so statement-list ops (addStatement/removeStatement/replaceStatement) work recursively on nested then/else bodies. Bare-statement bodies and `else if` chains fall through to OpaqueStatementNode (M8.0c). | Basic conditional logic — most OutSystems "decision" nodes map to an if/else. |
+| M8.0c+ | Remaining control flow: else-if chains, for/while/do, switch (with patterns), try/catch/finally, throw/yield. Plus expression-internal structure, qualifier editing for local vars, statement reordering. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -324,6 +352,42 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M8.0b — control flow: if/else with recursive block editing
+**Worked on:** First control-flow slice on top of M8.0a's sequential-statement model. Added `IfStatementNode` plus a refactor that makes statement-list editing work uniformly on function bodies and nested if-then/if-else blocks.
+
+**Architectural refactor: extract `StatementBlock`.** M8.0a's `FunctionBodyModel` directly held `bodySpan`/`innerSpan`/`statements`. M8.0b pulls those into a separate `StatementBlock` class — the model becomes `FunctionBodyModel { body: StatementBlock, diagnostics }`, and `StatementBlock` is reused for `IfStatementNode.thenBlock` and `elseBlock`. The same code path handles statement editing in either context.
+
+Backward-compat shortcuts (`statements`, `bodySpan`, `innerSpan`) on `FunctionBodyModel` preserve M8.0a callers — no breaking changes from the refactor. The edit planner ops (`addStatement` / `removeStatement` / `replaceStatement`) DID change signature: `parent: FunctionBodyModel` → `block: StatementBlock`. Tests updated; nothing else depends on it.
+
+**`IfStatementNode`** captures:
+- `ifKeywordSpan` — for future qualifier-style edits
+- `conditionSource`, `conditionSpan` — condition as raw text (no expression modeling yet)
+- `thenBlock: StatementBlock` — always present, always braced
+- `elseKeywordSpan: SourceSpan?` — null if no else
+- `elseBlock: StatementBlock?` — null if no else clause
+
+**Tight parser scope:** only fully-braced `if (cond) { ... } else { ... }` is modeled. Three rejection paths, all falling through to `OpaqueStatementNode`:
+1. Then-statement is not a `Block` (e.g. `if (cond) doIt();`)
+2. Else-statement is not a `Block` or null (e.g. `else if (...)`)
+3. The whole IfStatement when either of the above holds
+
+Most real-world Dart uses braces; `else if` (very common) ships as M8.0c. The opaque fallback keeps the parser total — no surprising throws.
+
+**New edit op: `changeIfCondition(statement, newSource)`.** Replaces the condition expression in-place. Note: the new source should NOT include parens — those are preserved verbatim.
+
+**Recursive editing works.** Two tests demonstrate this concretely:
+- `addStatement(block: ifStmt.thenBlock, ...)` inserts a new statement INSIDE the then-block. The same `addStatement` function is used as on the top-level body.
+- `removeStatement(statement: stmt, source: ...)` works on a statement inside the else-block. The deletion logic doesn't care that the statement is nested.
+
+**Validation:** 274 tests green (was 263, +11 new). 5 parsing tests, 5 round-trip tests including recursive add/remove inside if-bodies, plus 2 negative cases verifying that bare-statement and else-if shapes correctly fall through to opaque. `dart analyze` and `dart format` clean.
+
+**Learned:**
+- **The `StatementBlock` extraction was the right call.** Without it, I'd have ended up with parallel `addStatement` / `removeStatement` operations for "function-body" and "if-then/else" — same code, different signatures, accumulating one duplicate pair per control-flow type. With the extraction, M8.0c will add for/while/etc. WITHOUT new edit operations — each new control-flow node just exposes its body as a `StatementBlock` and the existing ops work.
+- **Opaque-on-unsupported-shape stays a powerful pattern.** Real-world code has elseIf and bare bodies. Modeling them later is fine; the current parser handles them gracefully by falling through. Users get most of the if/else value (braced ones) immediately without the kernel having to be complete first.
+- **The `_tryConvert*` returning-null pattern is cleaner than throwing.** The parser tries to model an IfStatement; returns null if it can't; caller falls through to opaque. No exception-based control flow.
+
+**Next:** Eric review of M6 + M7 + M8.0a + M8.0b series. Then M8.0c — additional control flow. The `StatementBlock` foundation makes for/while/etc. structurally similar to how `IfStatementNode` was added here.
 
 ### [2026-05-14] M8.0a — function-body modeling (sequential statements + return)
 **Worked on:** Eric picked M8.0a — sequential statements + return, no control flow yet. Third entirely new model shape in the kernel after constructor trees (M1–M6.2) and class-member lists (M7). Models the *inside* of a function body: what's between the `{` and `}` of a method, constructor, top-level function, or anonymous closure.
