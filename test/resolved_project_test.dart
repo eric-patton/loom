@@ -257,6 +257,111 @@ environment:
       }
     });
 
+    test('resolveSymbolPrecise — finds top-level class in same file', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'shapes.dart'))
+        ..writeAsStringSync('class Circle {}\nclass Square {}\n');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        final loc = await project.resolveSymbolPrecise(
+          filePath: file.absolute.path,
+          name: 'Circle',
+        );
+        expect(loc, isNotNull);
+        expect(loc!.name, equals('Circle'));
+        expect(loc.filePath, equals(file.absolute.path));
+        expect(loc.elementKind.toLowerCase(), equals('class'));
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('resolveSymbolPrecise — finds imported symbol', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final helper = File(p.join(tempDir.path, 'lib', 'helper.dart'))
+        ..writeAsStringSync('class Util {}\n');
+      final main = File(p.join(tempDir.path, 'lib', 'main.dart'))
+        ..writeAsStringSync('''
+import 'helper.dart';
+void main() { Util(); }
+''');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        final loc = await project.resolveSymbolPrecise(
+          filePath: main.absolute.path,
+          name: 'Util',
+        );
+        expect(loc, isNotNull);
+        // The DECLARATION file is helper.dart, even though we asked
+        // from main.dart's perspective.
+        expect(loc!.filePath, equals(helper.absolute.path));
+        expect(loc.elementKind.toLowerCase(), equals('class'));
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('resolveSymbolPrecise — finds SDK symbol from dart:core', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'use.dart'))
+        ..writeAsStringSync('int x = 0;\n');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        // `int` is from dart:core — name-based resolution couldn't reach
+        // this. Element-precise resolution does.
+        final loc = await project.resolveSymbolPrecise(
+          filePath: file.absolute.path,
+          name: 'int',
+        );
+        expect(loc, isNotNull);
+        expect(loc!.name, equals('int'));
+        // The element kind for int is 'class' (it's an Int class).
+        expect(loc.elementKind.toLowerCase(), equals('class'));
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('resolveSymbolPrecise — returns null for unknown name', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'empty.dart'))
+        ..writeAsStringSync('class A {}\n');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        expect(
+          await project.resolveSymbolPrecise(
+              filePath: file.absolute.path, name: 'Nope'),
+          isNull,
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
     test('throws StateError for a path outside any included root', () async {
       // Create the project rooted at tempDir.
       Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);

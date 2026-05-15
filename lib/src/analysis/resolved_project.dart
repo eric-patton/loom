@@ -126,6 +126,53 @@ class ResolvedProject {
     return null;
   }
 
+  /// Returns the element-precise location of a top-level symbol [name]
+  /// as seen from [filePath].
+  ///
+  /// "Element-precise" means it uses the analyzer's resolved name
+  /// lookup (the same logic the compiler uses) — so it correctly
+  /// distinguishes between two same-named classes from different
+  /// imports, and accounts for show/hide combinators, prefixes,
+  /// shadowing, and re-exports.
+  ///
+  /// Returns null when:
+  ///   * The resolved unit isn't available.
+  ///   * No top-level symbol with [name] is in scope from [filePath].
+  ///   * The matched element doesn't have an addressable declaration
+  ///     (e.g., it's synthetic, from a summary, or in the SDK).
+  ///
+  /// This is the type-aware counterpart to M9.3's
+  /// `ProjectModel.resolveSymbol` — same intent, more precision.
+  Future<ResolvedSymbolLocation?> resolveSymbolPrecise({
+    required String filePath,
+    required String name,
+  }) async {
+    final result = await getResolvedUnit(filePath);
+    if (result == null) return null;
+    // Scope lives on the LibraryFragment (the file's compilation unit
+    // representation), not on the LibraryElement.
+    final lookup = result.libraryFragment.scope.lookup(name);
+    final element = lookup.getter ?? lookup.setter;
+    if (element == null) return null;
+
+    final fragment = element.firstFragment;
+    final libraryFragment = fragment.libraryFragment;
+    if (libraryFragment == null) return null;
+    final source = libraryFragment.source;
+
+    final nameOffset = fragment.nameOffset;
+    final fragmentName = fragment.name;
+    if (nameOffset == null || fragmentName == null) return null;
+
+    return ResolvedSymbolLocation(
+      filePath: source.fullName,
+      name: fragmentName,
+      nameOffset: nameOffset,
+      nameLength: fragmentName.length,
+      elementKind: element.kind.name,
+    );
+  }
+
   /// Returns the static type of the expression at [offset] within
   /// [filePath], or null if no expression of that exact span is found.
   ///
@@ -145,6 +192,50 @@ class ResolvedProject {
     if (expr == null) return null;
     return expr.staticType?.getDisplayString();
   }
+}
+
+/// The element-precise location of a top-level symbol resolved
+/// through the analyzer's full semantic pipeline.
+///
+/// Differs from M9.3's `SymbolLocation` (which is name-based and
+/// produced by `ProjectModel.resolveSymbol`) in three ways:
+///   * Backed by the actual `Element` the analyzer matched — no
+///     false positives from same-named symbols in different
+///     imports.
+///   * Includes the analyzer's `elementKind` label ("class",
+///     "topLevelFunction", etc.).
+///   * Works for symbols from `dart:*` and `package:*` libraries
+///     when the package is in the analysis config, which the
+///     name-based resolver can't reach.
+class ResolvedSymbolLocation {
+  const ResolvedSymbolLocation({
+    required this.filePath,
+    required this.name,
+    required this.nameOffset,
+    required this.nameLength,
+    required this.elementKind,
+  });
+
+  /// Absolute path of the file that DECLARES the symbol.
+  final String filePath;
+
+  /// The declared name as the analyzer sees it.
+  final String name;
+
+  /// Offset of the name token within the declaring file.
+  final int nameOffset;
+
+  /// Length of the name token.
+  final int nameLength;
+
+  /// Analyzer's element-kind label — `'class'`, `'mixin'`,
+  /// `'topLevelFunction'`, `'topLevelVariable'`, `'enum'`,
+  /// `'getter'`, `'setter'`, etc.
+  final String elementKind;
+
+  @override
+  String toString() =>
+      'ResolvedSymbolLocation($name @ $filePath, kind=$elementKind)';
 }
 
 class _ExpressionAtOffsetVisitor extends GeneralizingAstVisitor<void> {
