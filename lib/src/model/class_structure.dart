@@ -43,7 +43,9 @@ class ClassStructureNode {
     required this.classSpan,
     required this.bodySpan,
     required List<ClassMember> members,
-  }) : members = List.unmodifiable(members);
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  })  : members = List.unmodifiable(members),
+        annotations = List.unmodifiable(annotations);
 
   final String className;
 
@@ -58,6 +60,11 @@ class ClassStructureNode {
   /// Class members in source order. Pattern-match on member type to
   /// distinguish fields, methods, constructors, and opaque entries.
   final List<ClassMember> members;
+
+  /// Class-level annotations (`@freezed`, `@JsonSerializable()`, etc.)
+  /// in source order. M7.2 captures them; edit operations on them are
+  /// deferred to M7.3+.
+  final List<AnnotationNode> annotations;
 
   /// Backward-compat view of just the field members. Pre-M7.1 callers
   /// that iterated `node.fields` keep working.
@@ -91,6 +98,11 @@ sealed class ClassMember {
   /// Span of the full member declaration, from the first qualifier (or
   /// type / annotation) to the trailing `;` or `}`.
   SourceSpan get sourceSpan;
+
+  /// Annotations attached to this member (`@override`, `@JsonKey(name: 'x')`,
+  /// etc.), in source order. Empty when the member has no annotations.
+  /// M7.2 captures annotations; M7.3+ may add edit operations on them.
+  List<AnnotationNode> get annotations;
 }
 
 /// A modeled field declaration within a class.
@@ -101,7 +113,7 @@ sealed class ClassMember {
 /// milestones may promote initializers to typed `PropertyValue`s for
 /// cases where literal recognition is useful.
 class ClassFieldNode extends ClassMember {
-  const ClassFieldNode({
+  ClassFieldNode({
     required this.name,
     required this.nameSpan,
     required this.typeName,
@@ -113,7 +125,8 @@ class ClassFieldNode extends ClassMember {
     required this.isLate,
     required this.isStatic,
     required this.sourceSpan,
-  });
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  }) : annotations = List.unmodifiable(annotations);
 
   /// Field name (`name` in `final String name = 'x';`).
   final String name;
@@ -146,6 +159,9 @@ class ClassFieldNode extends ClassMember {
   final SourceSpan sourceSpan;
 
   @override
+  final List<AnnotationNode> annotations;
+
+  @override
   String toString() {
     final qualifiers = <String>[
       if (isStatic) 'static',
@@ -170,7 +186,7 @@ class ClassFieldNode extends ClassMember {
 /// they can be replaced wholesale but not individually edited. That's
 /// M7.2 territory.
 class ClassMethodNode extends ClassMember {
-  const ClassMethodNode({
+  ClassMethodNode({
     required this.name,
     required this.nameSpan,
     required this.returnType,
@@ -186,7 +202,10 @@ class ClassMethodNode extends ClassMember {
     required this.isAsync,
     required this.isGenerator,
     required this.sourceSpan,
-  });
+    List<ClassParameterNode> parameters = const <ClassParameterNode>[],
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  })  : parameters = List.unmodifiable(parameters),
+        annotations = List.unmodifiable(annotations);
 
   /// Method name (e.g. `'isAdult'`, `'fullName'` for a getter,
   /// `'+'` for an operator).
@@ -221,6 +240,15 @@ class ClassMethodNode extends ClassMember {
   @override
   final SourceSpan sourceSpan;
 
+  /// Individual parameters (M7.2). Empty when [parametersSpan] is null
+  /// (getters) or when the param list is `()`. The raw [parametersSource]
+  /// is kept alongside for backward compat and for callers who want the
+  /// verbatim text including parens / brackets.
+  final List<ClassParameterNode> parameters;
+
+  @override
+  final List<AnnotationNode> annotations;
+
   @override
   String toString() {
     final qualifiers = <String>[
@@ -250,7 +278,7 @@ class ClassMethodNode extends ClassMember {
 /// and body span. Parameter and initializer structure are NOT modeled —
 /// they round-trip verbatim. That's M7.2+ territory.
 class ClassConstructorNode extends ClassMember {
-  const ClassConstructorNode({
+  ClassConstructorNode({
     required this.className,
     required this.classNameSpan,
     required this.namedConstructorName,
@@ -263,7 +291,10 @@ class ClassConstructorNode extends ClassMember {
     required this.isConst,
     required this.isFactory,
     required this.sourceSpan,
-  });
+    List<ClassParameterNode> parameters = const <ClassParameterNode>[],
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  })  : parameters = List.unmodifiable(parameters),
+        annotations = List.unmodifiable(annotations);
 
   /// The class name as it appears in the constructor declaration.
   /// Always present — Dart constructors always lead with the class name.
@@ -296,6 +327,12 @@ class ClassConstructorNode extends ClassMember {
   @override
   final SourceSpan sourceSpan;
 
+  /// Individual parameters (M7.2). Same role as on `ClassMethodNode`.
+  final List<ClassParameterNode> parameters;
+
+  @override
+  final List<AnnotationNode> annotations;
+
   @override
   String toString() {
     final qualifiers = <String>[
@@ -325,7 +362,148 @@ class OpaqueClassMember extends ClassMember {
   @override
   final SourceSpan sourceSpan;
 
+  /// Opaque members can't have modeled annotations — by definition the
+  /// kernel didn't decode the member at all.
+  @override
+  List<AnnotationNode> get annotations => const <AnnotationNode>[];
+
   @override
   String toString() =>
       'OpaqueClassMember(@${sourceSpan.offset}+${sourceSpan.length})';
+}
+
+/// A modeled parameter within a method or constructor parameter list.
+///
+/// M7.2 captures full parameter shape — name, type, default value, and
+/// kind flags — replacing the M7.1 `parametersSource: String` blob that
+/// only allowed wholesale param-list replacement. Now individual
+/// parameters can be added, removed, renamed, retyped, or have their
+/// default values changed.
+///
+/// Function-typed parameters (`void Function() callback`) and
+/// generic-function-typed parameters round-trip via the raw
+/// [sourceSpan] but their internal structure isn't modeled — too rare
+/// in real-world entity/data classes to justify the surface in M7.2.
+class ClassParameterNode {
+  ClassParameterNode({
+    required this.name,
+    required this.nameSpan,
+    required this.typeName,
+    required this.typeSpan,
+    required this.defaultValueSource,
+    required this.defaultValueSpan,
+    required this.isRequired,
+    required this.isNamed,
+    required this.isPositional,
+    required this.isOptional,
+    required this.isThis,
+    required this.isSuper,
+    required this.isFinal,
+    required this.isConst,
+    required this.sourceSpan,
+    List<AnnotationNode> annotations = const <AnnotationNode>[],
+  }) : annotations = List.unmodifiable(annotations);
+
+  /// Parameter name. May be empty for unnamed parameters (e.g. inside
+  /// generic function-type aliases) — those don't appear in well-formed
+  /// class members so the model assumes non-empty in practice.
+  final String name;
+  final SourceSpan nameSpan;
+
+  /// Declared type as raw source text, or null if the parameter is
+  /// untyped (`{required this.foo}` style, where the type comes from
+  /// the field). For function-typed params this is the return type of
+  /// the function (rare in entity classes).
+  final String? typeName;
+  final SourceSpan? typeSpan;
+
+  /// Default value as raw source text (`'foo'`, `42`, `const []`), or
+  /// null when the parameter has no default. Excludes the `=` separator;
+  /// span starts at the value expression.
+  final String? defaultValueSource;
+  final SourceSpan? defaultValueSpan;
+
+  /// Required: prefixed with `required` keyword (or positional, which is
+  /// implicitly required). NOTE: a named parameter annotated with the
+  /// older `@required` does NOT set this; modern code uses the keyword.
+  final bool isRequired;
+
+  /// Named: appears inside `{ ... }` braces. May be required or optional.
+  final bool isNamed;
+
+  /// Positional: appears outside `{ ... }`. May be required or optional.
+  final bool isPositional;
+
+  /// Optional: appears inside `[ ... ]` (positional optional) or `{ ... }`
+  /// (named optional). Mutually exclusive with required for positional;
+  /// named params are optional unless `required` is present.
+  final bool isOptional;
+
+  /// `this.x` form — initializing formal that's tied to a class field.
+  final bool isThis;
+
+  /// `super.x` form — forwarding parameter to a superclass constructor.
+  final bool isSuper;
+
+  final bool isFinal;
+  final bool isConst;
+
+  /// Span of the full parameter declaration including type, name, and
+  /// any default value, but excluding inter-parameter separators (`,`)
+  /// and surrounding delimiters (`(`, `[`, `{`).
+  final SourceSpan sourceSpan;
+
+  final List<AnnotationNode> annotations;
+
+  @override
+  String toString() {
+    final mods = <String>[
+      if (isRequired && isNamed) 'required',
+      if (isFinal) 'final',
+      if (isConst) 'const',
+    ];
+    final prefix = isThis ? 'this.' : (isSuper ? 'super.' : '');
+    final type = typeName ?? '';
+    final def = defaultValueSource == null ? '' : ' = $defaultValueSource';
+    return 'ClassParameterNode(${mods.join(' ')}'
+        '${mods.isNotEmpty ? ' ' : ''}'
+        '$type${type.isNotEmpty ? ' ' : ''}'
+        '$prefix$name$def)';
+  }
+}
+
+/// A modeled annotation attached to a class member or parameter.
+/// `@override`, `@JsonKey(name: 'foo')`, `@freezed`, etc.
+///
+/// M7.2 captures annotations as part of the surrounding member's
+/// `annotations` list; the annotation itself isn't included in the
+/// member's `sourceSpan` calculations because Dart's analyzer treats
+/// annotations as preceding the member declaration. Edit operations
+/// on annotations themselves (add/remove/rename) are deferred to M7.3+.
+class AnnotationNode {
+  const AnnotationNode({
+    required this.name,
+    required this.nameSpan,
+    required this.argumentsSource,
+    required this.argumentsSpan,
+    required this.sourceSpan,
+  });
+
+  /// The annotation name as a single identifier (`'override'`,
+  /// `'JsonKey'`, `'freezed'`). For prefixed annotations
+  /// (`@meta.required`), this captures the full dotted source text.
+  final String name;
+  final SourceSpan nameSpan;
+
+  /// Argument-list source text including parens (`'()'`,
+  /// `"(name: 'x')"`), or null when the annotation has no parens
+  /// (bare `@override`).
+  final String? argumentsSource;
+  final SourceSpan? argumentsSpan;
+
+  /// Span of the full annotation including the leading `@`.
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'AnnotationNode(@$name${argumentsSource ?? ''})';
 }

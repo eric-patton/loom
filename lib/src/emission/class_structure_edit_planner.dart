@@ -25,11 +25,24 @@ import 'source_edit.dart';
 ///   * `addMember` — generic member-append at end of class body.
 ///     `addField` is a thin wrapper that delegates to this.
 ///
-/// Deliberately omitted (incremental — ship in M7.2+ as fixtures demand):
-///   * Adding a type annotation to an untyped field
+/// M7.2 surface additions (parameter editing):
+///   * `renameParameter` — change a parameter's name token
+///   * `changeParameterType` — replace a parameter's type (requires
+///     existing type)
+///   * `changeParameterDefault` — replace a parameter's default value
+///     (requires existing default)
+///
+/// Deliberately omitted (incremental — ship in M7.2.x+ as fixtures
+/// demand):
+///   * Adding/removing parameters (requires placement logic for
+///     positional vs `[optional]` vs `{named}` sections, comma + bracket
+///     handling)
+///   * Edits to parameter qualifiers (final / const / required)
+///   * Adding a type annotation to an untyped field or parameter
 ///   * Adding an initializer to a bare field
+///   * Adding a default to a parameter without one
 ///   * Renaming a constructor (named ctor segment editing)
-///   * Adding/removing/editing parameters
+///   * Annotation editing (add / remove / replace annotations)
 ///   * Edits to qualifiers (final/var/late/static/const/factory)
 ///   * Reordering members
 class ClassStructureEditPlanner {
@@ -140,6 +153,62 @@ class ClassStructureEditPlanner {
       offset: span.offset,
       length: span.length,
       replacement: newReturnType,
+    );
+  }
+
+  // --------------------- Parameter operations ---------------------
+
+  static SourceEdit renameParameter({
+    required ClassParameterNode parameter,
+    required String newName,
+  }) =>
+      SourceEdit(
+        offset: parameter.nameSpan.offset,
+        length: parameter.nameSpan.length,
+        replacement: newName,
+      );
+
+  /// Replaces a parameter's type annotation with `newType`. Requires the
+  /// parameter to already have an explicit type; throws otherwise
+  /// (adding a type to an untyped parameter — e.g. `{required this.x}` —
+  /// requires insertion logic deferred to M7.2.x).
+  static SourceEdit changeParameterType({
+    required ClassParameterNode parameter,
+    required String newType,
+  }) {
+    final span = parameter.typeSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" has no type annotation; adding '
+        'one is not supported in M7.2.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newType,
+    );
+  }
+
+  /// Replaces a parameter's default value with `newDefaultSource`.
+  /// Requires the parameter to already have a default; throws otherwise
+  /// (adding a default to a parameter without one requires inserting
+  /// the `=` separator and is deferred to M7.2.x).
+  static SourceEdit changeParameterDefault({
+    required ClassParameterNode parameter,
+    required String newDefaultSource,
+  }) {
+    final span = parameter.defaultValueSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Parameter "${parameter.name}" has no default value; adding one '
+        'is not supported in M7.2.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newDefaultSource,
     );
   }
 

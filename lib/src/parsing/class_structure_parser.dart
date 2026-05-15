@@ -92,6 +92,7 @@ ClassStructureModel parseClassStructure(String source) {
         classSpan: classSpan,
         bodySpan: bodySpan,
         members: members,
+        annotations: _captureAnnotations(declaration.metadata, source),
       ),
       diagnostics: diagnostics,
     );
@@ -103,7 +104,7 @@ ClassStructureModel parseClassStructure(String source) {
 /// Walks a `FieldDeclaration` and appends one `ClassFieldNode` per
 /// declared variable. A single source declaration may declare multiple
 /// variables (`final String a, b;`), each becoming its own node; all
-/// share the outer declaration span.
+/// share the outer declaration span and annotations.
 void _appendFields(
   FieldDeclaration member,
   String source,
@@ -121,6 +122,7 @@ void _appendFields(
   final isVar = keyword != null && keyword.keyword == Keyword.VAR;
   final isLate = member.fields.lateKeyword != null;
   final isStatic = member.isStatic;
+  final annotations = _captureAnnotations(member.metadata, source);
 
   for (final variable in member.fields.variables) {
     final initializer = variable.initializer;
@@ -153,6 +155,7 @@ void _appendFields(
         isLate: isLate,
         isStatic: isStatic,
         sourceSpan: sharedSpan,
+        annotations: annotations,
       ),
     );
   }
@@ -196,6 +199,10 @@ ClassMethodNode _buildMethodNode(MethodDeclaration member, String source) {
     isAsync: body.isAsynchronous,
     isGenerator: body.isGenerator,
     sourceSpan: SourceSpan(offset: member.offset, length: member.length),
+    parameters: params == null
+        ? const <ClassParameterNode>[]
+        : _captureParameters(params, source),
+    annotations: _captureAnnotations(member.metadata, source),
   );
 }
 
@@ -267,5 +274,109 @@ ClassConstructorNode _buildConstructorNode(
     isConst: member.constKeyword != null,
     isFactory: member.factoryKeyword != null,
     sourceSpan: SourceSpan(offset: member.offset, length: member.length),
+    parameters: _captureParameters(params, source),
+    annotations: _captureAnnotations(member.metadata, source),
   );
+}
+
+/// Captures each `FormalParameter` in a parameter list as a
+/// `ClassParameterNode`. The analyzer 13 surface exposes most of what we
+/// need on the base `FormalParameter` type (`name`, `type`, `defaultClause`,
+/// kind flags) — no need to pattern-match on the concrete subtypes for the
+/// fields M7.2 cares about. Pattern-match is only needed to distinguish
+/// `this.x` (`FieldFormalParameter`) and `super.x` (`SuperFormalParameter`).
+List<ClassParameterNode> _captureParameters(
+  FormalParameterList params,
+  String source,
+) {
+  final out = <ClassParameterNode>[];
+  for (final param in params.parameters) {
+    final nameToken = param.name;
+    if (nameToken == null) {
+      // Unnamed parameter (rare; appears in function-type signatures).
+      // Skip — the parameter still round-trips via the outer span.
+      continue;
+    }
+
+    final typeNode = param.type;
+    final defaultClause = param.defaultClause;
+
+    out.add(
+      ClassParameterNode(
+        name: nameToken.lexeme,
+        nameSpan: SourceSpan(
+          offset: nameToken.offset,
+          length: nameToken.length,
+        ),
+        typeName: typeNode?.toSource(),
+        typeSpan: typeNode == null
+            ? null
+            : SourceSpan(offset: typeNode.offset, length: typeNode.length),
+        defaultValueSource: defaultClause == null
+            ? null
+            : source.substring(
+                defaultClause.value.offset,
+                defaultClause.value.offset + defaultClause.value.length,
+              ),
+        defaultValueSpan: defaultClause == null
+            ? null
+            : SourceSpan(
+                offset: defaultClause.value.offset,
+                length: defaultClause.value.length,
+              ),
+        isRequired: param.isRequired,
+        isNamed: param.isNamed,
+        isPositional: param.isPositional,
+        isOptional: param.isOptional,
+        isThis: param is FieldFormalParameter,
+        isSuper: param is SuperFormalParameter,
+        isFinal: param.isFinal,
+        isConst: param.isConst,
+        sourceSpan: SourceSpan(offset: param.offset, length: param.length),
+        annotations: _captureAnnotations(param.metadata, source),
+      ),
+    );
+  }
+  return out;
+}
+
+/// Captures each `Annotation` in a metadata list as an `AnnotationNode`.
+/// Handles both bare annotations (`@override`) and call-form annotations
+/// (`@JsonKey(name: 'foo')`); for prefixed annotations (`@meta.required`)
+/// the full dotted name is captured as the `name` field.
+List<AnnotationNode> _captureAnnotations(
+  NodeList<Annotation> metadata,
+  String source,
+) {
+  if (metadata.isEmpty) {
+    return const <AnnotationNode>[];
+  }
+  final out = <AnnotationNode>[];
+  for (final ann in metadata) {
+    final nameNode = ann.name;
+    final nameText = source.substring(
+      nameNode.offset,
+      nameNode.offset + nameNode.length,
+    );
+    final args = ann.arguments;
+    final argsSource = args == null
+        ? null
+        : source.substring(args.offset, args.offset + args.length);
+    final argsSpan = args == null
+        ? null
+        : SourceSpan(offset: args.offset, length: args.length);
+    out.add(
+      AnnotationNode(
+        name: nameText,
+        nameSpan: SourceSpan(
+          offset: nameNode.offset,
+          length: nameNode.length,
+        ),
+        argumentsSource: argsSource,
+        argumentsSpan: argsSpan,
+        sourceSpan: SourceSpan(offset: ann.offset, length: ann.length),
+      ),
+    );
+  }
+  return out;
 }

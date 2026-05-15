@@ -16,6 +16,7 @@ void main() {
       'class_simple.dart',
       'class_with_methods.dart',
       'class_with_constructors.dart',
+      'class_freezed_like.dart',
     ]) {
       test('apply([], source) == source on $fixture', () {
         final source = _loadFixture(fixture);
@@ -224,6 +225,93 @@ void main() {
           .whereType<ClassMethodNode>()
           .firstWhere((m) => m.name == 'greet');
       expect(greet.returnType, equals('String'));
+    });
+  });
+
+  group('renameParameter (M7.2)', () {
+    test('renames Person ctor param age -> years', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final ageParam = ctor.parameters.firstWhere((p) => p.name == 'age');
+
+      final edit = ClassStructureEditPlanner.renameParameter(
+        parameter: ageParam,
+        newName: 'years',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // The rename should only touch the parameter NAME, not the
+      // field declaration. `final int age;` stays as-is; the
+      // constructor now references `this.years` which won't resolve
+      // (semantically broken), but the parse should still succeed
+      // syntactically and the edit-planner's job is byte-level
+      // correctness, not semantic validity.
+      final reparsed = parseClassStructure(newSource);
+      final reparsedCtor = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final names = reparsedCtor.parameters.map((p) => p.name).toList();
+      expect(names, contains('years'));
+      expect(names, isNot(contains('age')));
+    });
+  });
+
+  group('changeParameterDefault (M7.2)', () {
+    test('changes age default 0 -> 18', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final age = ctor.parameters.firstWhere((p) => p.name == 'age');
+      expect(age.defaultValueSource, equals('0'));
+
+      final edit = ClassStructureEditPlanner.changeParameterDefault(
+        parameter: age,
+        newDefaultSource: '18',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedAge = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null)
+          .parameters
+          .firstWhere((p) => p.name == 'age');
+      expect(reparsedAge.defaultValueSource, equals('18'));
+    });
+  });
+
+  group('changeParameterType (M7.2)', () {
+    test('changes a typed parameter via class_with_methods', () {
+      // class_with_methods.dart has `isAdult()` with no params, but its
+      // constructor parameters have `required this.firstName` style which
+      // doesn't expose a type. Use class_with_constructors.dart instead
+      // — its operator+ has a typed `Money other` parameter.
+      final source = _loadFixture('class_with_constructors.dart');
+      final model = parseClassStructure(source);
+      final op = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator);
+      final param = op.parameters.firstWhere((p) => p.name == 'other');
+      expect(param.typeName, equals('Money'));
+
+      final edit = ClassStructureEditPlanner.changeParameterType(
+        parameter: param,
+        newType: 'NumericMoney',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedParam = reparsed.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.isOperator)
+          .parameters
+          .firstWhere((p) => p.name == 'other');
+      expect(reparsedParam.typeName, equals('NumericMoney'));
     });
   });
 

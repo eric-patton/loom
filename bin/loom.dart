@@ -122,10 +122,14 @@ void _printClassStructure(ClassStructureModel model, IOSink sink) {
   final methodCount = root.members.whereType<ClassMethodNode>().length;
   final ctorCount = root.members.whereType<ClassConstructorNode>().length;
   final opaqueCount = root.members.whereType<OpaqueClassMember>().length;
+  final classAnnotationsSuffix = root.annotations.isEmpty
+      ? ''
+      : ', annotations=[${root.annotations.map((a) => '@${a.name}').join(', ')}]';
   sink.writeln(
     'ClassStructureModel(class=${root.className}, '
     '$fieldCount field(s), $methodCount method(s), '
-    '$ctorCount ctor(s), $opaqueCount opaque$diagSuffix)',
+    '$ctorCount ctor(s), $opaqueCount opaque'
+    '$classAnnotationsSuffix$diagSuffix)',
   );
   for (final diag in model.diagnostics) {
     sink.writeln(
@@ -138,6 +142,13 @@ void _printClassStructure(ClassStructureModel model, IOSink sink) {
 }
 
 String _describeMember(ClassMember member) {
+  final annotationPrefix = member.annotations.isEmpty
+      ? ''
+      : '${member.annotations.map((a) => '@${a.name}${a.argumentsSource ?? ''}').join(' ')} ';
+  return annotationPrefix + _describeMemberBody(member);
+}
+
+String _describeMemberBody(ClassMember member) {
   switch (member) {
     case final ClassFieldNode f:
       final qualifiers = <String>[

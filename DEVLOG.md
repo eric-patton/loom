@@ -8,37 +8,39 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.1 — class-structure model deepened with methods + constructors
-**Last touched:** 2026-05-14 — extended the class-structure model from "fields only" (M7.0) to full member coverage. Previously-opaque method and constructor declarations now have dedicated node types capturing their signatures.
+**Active milestone:** M7.2 — parameter modeling + annotation capture
+**Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
-**Sealed `ClassMember` hierarchy** added to replace M7.0's `fields` + `opaqueMemberSpans` split:
-- `ClassFieldNode` — unchanged from M7.0; now extends `ClassMember`
-- `ClassMethodNode` — instance methods, static methods, getters, setters, operators. Captures name, return type, parameters (as raw source text), body span, plus `isStatic` / `isAbstract` / `isGetter` / `isSetter` / `isOperator` / `isAsync` / `isGenerator` flags.
-- `ClassConstructorNode` — default, named, factory, and redirecting constructors. Captures named-constructor segment, parameters source, initializer-list source, body span, plus `isConst` / `isFactory`.
-- `OpaqueClassMember` — catch-all for forward-compat (in practice should be empty for well-formed Dart classes).
+**Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
+- `ClassParameterNode` — name, type, default value (each with span), `isRequired` / `isNamed` / `isPositional` / `isOptional` / `isThis` / `isSuper` / `isFinal` / `isConst` flags, plus the parameter's own annotations.
+- Both `ClassMethodNode` and `ClassConstructorNode` now expose a `parameters` list. The raw `parametersSource` is kept alongside for backward compat and for callers who want the verbatim text.
 
-`ClassStructureNode.members` is the new authoritative list (preserves source order). Backward-compat getters `fields` and `opaqueMemberSpans` keep M7.0 callers working.
+**Annotation modeling** — new `AnnotationNode`:
+- Captures name (`'override'` / `'JsonKey'` / `'freezed'`), arguments source (`'(name: \'x\')'` or null for bare `@override`), plus spans.
+- Available on every `ClassMember` (field / method / constructor / opaque) AND on `ClassStructureNode` itself AND on each `ClassParameterNode`.
+- M7.2 captures only; edit operations on annotations are deferred to M7.3+.
 
 **Edit-planner additions:**
-- `renameMethod` — replace name token
-- `changeMethodReturnType` — replace return type (requires existing)
-- `removeMember` — generic; works for any `ClassMember` subtype. `removeField` now wraps it.
-- `addMember` — generic; appends any member declaration at end of class body. `addField` now wraps it.
+- `renameParameter` — replace parameter name span
+- `changeParameterType` — replace type span (requires existing type)
+- `changeParameterDefault` — replace default value span (requires existing default)
 
-**New fixture:** `class_with_constructors.dart` (Money class) exercises four constructor shapes — const default, const named with initializer list, factory with body, factory redirecting `= Money;` — plus operator overload + override method.
+Parameter add/remove are deliberately deferred — they require placement logic for positional vs `[optional]` vs `{named}` sections plus comma + bracket handling. M7.2.1 territory.
 
-**Validation:** 202 tests green (185 → 202, +17 new across parsing + round-trip). dart analyze + dart format clean. Scout against flutter/packages/go_router (117 files): identical to M7.0 — 0 crashes, 0 idempotence failures, 78 class-structure clean parses. The new model captures real method/ctor structure where M7.0 only saw opaque spans.
+**New fixture:** `class_freezed_like.dart` — synthetic Freezed/json_serializable shape with `@freezed` class annotation, `@JsonKey(name: '…')` field annotations, and a factory constructor with `required`/`this.x`/default-value parameters. Doesn't depend on Freezed at runtime; just exercises the shape.
 
-**Naming collision noted:** analyzer 13 exports its own `ClassMember` (an AST node type). The parser imports `package:analyzer/dart/ast/ast.dart hide ClassMember;` to avoid conflict with the loom-side sealed type.
+**Validation:** 210 tests green (202 → 210, +8 new across parsing + round-trip). dart analyze + dart format clean. Scout against flutter/packages/go_router (117 files): identical to M7.1 — 0 crashes, 0 idempotence failures, 78 class-structure clean parses. Same files parse; we capture more inside each.
 
-**Still deferred (parameter and qualifier editing is M7.2 territory):**
-- Adding/removing/editing parameter lists
+CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
+
+**Still deferred:**
+- Parameter add/remove (placement logic for `[]` vs `{}` sections — M7.2.1)
+- Annotation editing (add / remove / replace)
+- Qualifier editing (final/var/late/static/const/factory/async — these are tokens to insert/remove)
 - Renaming named constructors
-- Edits to qualifiers (final/var/late/static/const/factory/async)
-- Annotations (`@override`, `@JsonSerializable()`) — captured as part of `sourceSpan` but not modeled
 - Multi-variable field declarations beyond best-effort
 **Blockers:** none
-**Next action:** **Eric review gate for M6 series + M7.0 + M7.1.** Then M7.2 (parameter / qualifier / annotation editing) or M8 (function-body / statement modeling — the next genuinely new shape).
+**Next action:** **Eric review gate for M6 series + M7.0 + M7.1 + M7.2.** Then M7.3 (annotation editing or qualifier editing) or M8 (function-body / statement modeling — the next genuinely new shape).
 
 ---
 
@@ -206,7 +208,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M6.2** (shipped 2026-05-14) | Third domain catalog: synthetic Pipeline DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, representative of OutSystems-style declarative workflows. Adding the third domain revealed a hidden duplication in the per-domain serializers (the constructor-call serialization was ~100 lines of identical code in two places); extracted as `ConstructorCallSerializer`. | Validated M6.1's scaffolding actually plugs in a third domain — non-shared per-domain code is ~250 LOC total. The literal M6.2 options from the original plan (test framework, MaterialApp configs, Shelf cascades) turned out to be poor fits for "constructor-tree catalog" (test bodies live in function literals, MaterialApp is already a widget, Shelf is a cascade — different shape). Pipeline DSL is the cleanest demonstration of the OutSystems trajectory. |
 | **M7.0** (shipped 2026-05-14) | Class-structure modeling — **fields only**, first slice. Parse a class's field declarations; methods + constructors stay opaque. Separate sealed hierarchy from constructor-tree `ModelNode` (different shape: flat list of members vs. tree of expressions). Five edit operations: rename / changeType / changeInitializer / remove / addField. ~600 LOC new. | OutSystems-style entity modeling for Drift tables, Freezed unions, json_serializable classes — most of those are field-shaped. |
 | **M7.1** (shipped 2026-05-14) | Method signatures + constructors. Sealed `ClassMember = ClassFieldNode | ClassMethodNode | ClassConstructorNode | OpaqueClassMember`. Edit ops added: renameMethod, changeMethodReturnType, removeMember (polymorphic), addMember (polymorphic). Backward-compat `fields` / `opaqueMemberSpans` getters keep M7.0 callers working. | Methods + constructors are the rest of "class shape" — together with M7.0's fields, this covers virtually all real-world class members. |
-| M7.2+ | Parameter editing, qualifier editing (final/var/late/static/const/factory/async), annotation modeling, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
+| **M7.2** (shipped 2026-05-14) | Parameter modeling + annotation capture. `ClassParameterNode` (name / type / default / kind flags) replaces M7.1's `parametersSource` blob. `AnnotationNode` attached to members, parameters, and `ClassStructureNode` itself. Edit ops added: renameParameter, changeParameterType, changeParameterDefault. New fixture `class_freezed_like.dart` exercises the Freezed/json_serializable shape. | Unlocks Freezed-style entity editing where "fields" are actually factory-constructor parameters. Captures the annotations that codegen pipelines key off. |
+| M7.3+ | Parameter add/remove (positional vs `[]` vs `{}` placement, comma handling), annotation editing, qualifier editing (final/var/late/static/const/factory/async), renaming named constructors, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -251,6 +254,7 @@ The first non-tree-shaped model. Validates the kernel handles flat lists of clas
 | `test/fixtures/class_simple.dart` | hand-crafted | 6 | Four fields with varied qualifiers: `final String`, `final int`, nullable `String?`, `late final DateTime`. No methods/constructors. |
 | `test/fixtures/class_with_methods.dart` | hand-crafted | 14 | Class with both fields and non-field members — constructor, getter, instance method, static const field. M7.0 captured opaque spans; M7.1 captures the methods + constructor as modeled nodes. |
 | `test/fixtures/class_with_constructors.dart` | hand-crafted | 22 | M7.1: four constructor shapes — const default, const named with initializer list, factory with body, factory redirecting `= Money;`. Plus operator overload (`operator +`) and override method (`toString`). |
+| `test/fixtures/class_freezed_like.dart` | hand-crafted | 21 | M7.2: synthetic Freezed/json_serializable shape. Class-level `@freezed` annotation, `@JsonKey(name: '…')` field annotations, factory constructor with `required`/`this.x`/default-value parameters. Validates annotation capture + parameter modeling without depending on Freezed at runtime. |
 
 ### Pipeline fixtures (M6.2)
 
@@ -289,6 +293,55 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.2 — parameter modeling + annotation capture
+**Worked on:** Deepened class-structure further by modeling individual parameters within method/constructor parameter lists (replacing M7.1's `parametersSource: String` blob) and by capturing annotations on every modeled scope — class, member, parameter.
+
+**Parameter modeling:**
+- `ClassParameterNode` captures name, type, default value (each with span), plus `isRequired` / `isNamed` / `isPositional` / `isOptional` / `isThis` / `isSuper` / `isFinal` / `isConst` flags and per-parameter annotations.
+- Both `ClassMethodNode` and `ClassConstructorNode` expose a `parameters: List<ClassParameterNode>` list.
+- The raw `parametersSource` is kept alongside for backward compat — callers who just want the verbatim parameter list text still get it; callers who want individual editing get the structured list.
+
+**Annotation modeling:**
+- New `AnnotationNode` captures name (`'override'`, `'JsonKey'`, `'freezed'`, etc.), arguments source (`'(name: \'x\')'`, `null` for bare `@override`), plus spans.
+- Surfaced on: `ClassMember.annotations` (all four concrete subtypes), `ClassStructureNode.annotations` (class-level), `ClassParameterNode.annotations`.
+- M7.2 is capture-only; annotation edit operations are M7.3+.
+
+**Edit-planner additions (parameter ops only — see deferred list):**
+- `renameParameter(parameter, newName)`
+- `changeParameterType(parameter, newType)` — requires existing type
+- `changeParameterDefault(parameter, newDefaultSource)` — requires existing default
+
+Parameter add/remove deliberately deferred to M7.2.1. Adding a parameter requires placement logic: which section does it belong in (required positional / `[optional positional]` / `{named}`), what's the separator pattern, does the existing list have a trailing comma, are the section-delimiter brackets present. Removal has the same complexity in reverse plus an edge case for removing the last named param (do we drop the `{}`?). All solvable; just not for this slice.
+
+**Analyzer 13 surface niceties:**
+- `FormalParameter` base type exposes `name`, `type`, `defaultClause`, plus `isRequired` / `isNamed` / `isPositional` / `isOptional` flags directly. The DefaultFormalParameter wrapper from older analyzers is gone — all parameter kinds (regular, field-formal `this.x`, super-formal `super.x`) share the same base API with subtype-only differences for the `this.`/`super.` discrimination.
+- `Annotation.name` is an `Identifier` (handles prefixed annotations like `@meta.required`); using `name.toSource()` (or substring of source) gives the full dotted text.
+- `AnnotatedNode` interface adds `metadata: NodeList<Annotation>` uniformly to `ClassDeclaration`, every `ClassMember` subtype, and every `FormalParameter` — one capture helper handles all three.
+
+**Fixture:** `test/fixtures/class_freezed_like.dart` — synthetic Freezed-shaped class with `@freezed` class annotation, `@JsonKey(name: '…')` field annotations, and a factory constructor with three parameters using `required` / `this.x` / default-value combinations. Doesn't depend on Freezed at runtime — analyzer parses the syntactic shape regardless of resolution.
+
+**Validation:**
+- 210 tests green (was 202, +8 new across parsing + round-trip).
+- `dart analyze` and `dart format` clean.
+- Scout against `flutter/packages/go_router` (117 files): identical to M7.1 numbers — 0 crashes, 0 idempotence failures, 78 class clean parses.
+- CLI `loom parse` on the new fixture prints:
+  ```
+  ClassStructureModel(class=Person, 3 field(s), 0 method(s), 2 ctor(s), 0 opaque, annotations=[@freezed])
+    @JsonKey(name: 'first_name') final String firstName
+    @JsonKey(name: 'last_name') final String lastName
+    final int age
+    const Person({ required this.firstName, required this.lastName, this.age = 0, })
+    factory Person.guest()
+  ```
+  Annotations and parameter info appear inline; user gets enough information to start writing edit operations against the model.
+
+**Learned:**
+- **Parameter modeling is genuinely useful even without add/remove.** The `renameParameter` and `changeParameterDefault` ops alone unlock most of what entity-modeling tools need — most edits to existing Freezed/json_serializable classes are "rename this field" or "change this field's default" rather than "add a new field."
+- **The analyzer 13 parameter surface is excellent.** Where I'd expected to need pattern-matching on DefaultFormalParameter/SimpleFormalParameter/FieldFormalParameter, almost everything is on the base. Only `isThis` and `isSuper` need `param is FieldFormalParameter` / `is SuperFormalParameter` checks.
+- **Backward-compat fields accumulate cheaply.** `parametersSource` (M7.1) stays alongside `parameters` (M7.2) without any tension — both populated at parse time, both useful for different callers. The cost is a few extra fields per node; the benefit is M7.1 tests and callers keep working without churn.
+
+**Next:** Eric review. Then either M7.2.1 (parameter add/remove with placement logic), M7.3 (annotation edit ops, qualifier edit ops), or pivot to M8 (function-body modeling).
 
 ### [2026-05-14] M7.1 — class-structure: methods + constructors
 **Worked on:** Deepened the class-structure model from M7.0's "fields only" to full member coverage. Methods (including getters/setters/operators) and constructors (including factories) now have dedicated typed nodes.

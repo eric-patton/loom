@@ -270,6 +270,64 @@ void main() {
     });
   });
 
+  group('parseClassStructure on class_freezed_like.dart (M7.2)', () {
+    late ClassStructureNode root;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/class_freezed_like.dart').readAsStringSync();
+      root = parseClassStructure(source).root;
+    });
+
+    test('class-level annotation @freezed captured', () {
+      expect(root.annotations, hasLength(1));
+      expect(root.annotations.first.name, equals('freezed'));
+      expect(root.annotations.first.argumentsSource, isNull);
+    });
+
+    test('annotations captured on class members', () {
+      final firstName = root.members.whereType<ClassFieldNode>().firstWhere(
+            (f) => f.name == 'firstName',
+          );
+      expect(firstName.annotations, hasLength(1));
+      expect(firstName.annotations.first.name, equals('JsonKey'));
+      expect(
+        firstName.annotations.first.argumentsSource,
+        equals("(name: 'first_name')"),
+      );
+    });
+
+    test('constructor parameters captured with kinds + defaults', () {
+      final ctor = root.members.whereType<ClassConstructorNode>().firstWhere(
+            (c) => c.namedConstructorName == null,
+          );
+      expect(ctor.parameters, hasLength(3));
+
+      final firstName = ctor.parameters[0];
+      expect(firstName.name, equals('firstName'));
+      expect(firstName.isThis, isTrue);
+      expect(firstName.isNamed, isTrue);
+      expect(firstName.isRequired, isTrue);
+      expect(firstName.typeName, isNull); // `this.x` form omits the type
+      expect(firstName.defaultValueSource, isNull);
+
+      final age = ctor.parameters[2];
+      expect(age.name, equals('age'));
+      expect(age.isThis, isTrue);
+      expect(age.isNamed, isTrue);
+      expect(age.isRequired, isFalse); // has a default
+      expect(age.defaultValueSource, equals('0'));
+    });
+
+    test('factory Person.guest captured (zero parameters)', () {
+      final guest = root.members.whereType<ClassConstructorNode>().firstWhere(
+            (c) => c.namedConstructorName == 'guest',
+          );
+      expect(guest.isFactory, isTrue);
+      expect(guest.parameters, isEmpty);
+    });
+  });
+
   group('parseClassStructure rejection', () {
     test('throws on a file with no class declaration', () {
       const source = 'void main() {}\n';
