@@ -588,12 +588,15 @@ class ThrowStatementNode extends StatementNode {
 /// NOT statements — they stay opaque inside the host expression's
 /// source (no separate node).
 ///
-/// **Pattern surface (M8.0e scope):** every pattern is captured as
-/// opaque source. Differentiating constant patterns, type-test patterns,
-/// `||` alternatives, object/record/list/map patterns, and so on
-/// requires a dozen new node kinds — deferred until concrete edits
-/// demand it. Same opaque-source-for-now play as `ForStatementNode`'s
-/// header.
+/// **Pattern surface (M8.0f scope):** four pattern kinds are modeled
+/// structurally — `ConstantPatternNode`, `DeclaredVariablePatternNode`,
+/// `WildcardPatternNode`, `LogicalOrPatternNode`. Object / record / list /
+/// map / logical-and / relational / null-check / null-assert / cast /
+/// parenthesized patterns fall through to `OpaquePatternNode`. Each
+/// `SwitchCaseNode` carries BOTH the raw `patternSource` string (M8.0e,
+/// for callers that just want the verbatim text) AND a structured
+/// `pattern: PatternNode` (M8.0f, for callers that want to walk or edit
+/// pattern internals).
 class SwitchStatementNode extends StatementNode {
   SwitchStatementNode({
     required this.switchKeywordSpan,
@@ -666,6 +669,7 @@ class SwitchCaseNode extends SwitchMemberNode {
     required this.keywordSpan,
     required this.patternSource,
     required this.patternSpan,
+    required this.pattern,
     required this.whenKeywordSpan,
     required this.whenGuardSource,
     required this.whenGuardSpan,
@@ -679,8 +683,15 @@ class SwitchCaseNode extends SwitchMemberNode {
   final SourceSpan keywordSpan;
 
   /// Raw source of the pattern (Dart 3) or constant expression (legacy).
+  /// Always present; mirrors the verbatim text. For the structured
+  /// view, use [pattern].
   final String patternSource;
   final SourceSpan patternSpan;
+
+  /// Structured pattern. M8.0f models four pattern kinds (constant,
+  /// declared variable, wildcard, logical-or); other pattern kinds fall
+  /// through to `OpaquePatternNode`. Always non-null.
+  final PatternNode pattern;
 
   /// Span of the `when` keyword token, when a guard is present; null
   /// otherwise. Only valid on pattern cases (Dart 3); legacy `case`
@@ -761,5 +772,181 @@ class OpaqueStatementNode extends StatementNode {
         : sourceText.replaceAll('\n', '\\n');
     return 'OpaqueStatementNode(@${sourceSpan.offset}+${sourceSpan.length}, '
         '"$preview")';
+  }
+}
+
+// ===========================================================================
+// Pattern internals (M8.0f)
+// ===========================================================================
+
+/// Base type for a Dart pattern. Currently used by `SwitchCaseNode.pattern`;
+/// later milestones can reuse this in `if-case` statements, pattern
+/// variable declarations, and pattern assignments.
+///
+/// Sealed across five subtypes. M8.0f models the four highest-value
+/// kinds structurally (constant, declared variable, wildcard, logical-
+/// or); `OpaquePatternNode` is the catch-all for the rest (object,
+/// record, list, map, logical-and, relational, null-check, null-assert,
+/// cast, parenthesized). Same opaque-fallback pattern as
+/// `OpaqueStatementNode`.
+sealed class PatternNode {
+  const PatternNode();
+
+  /// Span of the full pattern in the source.
+  SourceSpan get sourceSpan;
+}
+
+/// A constant pattern — `case 0:`, `case 'foo':`, `case const Foo():`,
+/// `case Colors.red:`. The expression itself is opaque source.
+class ConstantPatternNode extends PatternNode {
+  const ConstantPatternNode({
+    required this.constKeywordSpan,
+    required this.expressionSource,
+    required this.expressionSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the optional leading `const` keyword (for cases like
+  /// `case const Foo():`); null when absent.
+  final SourceSpan? constKeywordSpan;
+
+  /// Raw source of the constant expression.
+  final String expressionSource;
+  final SourceSpan expressionSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ConstantPatternNode($expressionSource)';
+}
+
+/// A declared variable pattern — `case int n:`, `case var x:`,
+/// `case final String s:`. Binds a new variable in the case scope.
+class DeclaredVariablePatternNode extends PatternNode {
+  const DeclaredVariablePatternNode({
+    required this.keywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.name,
+    required this.nameSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the optional leading `var` / `final` keyword; null when
+  /// absent (e.g. `case int n:` has no keyword).
+  final SourceSpan? keywordSpan;
+
+  /// Raw source of the type annotation (e.g. `int`, `List<String>`),
+  /// or null when no type is written (e.g. `case var x:`).
+  final String? typeSource;
+  final SourceSpan? typeSpan;
+
+  /// The name of the bound variable (e.g. `n` in `case int n:`).
+  final String name;
+  final SourceSpan nameSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final type = typeSource ?? '';
+    return 'DeclaredVariablePatternNode('
+        '${type.isNotEmpty ? '$type ' : ''}$name)';
+  }
+}
+
+/// A wildcard pattern — `case _:`, `case int _:`. Matches anything (or
+/// anything of the given type) without binding a variable.
+class WildcardPatternNode extends PatternNode {
+  const WildcardPatternNode({
+    required this.keywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.underscoreSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the optional leading `var` / `final` keyword; null when
+  /// absent.
+  final SourceSpan? keywordSpan;
+
+  /// Raw source of the type annotation (e.g. `int` in `case int _:`),
+  /// or null when no type is written.
+  final String? typeSource;
+  final SourceSpan? typeSpan;
+
+  /// Span of the `_` token itself.
+  final SourceSpan underscoreSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final type = typeSource ?? '';
+    return 'WildcardPatternNode(${type.isNotEmpty ? '$type ' : ''}_)';
+  }
+}
+
+/// A logical-or pattern — `case 1 || 2 || 3:`, `case A || B:`.
+///
+/// The analyzer represents `1 || 2 || 3` as a binary tree
+/// (`(1 || 2) || 3`); this model flattens the chain into a single
+/// ordered list of [operands] plus a list of [operatorSpans] (one
+/// `||` token between each adjacent operand pair).
+class LogicalOrPatternNode extends PatternNode {
+  LogicalOrPatternNode({
+    required List<PatternNode> operands,
+    required List<SourceSpan> operatorSpans,
+    required this.sourceSpan,
+  })  : operands = List.unmodifiable(operands),
+        operatorSpans = List.unmodifiable(operatorSpans),
+        assert(
+          operands.length >= 2,
+          'LogicalOrPatternNode must have at least 2 operands',
+        ),
+        assert(
+          operatorSpans.length == operands.length - 1,
+          'operatorSpans.length must equal operands.length - 1',
+        );
+
+  /// Flattened operands in source order. Length >= 2.
+  final List<PatternNode> operands;
+
+  /// Spans of the `||` tokens between adjacent operands. Length =
+  /// `operands.length - 1`.
+  final List<SourceSpan> operatorSpans;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'LogicalOrPatternNode(${operands.length} operand(s))';
+}
+
+/// A pattern kind not yet modeled — object, record, list, map, logical-
+/// and, relational, null-check, null-assert, cast, parenthesized.
+/// Preserves the source verbatim. Future milestones (M8.0g+) can
+/// promote individual kinds as concrete edit needs demand.
+class OpaquePatternNode extends PatternNode {
+  const OpaquePatternNode({
+    required this.sourceText,
+    required this.sourceSpan,
+  });
+
+  /// Verbatim source bytes for this pattern.
+  final String sourceText;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final preview = sourceText.length > 40
+        ? '${sourceText.substring(0, 40).replaceAll('\n', '\\n')}...'
+        : sourceText.replaceAll('\n', '\\n');
+    return 'OpaquePatternNode("$preview")';
   }
 }

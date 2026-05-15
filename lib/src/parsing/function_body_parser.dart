@@ -456,6 +456,13 @@ SwitchStatementNode? _tryConvertSwitchStatement(
 
     if (member is SwitchCase) {
       final caseExpression = member.expression;
+      final patternSpan = SourceSpan(
+        offset: caseExpression.offset,
+        length: caseExpression.length,
+      );
+      // Legacy `case constantExpr:` IS a constant pattern semantically.
+      // Wrap it as `ConstantPatternNode` for consistency with Dart 3
+      // cases that use `case <ConstantPattern>:`.
       members.add(SwitchCaseNode(
         keywordSpan: SourceSpan(
           offset: member.keyword.offset,
@@ -465,9 +472,15 @@ SwitchStatementNode? _tryConvertSwitchStatement(
           caseExpression.offset,
           caseExpression.offset + caseExpression.length,
         ),
-        patternSpan: SourceSpan(
-          offset: caseExpression.offset,
-          length: caseExpression.length,
+        patternSpan: patternSpan,
+        pattern: ConstantPatternNode(
+          constKeywordSpan: null,
+          expressionSource: source.substring(
+            caseExpression.offset,
+            caseExpression.offset + caseExpression.length,
+          ),
+          expressionSpan: patternSpan,
+          sourceSpan: patternSpan,
         ),
         whenKeywordSpan: null,
         whenGuardSource: null,
@@ -496,6 +509,7 @@ SwitchStatementNode? _tryConvertSwitchStatement(
           offset: pattern.offset,
           length: pattern.length,
         ),
+        pattern: _convertPattern(pattern, source),
         whenKeywordSpan: whenClause == null
             ? null
             : SourceSpan(
@@ -634,6 +648,129 @@ VariableDeclarationStatementNode _convertVariableDeclarationStatement(
     variables: variables,
     sourceSpan: SourceSpan(offset: stmt.offset, length: stmt.length),
   );
+}
+
+/// Converts an analyzer `DartPattern` into the corresponding
+/// `PatternNode`. Total: returns `OpaquePatternNode` for pattern kinds
+/// the M8.0f slice doesn't model structurally (object, record, list,
+/// map, logical-and, relational, null-check, null-assert, cast,
+/// parenthesized).
+PatternNode _convertPattern(DartPattern pattern, String source) {
+  final span = SourceSpan(offset: pattern.offset, length: pattern.length);
+
+  if (pattern is ConstantPattern) {
+    final expr = pattern.expression;
+    return ConstantPatternNode(
+      constKeywordSpan: pattern.constKeyword == null
+          ? null
+          : SourceSpan(
+              offset: pattern.constKeyword!.offset,
+              length: pattern.constKeyword!.length,
+            ),
+      expressionSource: source.substring(
+        expr.offset,
+        expr.offset + expr.length,
+      ),
+      expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is DeclaredVariablePattern) {
+    final type = pattern.type;
+    return DeclaredVariablePatternNode(
+      keywordSpan: pattern.keyword == null
+          ? null
+          : SourceSpan(
+              offset: pattern.keyword!.offset,
+              length: pattern.keyword!.length,
+            ),
+      typeSource: type == null
+          ? null
+          : source.substring(type.offset, type.offset + type.length),
+      typeSpan: type == null
+          ? null
+          : SourceSpan(offset: type.offset, length: type.length),
+      name: pattern.name.lexeme,
+      nameSpan: SourceSpan(
+        offset: pattern.name.offset,
+        length: pattern.name.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is WildcardPattern) {
+    final type = pattern.type;
+    return WildcardPatternNode(
+      keywordSpan: pattern.keyword == null
+          ? null
+          : SourceSpan(
+              offset: pattern.keyword!.offset,
+              length: pattern.keyword!.length,
+            ),
+      typeSource: type == null
+          ? null
+          : source.substring(type.offset, type.offset + type.length),
+      typeSpan: type == null
+          ? null
+          : SourceSpan(offset: type.offset, length: type.length),
+      underscoreSpan: SourceSpan(
+        offset: pattern.name.offset,
+        length: pattern.name.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is LogicalOrPattern) {
+    final operands = <PatternNode>[];
+    final operatorSpans = <SourceSpan>[];
+    _flattenLogicalOr(pattern, source, operands, operatorSpans);
+    return LogicalOrPatternNode(
+      operands: operands,
+      operatorSpans: operatorSpans,
+      sourceSpan: span,
+    );
+  }
+
+  // Object / record / list / map / logical-and / relational /
+  // null-check / null-assert / cast / parenthesized — all opaque for
+  // M8.0f. Future milestones can promote individual kinds as concrete
+  // edits demand.
+  return OpaquePatternNode(
+    sourceText:
+        source.substring(pattern.offset, pattern.offset + pattern.length),
+    sourceSpan: span,
+  );
+}
+
+/// Recursively flattens a left-associative binary `LogicalOrPattern`
+/// tree into a flat operand list. `1 || 2 || 3` is parsed as
+/// `(1 || 2) || 3` — this helper unfolds it into `[1, 2, 3]` plus the
+/// two `||` token spans.
+void _flattenLogicalOr(
+  LogicalOrPattern node,
+  String source,
+  List<PatternNode> operands,
+  List<SourceSpan> operatorSpans,
+) {
+  final left = node.leftOperand;
+  if (left is LogicalOrPattern) {
+    _flattenLogicalOr(left, source, operands, operatorSpans);
+  } else {
+    operands.add(_convertPattern(left, source));
+  }
+  operatorSpans.add(SourceSpan(
+    offset: node.operator.offset,
+    length: node.operator.length,
+  ));
+  final right = node.rightOperand;
+  if (right is LogicalOrPattern) {
+    _flattenLogicalOr(right, source, operands, operatorSpans);
+  } else {
+    operands.add(_convertPattern(right, source));
+  }
 }
 
 /// AST visitor that locates the first (or matching) block function body

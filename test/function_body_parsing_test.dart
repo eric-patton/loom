@@ -463,13 +463,15 @@ void use(int x) {}
       expect(switchStmt.expressionSource, equals('value'));
     });
 
-    test('five members in order: 4 cases + default', () {
-      expect(switchStmt.members, hasLength(5));
+    test('seven members in order: 6 cases + default', () {
+      expect(switchStmt.members, hasLength(7));
       expect(switchStmt.members[0], isA<SwitchCaseNode>());
       expect(switchStmt.members[1], isA<SwitchCaseNode>());
       expect(switchStmt.members[2], isA<SwitchCaseNode>());
       expect(switchStmt.members[3], isA<SwitchCaseNode>());
-      expect(switchStmt.members[4], isA<SwitchDefaultNode>());
+      expect(switchStmt.members[4], isA<SwitchCaseNode>());
+      expect(switchStmt.members[5], isA<SwitchCaseNode>());
+      expect(switchStmt.members[6], isA<SwitchDefaultNode>());
     });
 
     test('first case is the legacy `case 0:` form with no guard', () {
@@ -480,27 +482,38 @@ void use(int x) {}
       expect(c0.body.statements.first, isA<ReturnStatementNode>());
     });
 
-    test('pattern case with `when n < 0` guard parses correctly', () {
+    test('logical-or case `1 || 2 || 3:` parses correctly', () {
       final c1 = switchStmt.members[1] as SwitchCaseNode;
-      expect(c1.patternSource, equals('int n'));
-      expect(c1.whenGuardSource, equals('n < 0'));
-      expect(c1.whenKeywordSpan, isNotNull);
+      expect(c1.patternSource, equals('1 || 2 || 3'));
+      expect(c1.whenGuardSource, isNull);
+    });
+
+    test('pattern case with `when n < 0` guard parses correctly', () {
+      final c2 = switchStmt.members[2] as SwitchCaseNode;
+      expect(c2.patternSource, equals('int n'));
+      expect(c2.whenGuardSource, equals('n < 0'));
+      expect(c2.whenKeywordSpan, isNotNull);
     });
 
     test('pattern case with `when n > 100` guard parses correctly', () {
-      final c2 = switchStmt.members[2] as SwitchCaseNode;
-      expect(c2.patternSource, equals('int n'));
-      expect(c2.whenGuardSource, equals('n > 100'));
+      final c3 = switchStmt.members[3] as SwitchCaseNode;
+      expect(c3.patternSource, equals('int n'));
+      expect(c3.whenGuardSource, equals('n > 100'));
     });
 
     test('pattern case without guard parses correctly', () {
-      final c3 = switchStmt.members[3] as SwitchCaseNode;
-      expect(c3.patternSource, equals('String s'));
-      expect(c3.whenGuardSource, isNull);
+      final c4 = switchStmt.members[4] as SwitchCaseNode;
+      expect(c4.patternSource, equals('String s'));
+      expect(c4.whenGuardSource, isNull);
+    });
+
+    test('wildcard case `int _:` parses correctly', () {
+      final c5 = switchStmt.members[5] as SwitchCaseNode;
+      expect(c5.patternSource, equals('int _'));
     });
 
     test('default has a body with one statement', () {
-      final d = switchStmt.members[4] as SwitchDefaultNode;
+      final d = switchStmt.members[6] as SwitchDefaultNode;
       expect(d.body.statements, hasLength(1));
       expect(d.body.statements.first, isA<ReturnStatementNode>());
     });
@@ -564,6 +577,120 @@ String tag(int x) {
       // (the switch expression) is captured as opaque source text.
       final v0 = body.statements.first as VariableDeclarationStatementNode;
       expect(v0.variables.first.initializerSource, startsWith('switch ('));
+    });
+
+    // -------------------- M8.0f pattern internals --------------------
+
+    test('legacy case constant pattern is a ConstantPatternNode', () {
+      final c0 = switchStmt.members[0] as SwitchCaseNode;
+      expect(c0.pattern, isA<ConstantPatternNode>());
+      final p = c0.pattern as ConstantPatternNode;
+      expect(p.expressionSource, equals('0'));
+      expect(p.constKeywordSpan, isNull);
+    });
+
+    test('logical-or pattern flattens into 3 operands + 2 || spans', () {
+      final c1 = switchStmt.members[1] as SwitchCaseNode;
+      expect(c1.pattern, isA<LogicalOrPatternNode>());
+      final or = c1.pattern as LogicalOrPatternNode;
+      expect(or.operands, hasLength(3));
+      expect(or.operatorSpans, hasLength(2));
+      for (final op in or.operands) {
+        expect(op, isA<ConstantPatternNode>());
+      }
+      expect(
+        (or.operands[0] as ConstantPatternNode).expressionSource,
+        equals('1'),
+      );
+      expect(
+        (or.operands[1] as ConstantPatternNode).expressionSource,
+        equals('2'),
+      );
+      expect(
+        (or.operands[2] as ConstantPatternNode).expressionSource,
+        equals('3'),
+      );
+    });
+
+    test('declared variable pattern with type captures type + name', () {
+      final c2 = switchStmt.members[2] as SwitchCaseNode;
+      expect(c2.pattern, isA<DeclaredVariablePatternNode>());
+      final p = c2.pattern as DeclaredVariablePatternNode;
+      expect(p.typeSource, equals('int'));
+      expect(p.name, equals('n'));
+      expect(p.keywordSpan, isNull);
+    });
+
+    test('declared variable pattern with String type', () {
+      final c4 = switchStmt.members[4] as SwitchCaseNode;
+      final p = c4.pattern as DeclaredVariablePatternNode;
+      expect(p.typeSource, equals('String'));
+      expect(p.name, equals('s'));
+    });
+
+    test('wildcard pattern with type captures type + underscore span', () {
+      final c5 = switchStmt.members[5] as SwitchCaseNode;
+      expect(c5.pattern, isA<WildcardPatternNode>());
+      final p = c5.pattern as WildcardPatternNode;
+      expect(p.typeSource, equals('int'));
+    });
+
+    test('`case var x:` parses as DeclaredVariablePatternNode with keyword',
+        () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case var x:
+      return 'x=\$x';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final p = c0.pattern as DeclaredVariablePatternNode;
+      expect(p.keywordSpan, isNotNull);
+      expect(p.typeSource, isNull);
+      expect(p.name, equals('x'));
+    });
+
+    test('bare `case _:` parses as WildcardPatternNode without type', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case _:
+      return 'any';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final p = c0.pattern as WildcardPatternNode;
+      expect(p.typeSource, isNull);
+      expect(p.keywordSpan, isNull);
+    });
+
+    test('object pattern is OpaquePatternNode (deferred)', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case Point(x: 0, y: 0):
+      return 'origin';
+    default:
+      return 'other';
+  }
+}
+class Point {
+  final int x;
+  final int y;
+  const Point({required this.x, required this.y});
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      expect(c0.pattern, isA<OpaquePatternNode>());
     });
   });
 

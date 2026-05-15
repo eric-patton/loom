@@ -8,45 +8,46 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0e — control flow: switch (statements, with opaque patterns)
-**Last touched:** 2026-05-15 — added `SwitchStatementNode` + sealed `SwitchMemberNode` (`SwitchCaseNode` + `SwitchDefaultNode`) covering legacy `case expr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Pattern + `when` guard captured as opaque source. Switch case bodies use a new brace-less `StatementBlock` variant (`hasBraces: false`).
+**Active milestone:** M8.0f — pattern internals: 4 structured pattern kinds + opaque catch-all
+**Last touched:** 2026-05-15 — added sealed `PatternNode` hierarchy modeling the four highest-value Dart 3 patterns (constant, declared variable, wildcard, logical-or). `SwitchCaseNode` now carries both `patternSource` (M8.0e raw text) and `pattern: PatternNode` (M8.0f structured view). Three new pattern-internal edit ops.
 
-**M8.0e surface added (just now):** extends M8.0d. One new statement kind + one new member hierarchy + three new edit ops + a `StatementBlock` extension.
+**M8.0f surface added (just now):** extends M8.0e. One new sealed model hierarchy + parser pattern dispatcher + three new edit ops.
 
-**`SwitchStatementNode` added** — `switch (expr) { ...members... }`. Captures `switchKeywordSpan`, expression source + span (raw, no parens), `leftBracketSpan` / `rightBracketSpan` for the body's braces, and an ordered `members: List<SwitchMemberNode>`. Switch **expressions** (the `switch (x) { 1 => 'a', _ => 'b' }` form) are NOT statements and stay opaque inside their host expression's source.
+**`PatternNode` sealed hierarchy** — first model surface inside switch-case patterns. Five subtypes:
+- `ConstantPatternNode` — `case 0:`, `case 'foo':`, `case const Foo():`, `case Colors.red:`. Captures optional `constKeywordSpan` + raw `expressionSource` + `expressionSpan`. The constant expression's internals are NOT modeled (M8.1+ territory).
+- `DeclaredVariablePatternNode` — `case int n:`, `case var x:`, `case final String s:`. Captures optional `keywordSpan` (var/final), optional `typeSource` + `typeSpan`, `name` + `nameSpan`.
+- `WildcardPatternNode` — `case _:`, `case int _:`. Captures optional `keywordSpan`, optional `typeSource` + `typeSpan`, `underscoreSpan`.
+- `LogicalOrPatternNode` — `case 1 || 2 || 3:`. Flattens the analyzer's binary `LogicalOrPattern` tree into a single ordered `operands: List<PatternNode>` + parallel list of `||` `operatorSpans`. Operands recurse — a `||` can contain other modeled patterns.
+- `OpaquePatternNode` — catch-all for object, record, list, map, logical-and, relational, null-check, null-assert, cast, and parenthesized patterns. Preserves source verbatim. Future M8.0g+ milestones can promote individual kinds as concrete edits demand.
 
-**`SwitchMemberNode` sealed** — two subtypes:
-- `SwitchCaseNode` — covers both legacy `case constantExpr:` and Dart 3 `case pattern [when guard]:`. Captures `keywordSpan` (the `case` token), `patternSource` + `patternSpan` (opaque — Dart 3 pattern internals are not modeled), optional `whenKeywordSpan` + `whenGuardSource` + `whenGuardSpan`, `colonSpan`, body.
-- `SwitchDefaultNode` — `default:` with body. Just `keywordSpan`, `colonSpan`, body.
+**`SwitchCaseNode.pattern: PatternNode` field added** alongside `patternSource` / `patternSpan`. Existing M8.0e callers that only read `patternSource` still work. The structured `pattern` is always present and is the entry point for pattern-aware editing.
 
-Each member's body is a brace-less `StatementBlock` (see below).
-
-**`StatementBlock.hasBraces` flag added** — distinguishes braced blocks (function bodies, if/for/while/do/try bodies — all `hasBraces: true`, the default) from brace-less ones (switch case bodies — `hasBraces: false`). For brace-less blocks, `blockSpan` and `innerSpan` are equal — both cover the statement run from after the `:` colon to the start of the next member or the switch's `}`. `addStatement`'s empty-block path now branches on this: for brace-less blocks, the insertion is a simple "newline + indented statement" at the body's start (no re-emitted closing brace).
-
-**Parser scope:** all three member kinds the analyzer exposes are handled — `SwitchCase` (legacy), `SwitchPatternCase` (Dart 3), `SwitchDefault`. Both `SwitchCase` and `SwitchPatternCase` collapse into the same `SwitchCaseNode` model class; differentiating them in the model would only matter for codegen, and we're preserving source bytes anyway. Pattern internals are opaque source — `case Foo(x: 1)` captures `'Foo(x: 1)'` as text. Switch expressions stay opaque inside host expression source.
+**Parser:** new `_convertPattern(DartPattern, source)` function that dispatches on AST type, total over all pattern kinds (rest become `OpaquePatternNode`). The legacy `case constantExpr:` form (analyzer's `SwitchCase`, not `SwitchPatternCase`) is wrapped as a `ConstantPatternNode` so callers see a uniform structure regardless of which Dart era the case was written in.
 
 **New edit ops:**
-- `changeSwitchExpression(statement, newExpressionSource)` — replace the value being switched on.
-- `changeSwitchCasePattern(caseMember, newPatternSource)` — replace the pattern of a single case (works on both legacy and pattern-case forms).
-- `changeSwitchCaseGuard(caseMember, newGuardSource)` — replace the `when ...` guard of a pattern case. Throws when no guard exists (adding a guard to a guard-less case requires inserting `when`, deferred).
-- Case/default body edits reuse `addStatement` / `removeStatement` / `replaceStatement` against the member's `body` block. `addStatement` handles brace-less empty bodies (e.g. adding a statement to a fall-through `case 1:`).
+- `renameDeclaredPatternVariable(pattern, newName)` — rename the bound variable of a `DeclaredVariablePatternNode` (e.g. `case int n:` → `case int value:`). Does NOT update references to the old name in the guard or body — those are call-site concerns (the kernel models source spans, not a symbol table).
+- `changeDeclaredPatternType(pattern, newType)` — replace the type annotation. Requires existing type (`var x` patterns throw; adding a type is deferred).
+- `changeConstantPatternExpression(pattern, newExpressionSource)` — replace a constant pattern's expression. Works inside `LogicalOrPatternNode` operands too — `case 1 || 2 || 3:` can become `case 1 || 20 || 3:` by editing the middle operand.
 
-**Validation:** 334 tests green (was 314, +20 new across parsing + round-trip). New fixture `function_body_with_switch.dart` — `describe(value)` with a legacy `case 0:`, two pattern cases with `when` guards, one pattern case without a guard, and a `default:`. Tests cover all the above edits, multi-case fall-through parsing, switch-expression-inside-host staying opaque, and removeStatement from a case body.
+**Validation:** 349 tests green (was 334, +15 new across parsing + round-trip). The existing `function_body_with_switch.dart` fixture was extended to exercise logical-or and wildcard patterns. New parsing tests cover all 4 modeled pattern kinds + opaque fallback for object patterns. Round-trip tests cover: rename variable in a pattern (and note guard NOT auto-updated), change type (and throw on `var x`), change constant expression (top-level and inside a logical-or chain).
 
-**Deliberately deferred (M8.0f+ / M8.1+):**
-- Modeling switch case patterns themselves (constant / type-test / object / record / list / map / `||` alternatives, etc.) — currently opaque. Large surface; deserves its own milestone.
+**Deliberately deferred (M8.0g+ / M8.1+):**
+- Modeling the remaining pattern kinds — object (`case Foo(x: 1, y: var n):`), record (`case (1, 2):`), list (`case [a, b]:`), map (`case {'k': v}:`), logical-and (`case int n && > 0:`), relational (`case > 100:`), null-check (`case var x?:`), null-assert (`case var x!:`), cast (`case var x as T:`), parenthesized. Each adds editable substructure (e.g. object pattern field renames, list pattern element ops).
+- Modeling switch **expressions** (the `=>`-based form).
 - `yield` / `break` / `continue` / labeled statements.
 - Adding a `when` guard to a guard-less case (requires inserting the `when` keyword).
+- Adding a type to a `var`/`final`-only pattern.
 - Adding/removing/reordering switch cases on an existing switch (or catch clauses on a try).
-- Modeling switch **expressions** (the `=>`-based form).
-- Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource` — currently opaque.
+- Adding/removing logical-or operands.
+- Symbol-aware rename — when renaming a pattern variable, also update references in the guard expression and case body.
+- Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource`.
 - Editing inside catch-clause parameters.
 - Bare-statement control-flow bodies — opaque.
 - Expression-internal structure inside `ExpressionStatementNode`.
 - Statement reordering (use add + remove for now).
 
 **Blockers:** none
-**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d + M8.0e series (21 commits total). Procedural control flow is now feature-complete at the statement level; the next milestone slot is open — likely M8.1 (cross-statement features like statement reordering or local-var qualifier editing) or M8.0f (model pattern internals for `case` clauses to unlock pattern-aware editing).
+**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d + M8.0e + M8.0f series (22 commits total). Pattern internals are now editable for the top-4 shapes. Next slot is open — likely M8.0g (model object patterns, the next-highest-value shape for OutSystems-style decomposition) or M8.1 (cross-statement features like reordering + local-var qualifier editing) or symbol-aware rename (whole-case scope) once a UI consumer needs it.
 
 ---
 
@@ -313,7 +314,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0c** (shipped 2026-05-14) | Else-if chains (recursive `IfStatementNode.elseIf`), for-loops (c-style + for-each + await-for, header captured opaque), while-loops with `changeWhileCondition`. All reuse `StatementBlock` for recursive body editing — no new statement-list ops needed. Bare-body branches anywhere in an else-if chain reject the whole chain to opaque. | Common loop + multi-way decision shapes — most OutSystems flows that aren't a simple if/else are a chain of conditions or an iteration. |
 | **M8.0d** (shipped 2026-05-15) | `do { } while (cond);` (`DoStatementNode` + `changeDoWhileCondition`), `try / on T / catch (e, s) / finally` (`TryStatementNode` + `CatchClauseNode`; bodies are `StatementBlock`s — no new ops needed), and top-level `throw expr;` (`ThrowStatementNode` + `changeThrownExpression`). All four catch-clause shapes covered: bare `on T`, `catch (e)`, `catch (e, s)`, `on T catch (e [, s])`. | Completes imperative control-flow basics. Error handling (try/catch/finally) is foundational for any real Dart code; throw closes the symmetric `return`-shaped surface. |
 | **M8.0e** (shipped 2026-05-15) | `switch` statements (procedural form). `SwitchStatementNode` + sealed `SwitchMemberNode` (`SwitchCaseNode` + `SwitchDefaultNode`). Covers legacy `case expr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Pattern + `when` guard captured as opaque source. `StatementBlock.hasBraces` flag added — switch-case bodies are brace-less and `addStatement` handles that. Three new edit ops: `changeSwitchExpression`, `changeSwitchCasePattern`, `changeSwitchCaseGuard`. | Multi-way decisions — the OutSystems-relevant control-flow shape. Procedural switch statements are now feature-complete at the structural level (modulo pattern internals, which are a separate large surface). |
-| M8.0f+ | Model switch case patterns themselves (constant / type-test / object / record / list / map / `||` alternatives / null-check / cast / wildcard patterns). Plus `yield`/`break`/`continue`/labels, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses + switch cases, editing catch-clause parameters, and modeling switch **expressions** (the `=>`-based form). | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0f** (shipped 2026-05-15) | Pattern internals. Sealed `PatternNode` with 4 structured kinds (constant, declared variable, wildcard, logical-or) + `OpaquePatternNode` catch-all. `SwitchCaseNode.pattern` now exposes structured patterns alongside `patternSource`. Three pattern-internal edit ops: `renameDeclaredPatternVariable`, `changeDeclaredPatternType`, `changeConstantPatternExpression`. Logical-or operand-level edits work (e.g. rewriting `2` in `case 1 \|\| 2 \|\| 3:`). | Pattern-aware editing — the substructure inside switch cases. Most common pattern shapes (constants, type-test bindings, alternatives, wildcards) are now first-class. |
+| M8.0g+ | Promote the remaining pattern kinds out of `OpaquePatternNode` (object, record, list, map, logical-and, relational, null-check, null-assert, cast, parenthesized) as fixtures demand. Plus `yield`/`break`/`continue`/labels, switch **expressions**, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses + switch cases + logical-or operands, editing catch-clause parameters, and symbol-aware rename across pattern + guard + body. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -396,6 +398,36 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.0f — pattern internals: 4 structured pattern kinds + opaque catch-all
+**Worked on:** First pattern-internal slice. Added sealed `PatternNode` hierarchy modeling the four highest-value Dart 3 pattern kinds (constant, declared variable, wildcard, logical-or). The remaining 10 pattern kinds (object, record, list, map, logical-and, relational, null-check, null-assert, cast, parenthesized) fall through to `OpaquePatternNode`. Three new pattern-internal edit ops unlock pattern-aware editing.
+
+**Five `PatternNode` subtypes — modeled four, opaqued the rest.** Cost vs. value:
+- Constant, declared variable, wildcard, logical-or are by far the most common in real Dart code. A grep through real codebases would find these in ~80% of switch cases.
+- Object and record patterns are the next-most-common; deserve their own slice (M8.0g) once concrete fixtures push.
+- List, map, logical-and, relational, null-check/assert/cast are rarer and benefit more from specific edit fixtures driving the design.
+
+**`SwitchCaseNode.pattern: PatternNode` added alongside `patternSource`.** Same pattern as M7.2's `parameters: List<ClassParameterNode>` alongside `parametersSource`. Existing M8.0e callers that read `patternSource` keep working; new callers can walk the structured tree. The structured `pattern` is always non-null — even an opaque pattern is wrapped in `OpaquePatternNode` so the field type is total.
+
+**Legacy `case constantExpr:` collapses into `ConstantPatternNode`.** The analyzer represents legacy cases as `SwitchCase` with an `expression` and Dart 3 pattern cases as `SwitchPatternCase` with a `pattern`. The kernel wraps both as `ConstantPatternNode` so callers see a uniform structure. The decision: in the source bytes the two forms are similar enough (`case 0:` vs `case 0:`) that the model shouldn't expose the distinction. If a future caller needs to know whether a case was written in Dart 2 or Dart 3 style, they can check by looking at sibling cases — but the kernel doesn't owe them that.
+
+**Logical-or flattening.** Analyzer parses `1 || 2 || 3` as left-associative binary nodes: `(1 || 2) || 3`. The kernel flattens this into a single `operands: [1, 2, 3]` list + parallel `operatorSpans: [||1, ||2]`. Flattening matters for editing: `changeConstantPatternExpression` on the middle operand of a 3-way `||` is a natural op; doing it on the analyzer's nested binary tree would require a `LogicalOrPatternNode.leftOperand` / `rightOperand` API where editing the "middle" means navigating into the left operand's right child. Ugly. Flatten once at parse time.
+
+**Three new edit ops:**
+- `renameDeclaredPatternVariable` — rename the bound variable. Does NOT update references in the guard or body — that's a future symbol-aware rename op. The kernel preserves source bytes; it doesn't run a renamer.
+- `changeDeclaredPatternType` — change the type. Throws on `var x` patterns (no type to replace).
+- `changeConstantPatternExpression` — replace the constant. Works inside `LogicalOrPatternNode` operands too, because each operand is itself a `PatternNode`.
+
+**Fixture extension:** the existing `function_body_with_switch.dart` was extended with a `case 1 || 2 || 3:` (logical-or) and a `case int _:` (wildcard) — bringing the case count from 4+default to 6+default. Existing M8.0e tests that indexed members were updated.
+
+**Validation:** 349 tests green (was 334, +15 new). `dart analyze` clean. `dart format` clean.
+
+**Learned:**
+- **Flattening the logical-or binary tree at parse time was the right call.** I considered preserving the binary structure to match the analyzer 1:1, but the editing operations are inherently flat-list operations. Forcing callers to navigate a binary tree to do "edit the second operand" would push complexity to every edit. The flatten cost is bounded (one recursive pass per logical-or) and happens once.
+- **Sealed hierarchies + opaque catch-all is a repeatable scoping pattern now.** Same play as `StatementNode` (M8.0a's 4 modeled + opaque) and `ClassMember` (M7). For each large AST surface, model the top 30%-50% structurally and opaque the long tail. It lets each milestone ship in a self-contained slice without committing to the entire surface.
+- **Naming clash watch:** `DeclaredVariablePatternNode.name` is `String`, not `Token`. Mirrors `DeclaredVariable.name` from M8.0a. The analyzer's `name` field is a `Token` (with `.lexeme`, `.offset`, `.length`); the kernel's `name` is just the lexeme string, with a separate `nameSpan`. Same shape across the kernel for consistency.
+
+**Next:** Eric review of M6 + M7 + M8.0a–f series (22 commits total). Pattern internals are now editable for the most common shapes. Next slot is open — M8.0g (object patterns, the next-highest-value shape for OutSystems-style record/value decomposition) is the natural follow-on. Alternatively, M8.1 (cross-statement features like statement reordering or symbol-aware rename) once a UI consumer surfaces concrete needs.
 
 ### [2026-05-15] M8.0e — control flow: switch statements with opaque patterns
 **Worked on:** Fourth control-flow slice. Added `SwitchStatementNode` and a sealed `SwitchMemberNode` hierarchy (`SwitchCaseNode` + `SwitchDefaultNode`) covering legacy `case constantExpr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Patterns and `when` guards are captured as opaque source text — modeling pattern internals (constant / type-test / object / record / list / map / alternatives / etc.) is a separate large surface deferred to M8.0f+. Switch **expressions** (the `=>`-based form) are not statements; they stay opaque inside their host expression's source.

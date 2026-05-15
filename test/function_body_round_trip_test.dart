@@ -547,7 +547,7 @@ void main() {
       final reparsed = parseFunctionBody(newSource);
       final reparsedSw = reparsed.statements.first as SwitchStatementNode;
       expect(reparsedSw.expressionSource, equals('value.runtimeType'));
-      expect(reparsedSw.members, hasLength(5));
+      expect(reparsedSw.members, hasLength(7));
     });
 
     test('changeSwitchCasePattern rewrites a legacy case pattern', () {
@@ -572,19 +572,20 @@ void main() {
       final source = _loadFixture('function_body_with_switch.dart');
       final body = parseFunctionBody(source);
       final sw = body.statements.first as SwitchStatementNode;
-      // members[1] is `case int n when n < 0:`.
-      final c1 = sw.members[1] as SwitchCaseNode;
+      // members[2] is `case int n when n < 0:` (after `case 0:` and the
+      // logical-or alternative).
+      final c2 = sw.members[2] as SwitchCaseNode;
 
       final edit = FunctionBodyEditPlanner.changeSwitchCaseGuard(
-        caseMember: c1,
+        caseMember: c2,
         newGuardSource: 'n <= -1',
       );
       final newSource = applySourceEdits(source, [edit]);
 
       final reparsed = parseFunctionBody(newSource);
       final reparsedSw = reparsed.statements.first as SwitchStatementNode;
-      final reparsedC1 = reparsedSw.members[1] as SwitchCaseNode;
-      expect(reparsedC1.whenGuardSource, equals('n <= -1'));
+      final reparsedC2 = reparsedSw.members[2] as SwitchCaseNode;
+      expect(reparsedC2.whenGuardSource, equals('n <= -1'));
     });
 
     test('changeSwitchCaseGuard throws when no guard exists', () {
@@ -679,6 +680,126 @@ String f(int x) {
       final reparsedSw = reparsed.statements.first as SwitchStatementNode;
       final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
       expect(reparsedC0.body.statements, isEmpty);
+    });
+  });
+
+  group('pattern-internal edits (M8.0f)', () {
+    test('renameDeclaredPatternVariable renames `n` → `value`', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[2] is `case int n when n < 0:`.
+      final c2 = sw.members[2] as SwitchCaseNode;
+      final p = c2.pattern as DeclaredVariablePatternNode;
+
+      final edit = FunctionBodyEditPlanner.renameDeclaredPatternVariable(
+        pattern: p,
+        newName: 'value',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC2 = reparsedSw.members[2] as SwitchCaseNode;
+      final reparsedP = reparsedC2.pattern as DeclaredVariablePatternNode;
+      expect(reparsedP.name, equals('value'));
+      // Guard still references the old name — that's expected; rename
+      // only touches the pattern. (Compile error in the new source,
+      // but the kernel's contract is source preservation, not type
+      // safety. Future symbol-aware rename op can handle the guard.)
+      expect(reparsedC2.whenGuardSource, equals('n < 0'));
+    });
+
+    test('changeDeclaredPatternType swaps `int` → `num`', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c2 = sw.members[2] as SwitchCaseNode;
+      final p = c2.pattern as DeclaredVariablePatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeDeclaredPatternType(
+        pattern: p,
+        newType: 'num',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC2 = reparsedSw.members[2] as SwitchCaseNode;
+      final reparsedP = reparsedC2.pattern as DeclaredVariablePatternNode;
+      expect(reparsedP.typeSource, equals('num'));
+      expect(reparsedP.name, equals('n'));
+    });
+
+    test('changeDeclaredPatternType throws on `var x` patterns', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case var x:
+      return 'x=\$x';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final p = c0.pattern as DeclaredVariablePatternNode;
+
+      expect(
+        () => FunctionBodyEditPlanner.changeDeclaredPatternType(
+          pattern: p,
+          newType: 'int',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('changeConstantPatternExpression swaps `0` → `42`', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final p = c0.pattern as ConstantPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeConstantPatternExpression(
+        pattern: p,
+        newExpressionSource: '42',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      final reparsedP = reparsedC0.pattern as ConstantPatternNode;
+      expect(reparsedP.expressionSource, equals('42'));
+    });
+
+    test('changeConstantPatternExpression on a logical-or operand', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[1] is `case 1 || 2 || 3:`.
+      final c1 = sw.members[1] as SwitchCaseNode;
+      final or = c1.pattern as LogicalOrPatternNode;
+      // Rewrite the middle operand: `2` → `20`.
+      final mid = or.operands[1] as ConstantPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeConstantPatternExpression(
+        pattern: mid,
+        newExpressionSource: '20',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC1 = reparsedSw.members[1] as SwitchCaseNode;
+      expect(reparsedC1.patternSource, equals('1 || 20 || 3'));
+      final reparsedOr = reparsedC1.pattern as LogicalOrPatternNode;
+      expect(reparsedOr.operands, hasLength(3));
+      expect(
+        (reparsedOr.operands[1] as ConstantPatternNode).expressionSource,
+        equals('20'),
+      );
     });
   });
 }

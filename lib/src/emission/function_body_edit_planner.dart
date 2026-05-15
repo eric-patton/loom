@@ -54,6 +54,15 @@ import 'source_edit.dart';
 ///     above. Switch-case bodies are brace-less (`StatementBlock`'s
 ///     `hasBraces` is false); `addStatement` handles that path.
 ///
+/// Pattern-internal operations (M8.0f):
+///   * `renameDeclaredPatternVariable` — rename the bound variable of
+///     a `DeclaredVariablePatternNode` (e.g. `case int n:` → `case
+///     int value:`).
+///   * `changeDeclaredPatternType` — change the type annotation of a
+///     declared variable pattern (requires existing type).
+///   * `changeConstantPatternExpression` — replace the constant
+///     expression of a `ConstantPatternNode`.
+///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
 ///     `for (x in xs) f(x);`) — opaqued.
@@ -342,6 +351,63 @@ class FunctionBodyEditPlanner {
       offset: span.offset,
       length: span.length,
       replacement: newGuardSource,
+    );
+  }
+
+  // ----------------------- Pattern-internal ops (M8.0f) ----------
+
+  /// Renames the bound variable of a `DeclaredVariablePatternNode` —
+  /// e.g. `case int n:` → `case int value:`. Replaces just the name
+  /// token; type and qualifier (if any) are preserved.
+  ///
+  /// Note: the new name appears ONLY in the pattern itself. References
+  /// to the old name in the `when` guard or case body are NOT updated
+  /// here — those edits live at the call site (the kernel models source
+  /// spans, not a symbol table).
+  static SourceEdit renameDeclaredPatternVariable({
+    required DeclaredVariablePatternNode pattern,
+    required String newName,
+  }) {
+    return SourceEdit(
+      offset: pattern.nameSpan.offset,
+      length: pattern.nameSpan.length,
+      replacement: newName,
+    );
+  }
+
+  /// Changes the type annotation of a `DeclaredVariablePatternNode` —
+  /// e.g. `case int n:` → `case double n:`. The pattern must already
+  /// have an explicit type annotation; throws otherwise (adding a type
+  /// to a `case var x:` is deferred).
+  static SourceEdit changeDeclaredPatternType({
+    required DeclaredVariablePatternNode pattern,
+    required String newType,
+  }) {
+    final span = pattern.typeSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Declared variable pattern has no explicit type to replace. '
+        'Adding a type to a `var`/`final` pattern is not yet supported.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newType,
+    );
+  }
+
+  /// Replaces the constant expression of a `ConstantPatternNode` —
+  /// e.g. `case 0:` → `case 42:`, `case 'foo':` → `case 'bar':`.
+  /// Preserves the optional leading `const` keyword (when present).
+  static SourceEdit changeConstantPatternExpression({
+    required ConstantPatternNode pattern,
+    required String newExpressionSource,
+  }) {
+    return SourceEdit(
+      offset: pattern.expressionSpan.offset,
+      length: pattern.expressionSpan.length,
+      replacement: newExpressionSource,
     );
   }
 
