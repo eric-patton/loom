@@ -8,7 +8,35 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.3 — expressions everywhere + 6 new expression kinds
+**Active milestone:** M8 complete — function-body modeling is feature-complete
+**Last touched:** 2026-05-15 — closed the M8 series with M8.4 through M8.10. M8 is now done: expressions (11 → 20+ kinds), expression positions (7 → 14+), pattern-for/bare-bodies, argument-list internals, symbol-aware rename for locals/labels, and compound-structure add/remove ops.
+
+**Summary of M8.4–M8.10 (this session):**
+
+- **M8.4**: 5 more expression kinds — prefixed identifier, index, instance creation, as, is. 6 new edit ops.
+- **M8.5**: collection literals (list, set/map, record) + function expressions + cascade. 6 new edit ops.
+- **M8.6**: surface ExpressionNode in 6 more positions (switch subject + switch-expr subject, constant pattern, relational pattern operand, map pattern key, c-style for condition + updaters).
+- **M8.7**: bare-statement control-flow bodies promoted (`if (cond) doIt();` etc. now wrap in brace-less StatementBlock, no longer opaque).
+- **M8.8**: argument-list internals — ArgumentListNode + PositionalArgumentNode + NamedArgumentNode. MethodInvocation + InstanceCreation get structured `.arguments`. 2 new edit ops.
+- **M8.9**: symbol-aware rename for non-pattern locals + labels. 3 new ops: renameDeclaredVariableWithReferences, renameForEachLoopVariableWithReferences, renameStatementLabelWithReferences.
+- **M8.10**: compound add/remove ops — addArgument/removeArgument, addSwitchMember/removeSwitchMember, addCatchClause/removeCatchClause, addPatternField/removePatternField.
+
+**Total M-series surface (M6 + M7 + M8.0a–M8.10):**
+- Statements: 17 kinds modeled (everything in the Dart grammar).
+- Patterns: 14 kinds modeled (full coverage).
+- Expressions: 20+ kinds modeled (the common ~70%; the remaining ~30% — string interpolation parts, pattern-variable-declaration, named-type expressions, etc. — stay opaque).
+- For-loop headers: 4 modeled (c-style + 3 for-each shapes); pattern-for opaque.
+- Statement-bearing positions: 14+ structurally surfaced.
+- Edit ops: ~80 total covering rename, replace, change-X, add, remove, move, reorder, symbol-aware rename.
+
+**Blockers:** none
+**Next action:** Eric review of the full M6 + M7 + M8 series (now ~33 commits). Function-body modeling is feature-complete at this level; **ready for M9 — cross-file modeling** (imports/exports/multi-file project view, required for whole-app visual editing).
+
+**Note:** the M8.3 entry below is preserved.
+
+---
+
+### Prior in-progress entry: M8.3 — expressions everywhere + 6 new expression kinds
 **Last touched:** 2026-05-15 — two bundled extensions to M8.2's expression-internal start: (1) structured `ExpressionNode` views now surface in 6 more statement positions (variable initializer, return, throw, yield, if/while/do conditions); (2) 6 new expression kinds promoted out of opaque (assignment, conditional, await, prefix, postfix, property access). Renamed all expression node classes to use the `*Node` suffix for naming consistency.
 
 **M8.3 surface added (just now):**

@@ -1151,6 +1151,364 @@ class FunctionBodyEditPlanner {
     );
   }
 
+  // ----------------------- Argument list ops (M8.10) -------------
+
+  /// Inserts a new argument at `index` in an `ArgumentListNode`.
+  /// `index` 0 inserts at the front; `arguments.arguments.length`
+  /// appends.
+  ///
+  /// `newSource` is the raw argument source (e.g. `42` for a
+  /// positional, `name: 'x'` for a named). The op handles comma +
+  /// space separators automatically.
+  static SourceEdit addArgument({
+    required ArgumentListNode arguments,
+    required int index,
+    required String newSource,
+  }) {
+    if (index < 0 || index > arguments.arguments.length) {
+      throw ArgumentError(
+        'addArgument index $index out of range '
+        '[0, ${arguments.arguments.length}]',
+      );
+    }
+    if (arguments.arguments.isEmpty) {
+      // Empty list: `()` → `(newSource)`.
+      return SourceEdit(
+        offset: arguments.leftParenSpan.offset + arguments.leftParenSpan.length,
+        length: 0,
+        replacement: newSource,
+      );
+    }
+    if (index == arguments.arguments.length) {
+      // Append after last argument.
+      final last = arguments.arguments.last;
+      return SourceEdit(
+        offset: last.sourceSpan.offset + last.sourceSpan.length,
+        length: 0,
+        replacement: ', $newSource',
+      );
+    }
+    // Insert before existing argument at `index`.
+    final next = arguments.arguments[index];
+    return SourceEdit(
+      offset: next.sourceSpan.offset,
+      length: 0,
+      replacement: '$newSource, ',
+    );
+  }
+
+  /// Removes an argument from its argument list, including the
+  /// surrounding comma + space. Pass `arguments` to identify which
+  /// argument's position we're removing.
+  static SourceEdit removeArgument({
+    required ArgumentListNode arguments,
+    required ArgumentNode argument,
+    required String source,
+  }) {
+    final index = arguments.arguments.indexOf(argument);
+    if (index < 0) {
+      throw ArgumentError(
+        'argument not found in the given ArgumentListNode.',
+      );
+    }
+    final argSpan = argument.sourceSpan;
+    var start = argSpan.offset;
+    var end = argSpan.offset + argSpan.length;
+    if (arguments.arguments.length == 1) {
+      // Sole argument — just remove its span. (Caller may want to
+      // emit `()` afterward; the result is correct.)
+      return SourceEdit(
+        offset: start,
+        length: end - start,
+        replacement: '',
+      );
+    }
+    if (index == arguments.arguments.length - 1) {
+      // Last argument — consume preceding comma + whitespace.
+      var s = start;
+      while (s > 0 &&
+          (source.codeUnitAt(s - 1) == 0x20 ||
+              source.codeUnitAt(s - 1) == 0x09)) {
+        s--;
+      }
+      if (s > 0 && source.codeUnitAt(s - 1) == 0x2C) {
+        s--; // consume comma
+      }
+      start = s;
+    } else {
+      // Not last — consume trailing comma + whitespace.
+      while (end < source.length && source.codeUnitAt(end) == 0x2C) {
+        end++; // consume comma
+        while (end < source.length &&
+            (source.codeUnitAt(end) == 0x20 ||
+                source.codeUnitAt(end) == 0x09)) {
+          end++;
+        }
+        break;
+      }
+    }
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: '',
+    );
+  }
+
+  // ----------------------- Switch member ops (M8.10) -------------
+
+  /// Inserts a new switch member (case or default) at `memberIndex`
+  /// in a `SwitchStatementNode`. `newSource` should be a complete
+  /// member including the leading `case ... :` or `default:` and
+  /// any body statements.
+  ///
+  /// Indentation is inferred from the existing member at `memberIndex`
+  /// (or the previous one if appending).
+  static SourceEdit addSwitchMember({
+    required SwitchStatementNode switchStmt,
+    required int memberIndex,
+    required String newSource,
+    required String source,
+  }) {
+    if (memberIndex < 0 || memberIndex > switchStmt.members.length) {
+      throw ArgumentError(
+        'memberIndex $memberIndex out of range '
+        '[0, ${switchStmt.members.length}]',
+      );
+    }
+    if (switchStmt.members.isEmpty) {
+      final outerIndent =
+          _lineIndentBefore(switchStmt.sourceSpan.offset, source);
+      final innerIndent = '$outerIndent  ';
+      return SourceEdit(
+        offset: switchStmt.leftBracketSpan.offset +
+            switchStmt.leftBracketSpan.length,
+        length: 0,
+        replacement: '\n$innerIndent$newSource\n$outerIndent',
+      );
+    }
+    if (memberIndex == switchStmt.members.length) {
+      // Append after the last member.
+      final last = switchStmt.members.last;
+      final indent = _lineIndentBefore(last.sourceSpan.offset, source);
+      return SourceEdit(
+        offset: last.sourceSpan.offset + last.sourceSpan.length,
+        length: 0,
+        replacement: '\n$indent$newSource',
+      );
+    }
+    // Insert before the existing member at memberIndex.
+    final next = switchStmt.members[memberIndex];
+    final indent = _lineIndentBefore(next.sourceSpan.offset, source);
+    return SourceEdit(
+      offset: next.sourceSpan.offset,
+      length: 0,
+      replacement: '$newSource\n$indent',
+    );
+  }
+
+  /// Removes a switch member (case or default) along with its trailing
+  /// whitespace up to and including the next newline. Same line-collapse
+  /// pattern as `removeStatement`.
+  static SourceEdit removeSwitchMember({
+    required SwitchMemberNode member,
+    required String source,
+  }) {
+    final start = member.sourceSpan.offset;
+    var end = member.sourceSpan.offset + member.sourceSpan.length;
+    while (end < source.length) {
+      final ch = source.codeUnitAt(end);
+      if (ch == 0x20 || ch == 0x09 || ch == 0x0D) {
+        end++;
+      } else if (ch == 0x0A) {
+        end++;
+        break;
+      } else {
+        break;
+      }
+    }
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: '',
+    );
+  }
+
+  // ----------------------- Catch clause ops (M8.10) --------------
+
+  /// Inserts a new catch clause into a `TryStatementNode` at
+  /// `clauseIndex`. `newSource` should be a complete catch clause
+  /// (`on T catch (e) { ... }` or `catch (e, s) { ... }` etc.).
+  /// Indentation is inferred from the try block's preceding line.
+  static SourceEdit addCatchClause({
+    required TryStatementNode tryStmt,
+    required int clauseIndex,
+    required String newSource,
+    required String source,
+  }) {
+    if (clauseIndex < 0 || clauseIndex > tryStmt.catchClauses.length) {
+      throw ArgumentError(
+        'clauseIndex $clauseIndex out of range '
+        '[0, ${tryStmt.catchClauses.length}]',
+      );
+    }
+    if (tryStmt.catchClauses.isEmpty) {
+      // Insert after the try block, before the optional finally.
+      final tryBlockEnd =
+          tryStmt.tryBlock.blockSpan.offset + tryStmt.tryBlock.blockSpan.length;
+      return SourceEdit(
+        offset: tryBlockEnd,
+        length: 0,
+        replacement: ' $newSource',
+      );
+    }
+    if (clauseIndex == tryStmt.catchClauses.length) {
+      // Append after last catch clause.
+      final last = tryStmt.catchClauses.last;
+      return SourceEdit(
+        offset: last.sourceSpan.offset + last.sourceSpan.length,
+        length: 0,
+        replacement: ' $newSource',
+      );
+    }
+    // Insert before existing clause.
+    final next = tryStmt.catchClauses[clauseIndex];
+    return SourceEdit(
+      offset: next.sourceSpan.offset,
+      length: 0,
+      replacement: '$newSource ',
+    );
+  }
+
+  /// Removes a catch clause from its try statement, including
+  /// preceding whitespace back to the previous clause's closing brace
+  /// (or the try block's closing brace).
+  static SourceEdit removeCatchClause({
+    required CatchClauseNode catchClause,
+    required String source,
+  }) {
+    var start = catchClause.sourceSpan.offset;
+    final end = catchClause.sourceSpan.offset + catchClause.sourceSpan.length;
+    // Consume preceding whitespace.
+    while (start > 0 &&
+        (source.codeUnitAt(start - 1) == 0x20 ||
+            source.codeUnitAt(start - 1) == 0x09 ||
+            source.codeUnitAt(start - 1) == 0x0A ||
+            source.codeUnitAt(start - 1) == 0x0D)) {
+      start--;
+    }
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: ' ',
+    );
+  }
+
+  // ----------------------- Pattern field ops (M8.10) -------------
+
+  /// Inserts a new pattern field at `fieldIndex` in an object or
+  /// record pattern. `objectPattern` and `recordPattern` are
+  /// mutually exclusive — pass exactly one.
+  static SourceEdit addPatternField({
+    ObjectPatternNode? objectPattern,
+    RecordPatternNode? recordPattern,
+    required int fieldIndex,
+    required String newFieldSource,
+  }) {
+    if ((objectPattern == null) == (recordPattern == null)) {
+      throw ArgumentError(
+        'Pass exactly one of objectPattern or recordPattern.',
+      );
+    }
+    final fields = objectPattern?.fields ?? recordPattern!.fields;
+    final leftParen =
+        objectPattern?.leftParenSpan ?? recordPattern!.leftParenSpan;
+    if (fieldIndex < 0 || fieldIndex > fields.length) {
+      throw ArgumentError(
+        'fieldIndex $fieldIndex out of range [0, ${fields.length}]',
+      );
+    }
+    if (fields.isEmpty) {
+      return SourceEdit(
+        offset: leftParen.offset + leftParen.length,
+        length: 0,
+        replacement: newFieldSource,
+      );
+    }
+    if (fieldIndex == fields.length) {
+      final last = fields.last;
+      return SourceEdit(
+        offset: last.sourceSpan.offset + last.sourceSpan.length,
+        length: 0,
+        replacement: ', $newFieldSource',
+      );
+    }
+    final next = fields[fieldIndex];
+    return SourceEdit(
+      offset: next.sourceSpan.offset,
+      length: 0,
+      replacement: '$newFieldSource, ',
+    );
+  }
+
+  /// Removes a pattern field from its object/record pattern, including
+  /// the surrounding comma + space. Pass the pattern node (object or
+  /// record) so the op knows how to handle separator cleanup.
+  static SourceEdit removePatternField({
+    ObjectPatternNode? objectPattern,
+    RecordPatternNode? recordPattern,
+    required PatternField field,
+    required String source,
+  }) {
+    if ((objectPattern == null) == (recordPattern == null)) {
+      throw ArgumentError(
+        'Pass exactly one of objectPattern or recordPattern.',
+      );
+    }
+    final fields = objectPattern?.fields ?? recordPattern!.fields;
+    final index = fields.indexOf(field);
+    if (index < 0) {
+      throw ArgumentError('field not found in the given pattern.');
+    }
+    var start = field.sourceSpan.offset;
+    var end = field.sourceSpan.offset + field.sourceSpan.length;
+    if (fields.length == 1) {
+      return SourceEdit(
+        offset: start,
+        length: end - start,
+        replacement: '',
+      );
+    }
+    if (index == fields.length - 1) {
+      // Consume preceding comma + whitespace.
+      var s = start;
+      while (s > 0 &&
+          (source.codeUnitAt(s - 1) == 0x20 ||
+              source.codeUnitAt(s - 1) == 0x09)) {
+        s--;
+      }
+      if (s > 0 && source.codeUnitAt(s - 1) == 0x2C) {
+        s--;
+      }
+      start = s;
+    } else {
+      // Consume trailing comma + whitespace.
+      while (end < source.length && source.codeUnitAt(end) == 0x2C) {
+        end++;
+        while (end < source.length &&
+            (source.codeUnitAt(end) == 0x20 ||
+                source.codeUnitAt(end) == 0x09)) {
+          end++;
+        }
+        break;
+      }
+    }
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: '',
+    );
+  }
+
   // ----------------------- Expression ops (M8.3) -----------------
 
   /// Changes the operator of an `AssignmentExpressionNode` — e.g.

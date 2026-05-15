@@ -1888,6 +1888,236 @@ void f(List<int> xs) {
     });
   });
 
+  group('M8.10 — compound add/remove ops', () {
+    test('addArgument appends to existing list', () {
+      const source = '''
+void f() {
+  print(1, 2);
+}
+void print(Object a, Object b) {}
+''';
+      final body = parseFunctionBody(source);
+      final m = (body.statements[0] as ExpressionStatementNode).expression
+          as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.addArgument(
+        arguments: m.arguments,
+        index: m.arguments.arguments.length,
+        newSource: '3',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(1, 2, 3)'));
+    });
+
+    test('addArgument prepends with comma+space', () {
+      const source = '''
+void f() {
+  print(1);
+}
+void print(Object a) {}
+''';
+      final body = parseFunctionBody(source);
+      final m = (body.statements[0] as ExpressionStatementNode).expression
+          as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.addArgument(
+        arguments: m.arguments,
+        index: 0,
+        newSource: '0',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(0, 1)'));
+    });
+
+    test('addArgument into empty list', () {
+      const source = '''
+void f() {
+  print();
+}
+void print() {}
+''';
+      final body = parseFunctionBody(source);
+      final m = (body.statements[0] as ExpressionStatementNode).expression
+          as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.addArgument(
+        arguments: m.arguments,
+        index: 0,
+        newSource: '42',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(42)'));
+    });
+
+    test('removeArgument removes middle argument with trailing comma', () {
+      const source = '''
+void f() {
+  print(1, 2, 3);
+}
+void print(Object a, Object b, Object c) {}
+''';
+      final body = parseFunctionBody(source);
+      final m = (body.statements[0] as ExpressionStatementNode).expression
+          as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.removeArgument(
+        arguments: m.arguments,
+        argument: m.arguments.arguments[1],
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(1, 3)'));
+    });
+
+    test('removeArgument removes last argument with preceding comma', () {
+      const source = '''
+void f() {
+  print(1, 2, 3);
+}
+void print(Object a, Object b, Object c) {}
+''';
+      final body = parseFunctionBody(source);
+      final m = (body.statements[0] as ExpressionStatementNode).expression
+          as MethodInvocationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.removeArgument(
+        arguments: m.arguments,
+        argument: m.arguments.arguments.last,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(1, 2)'));
+    });
+
+    test('addSwitchMember appends a new case', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 0:
+      return 'zero';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements[0] as SwitchStatementNode;
+      final edit = FunctionBodyEditPlanner.addSwitchMember(
+        switchStmt: sw,
+        memberIndex: 1,
+        newSource: "case 1:\n      return 'one';",
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains("case 1:"));
+      expect(newSource, contains("return 'one';"));
+    });
+
+    test('removeSwitchMember removes a case', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 0:
+      return 'zero';
+    case 1:
+      return 'one';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements[0] as SwitchStatementNode;
+      final c1 = sw.members[1];
+
+      final edit = FunctionBodyEditPlanner.removeSwitchMember(
+        member: c1,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, isNot(contains("case 1:")));
+      expect(newSource, isNot(contains("return 'one';")));
+    });
+
+    test('addCatchClause appends a new catch', () {
+      const source = '''
+int f(String s) {
+  try {
+    return int.parse(s);
+  } on FormatException {
+    return -1;
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final t = body.statements[0] as TryStatementNode;
+
+      final edit = FunctionBodyEditPlanner.addCatchClause(
+        tryStmt: t,
+        clauseIndex: t.catchClauses.length,
+        newSource: 'catch (e) { return -2; }',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('catch (e) { return -2; }'));
+    });
+
+    test('addPatternField appends to object pattern', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case Point(x: 1):
+      return 'p';
+    default:
+      return 'o';
+  }
+}
+class Point {
+  final int x;
+  final int y;
+  const Point({required this.x, required this.y});
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements[0] as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final op = c0.pattern as ObjectPatternNode;
+
+      final edit = FunctionBodyEditPlanner.addPatternField(
+        objectPattern: op,
+        fieldIndex: op.fields.length,
+        newFieldSource: 'y: 2',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('Point(x: 1, y: 2)'));
+    });
+
+    test('removePatternField removes a field from a record pattern', () {
+      const source = '''
+String f(Object o) {
+  switch (o) {
+    case (1, 2, 3):
+      return 'triple';
+    default:
+      return 'o';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements[0] as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final rp = c0.pattern as RecordPatternNode;
+
+      final edit = FunctionBodyEditPlanner.removePatternField(
+        recordPattern: rp,
+        field: rp.fields[1],
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('(1, 3)'));
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =
