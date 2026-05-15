@@ -77,6 +77,186 @@ void main() {
       }
     });
 
+    test('typeOfTopLevelDeclaration — function return type', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'types.dart'))
+        ..writeAsStringSync('''
+int answer() => 42;
+String hello() => 'hi';
+List<int> nums() => [1, 2, 3];
+''');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'answer',
+          ),
+          equals('int'),
+        );
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'hello',
+          ),
+          equals('String'),
+        );
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'nums',
+          ),
+          equals('List<int>'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('typeOfTopLevelDeclaration — top-level variable', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'vars.dart'))
+        ..writeAsStringSync('''
+const pi = 3.14;
+final greeting = 'hi';
+int counter = 0;
+''');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'pi'),
+          equals('double'),
+        );
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'greeting'),
+          equals('String'),
+        );
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'counter'),
+          equals('int'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('typeOfTopLevelDeclaration — class declaration', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'shapes.dart'))
+        ..writeAsStringSync('class Circle {}\nmixin Round {}\n');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'Circle'),
+          equals('Circle'),
+        );
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'Round'),
+          equals('Round'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('typeOfTopLevelDeclaration — returns null for unknown name', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(tempDir.path, 'lib', 'empty.dart'))
+        ..writeAsStringSync('int x = 0;');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        expect(
+          await project.typeOfTopLevelDeclaration(
+              filePath: file.absolute.path, name: 'nope'),
+          isNull,
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('typeOfExpressionAt — literal int', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      const source = 'final x = 42;\n';
+      final file = File(p.join(tempDir.path, 'lib', 'expr.dart'))
+        ..writeAsStringSync(source);
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        // '42' starts at offset 10 in `final x = 42;`.
+        final offset = source.indexOf('42');
+        expect(
+          await project.typeOfExpressionAt(
+            filePath: file.absolute.path,
+            offset: offset,
+          ),
+          equals('int'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('typeOfExpressionAt — string concatenation expression', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      const source = "final g = 'hello' + 'world';\n";
+      final file = File(p.join(tempDir.path, 'lib', 'concat.dart'))
+        ..writeAsStringSync(source);
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        final offset = source.indexOf("'hello'");
+        expect(
+          await project.typeOfExpressionAt(
+            filePath: file.absolute.path,
+            offset: offset,
+          ),
+          equals('String'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
     test('throws StateError for a path outside any included root', () async {
       // Create the project rooted at tempDir.
       Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);

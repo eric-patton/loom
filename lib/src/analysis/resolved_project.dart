@@ -1,5 +1,7 @@
 import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/ast/ast.dart' hide ClassMember;
+import 'package:analyzer/dart/ast/visitor.dart';
 
 /// Optional resolved-analysis wrapper around analyzer's
 /// `AnalysisContextCollection` (M10.2).
@@ -70,4 +72,95 @@ class ResolvedProject {
   /// Releases resources held by the underlying analysis context.
   /// MUST be called when done.
   Future<void> dispose() => _collection.dispose();
+
+  // ----------------------- Type queries (M10.2b) -----------------
+
+  /// Returns the type of a top-level declaration's signature, as
+  /// displayString (e.g. `'int'`, `'String?'`, `'Future<List<T>>'`).
+  ///
+  /// For a function: its return type.
+  /// For a class / mixin / enum / extension type: the class name itself
+  /// (since the "type" of a class declaration IS the class type).
+  /// For a top-level variable: its declared / inferred type.
+  /// For a typedef: the aliased type.
+  ///
+  /// Returns null when no declaration matches [name], or when the
+  /// resolved unit can't be obtained.
+  Future<String?> typeOfTopLevelDeclaration({
+    required String filePath,
+    required String name,
+  }) async {
+    final result = await getResolvedUnit(filePath);
+    if (result == null) return null;
+    for (final decl in result.unit.declarations) {
+      if (decl is FunctionDeclaration && decl.name.lexeme == name) {
+        // The element model gives us the return type even when not
+        // written explicitly.
+        final fragment = decl.declaredFragment;
+        if (fragment == null) return null;
+        return fragment.element.returnType.getDisplayString();
+      }
+      if (decl is TopLevelVariableDeclaration) {
+        for (final v in decl.variables.variables) {
+          if (v.name.lexeme == name) {
+            final fragment = v.declaredFragment;
+            if (fragment == null) return null;
+            return fragment.element.type.getDisplayString();
+          }
+        }
+      }
+      if (decl is ClassDeclaration && decl.namePart.typeName.lexeme == name) {
+        return decl.namePart.typeName.lexeme;
+      }
+      if (decl is MixinDeclaration && decl.name.lexeme == name) {
+        return decl.name.lexeme;
+      }
+      if (decl is EnumDeclaration && decl.namePart.typeName.lexeme == name) {
+        return decl.namePart.typeName.lexeme;
+      }
+      if (decl is ExtensionTypeDeclaration &&
+          decl.primaryConstructor.typeName.lexeme == name) {
+        return decl.primaryConstructor.typeName.lexeme;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the static type of the expression at [offset] within
+  /// [filePath], or null if no expression of that exact span is found.
+  ///
+  /// Specifically, finds the SMALLEST Expression node whose source
+  /// span starts at [offset] (so callers can target a specific
+  /// identifier, literal, or sub-expression by passing its known
+  /// offset from `parseString` analysis).
+  Future<String?> typeOfExpressionAt({
+    required String filePath,
+    required int offset,
+  }) async {
+    final result = await getResolvedUnit(filePath);
+    if (result == null) return null;
+    final visitor = _ExpressionAtOffsetVisitor(offset);
+    result.unit.accept(visitor);
+    final expr = visitor.found;
+    if (expr == null) return null;
+    return expr.staticType?.getDisplayString();
+  }
+}
+
+class _ExpressionAtOffsetVisitor extends GeneralizingAstVisitor<void> {
+  _ExpressionAtOffsetVisitor(this.targetOffset);
+
+  final int targetOffset;
+  Expression? found;
+
+  @override
+  void visitExpression(Expression node) {
+    if (node.offset == targetOffset) {
+      // Prefer the SMALLEST (most-nested) expression starting here.
+      if (found == null || node.length < found!.length) {
+        found = node;
+      }
+    }
+    super.visitExpression(node);
+  }
 }
