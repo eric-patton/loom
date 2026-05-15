@@ -160,3 +160,141 @@ bool _hasFreezedAnnotation(List<AnnotationNode> annotations) {
   }
   return false;
 }
+
+/// A json_serializable-style model class view.
+///
+/// Detection signal: class has a `@JsonSerializable(...)` annotation
+/// (or the bare-pun shorthand `@JsonSerializable`).
+///
+/// Fields are real field declarations (not factory ctor params, as in
+/// Freezed). Each field carries its optional `@JsonKey(...)` configuration.
+///
+/// The fromJson factory + toJson method aren't required for
+/// recognition (some classes declare them; some rely entirely on the
+/// generated mixin). When present, they're exposed via
+/// `fromJsonConstructor` / `toJsonMethod`.
+class JsonSerializableView {
+  const JsonSerializableView._({
+    required this.classNode,
+    required this.annotation,
+    required this.fields,
+    required this.fromJsonConstructor,
+    required this.toJsonMethod,
+  });
+
+  /// Returns a `JsonSerializableView` over [model] if the class is
+  /// annotated `@JsonSerializable`, or null otherwise.
+  static JsonSerializableView? from(ClassStructureModel model) {
+    final cls = model.root;
+    final ann = _findJsonSerializableAnnotation(cls.annotations);
+    if (ann == null) return null;
+
+    final fields = <JsonField>[];
+    ClassConstructorNode? fromJson;
+    ClassMethodNode? toJson;
+    for (final member in cls.members) {
+      if (member is ClassFieldNode) {
+        if (member.isStatic) continue;
+        fields.add(JsonField._(member));
+      } else if (member is ClassConstructorNode &&
+          member.isFactory &&
+          member.namedConstructorName == 'fromJson') {
+        fromJson = member;
+      } else if (member is ClassMethodNode && member.name == 'toJson') {
+        toJson = member;
+      }
+    }
+
+    return JsonSerializableView._(
+      classNode: cls,
+      annotation: ann,
+      fields: List.unmodifiable(fields),
+      fromJsonConstructor: fromJson,
+      toJsonMethod: toJson,
+    );
+  }
+
+  final ClassStructureNode classNode;
+
+  /// The `@JsonSerializable(...)` annotation that triggered
+  /// recognition. Useful for editing global JSON config
+  /// (`fieldRename: FieldRename.snake`, etc.).
+  final AnnotationNode annotation;
+
+  /// Instance fields of the class — what json_serializable serializes.
+  /// Static fields are excluded.
+  final List<JsonField> fields;
+
+  /// The `factory Foo.fromJson(...)` constructor if present, or null.
+  final ClassConstructorNode? fromJsonConstructor;
+
+  /// The `Map<String, dynamic> toJson()` method if present, or null.
+  final ClassMethodNode? toJsonMethod;
+
+  @override
+  String toString() => 'JsonSerializableView(${classNode.className}, '
+      '${fields.length} field(s))';
+}
+
+/// A field within a json_serializable class — wraps a `ClassFieldNode`
+/// plus its optional `@JsonKey(...)` configuration.
+class JsonField {
+  const JsonField._(this.field);
+
+  /// The underlying field node. Use this for field-level edits.
+  final ClassFieldNode field;
+
+  String get name => field.name;
+  SourceSpan get nameSpan => field.nameSpan;
+  String? get typeName => field.typeName;
+  List<AnnotationNode> get annotations => field.annotations;
+
+  /// The `@JsonKey(...)` annotation on this field, if any. Captures
+  /// per-field overrides like `name: 'first_name'` or
+  /// `defaultValue: 0`.
+  AnnotationNode? get jsonKey {
+    for (final a in field.annotations) {
+      if (a.name == 'JsonKey') return a;
+    }
+    return null;
+  }
+
+  /// The serialized JSON key for this field. Returns the `name:`
+  /// argument of `@JsonKey` if specified, otherwise the field's
+  /// Dart name (which is what json_serializable defaults to unless
+  /// the class-level annotation has a `fieldRename:` setting —
+  /// callers that need to apply that should consult `view.annotation`).
+  String get jsonKeyName {
+    final ann = jsonKey;
+    if (ann == null) return name;
+    for (final arg in ann.arguments) {
+      if (arg is NamedAnnotationArgumentNode && arg.name == 'name') {
+        // The value source is a string literal — strip quotes.
+        return _stripQuotes(arg.valueSource) ?? name;
+      }
+    }
+    return name;
+  }
+
+  @override
+  String toString() => 'JsonField($name → $jsonKeyName)';
+}
+
+AnnotationNode? _findJsonSerializableAnnotation(
+  List<AnnotationNode> annotations,
+) {
+  for (final a in annotations) {
+    if (a.name == 'JsonSerializable') return a;
+  }
+  return null;
+}
+
+String? _stripQuotes(String source) {
+  if (source.length < 2) return null;
+  final first = source.codeUnitAt(0);
+  final last = source.codeUnitAt(source.length - 1);
+  if ((first == 0x27 /* ' */ || first == 0x22 /* " */) && first == last) {
+    return source.substring(1, source.length - 1);
+  }
+  return null;
+}
