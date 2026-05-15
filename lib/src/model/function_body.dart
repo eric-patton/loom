@@ -673,6 +673,7 @@ class SwitchStatementNode extends StatementNode {
     required this.switchKeywordSpan,
     required this.expressionSource,
     required this.expressionSpan,
+    required this.expression,
     required this.leftBracketSpan,
     required List<SwitchMemberNode> members,
     required this.rightBracketSpan,
@@ -687,6 +688,9 @@ class SwitchStatementNode extends StatementNode {
 
   /// Span of just the expression (excludes the `(` and `)`).
   final SourceSpan expressionSpan;
+
+  /// Structured expression view of the switched value (M8.6).
+  final ExpressionNode expression;
 
   /// Span of the switch body's opening `{`.
   final SourceSpan leftBracketSpan;
@@ -1004,6 +1008,7 @@ class ConstantPatternNode extends PatternNode {
     required this.constKeywordSpan,
     required this.expressionSource,
     required this.expressionSpan,
+    required this.expression,
     required this.sourceSpan,
   });
 
@@ -1014,6 +1019,9 @@ class ConstantPatternNode extends PatternNode {
   /// Raw source of the constant expression.
   final String expressionSource;
   final SourceSpan expressionSpan;
+
+  /// Structured expression view of the constant (M8.6).
+  final ExpressionNode expression;
 
   @override
   final SourceSpan sourceSpan;
@@ -1362,6 +1370,7 @@ class MapPatternEntryNode implements MapPatternElement {
   const MapPatternEntryNode({
     required this.keyExpressionSource,
     required this.keyExpressionSpan,
+    required this.keyExpression,
     required this.colonSpan,
     required this.pattern,
     required this.sourceSpan,
@@ -1370,6 +1379,9 @@ class MapPatternEntryNode implements MapPatternElement {
   /// Raw source of the key expression (e.g. `'foo'`, `0`, `MyEnum.a`).
   final String keyExpressionSource;
   final SourceSpan keyExpressionSpan;
+
+  /// Structured expression view of the key (M8.6).
+  final ExpressionNode keyExpression;
 
   /// Span of the `:` separator.
   final SourceSpan colonSpan;
@@ -1407,6 +1419,7 @@ class RelationalPatternNode extends PatternNode {
     required this.operatorSpan,
     required this.operandSource,
     required this.operandSpan,
+    required this.operand,
     required this.sourceSpan,
   });
 
@@ -1417,6 +1430,9 @@ class RelationalPatternNode extends PatternNode {
   /// Raw source of the operand expression.
   final String operandSource;
   final SourceSpan operandSpan;
+
+  /// Structured expression view of the operand (M8.6).
+  final ExpressionNode operand;
 
   @override
   final SourceSpan sourceSpan;
@@ -1596,6 +1612,7 @@ class SwitchExpressionNode {
     required this.switchKeywordSpan,
     required this.subjectSource,
     required this.subjectSpan,
+    required this.subjectExpression,
     required this.leftBracketSpan,
     required List<SwitchExpressionCaseNode> cases,
     required this.rightBracketSpan,
@@ -1608,6 +1625,9 @@ class SwitchExpressionNode {
   /// Raw source of the switched expression (no surrounding parens).
   final String subjectSource;
   final SourceSpan subjectSpan;
+
+  /// Structured expression view of the subject (M8.6).
+  final ExpressionNode subjectExpression;
 
   final SourceSpan leftBracketSpan;
   final List<SwitchExpressionCaseNode> cases;
@@ -1690,19 +1710,30 @@ class CStyleForHeader extends ForLoopHeader {
     required this.leftSeparatorSpan,
     required this.conditionSource,
     required this.conditionSpan,
+    required this.condition,
     required this.rightSeparatorSpan,
     required List<String> updaterSources,
     required List<SourceSpan> updaterSpans,
+    required List<ExpressionNode> updaters,
     required this.sourceSpan,
   })  : updaterSources = List.unmodifiable(updaterSources),
         updaterSpans = List.unmodifiable(updaterSpans),
+        updaters = List.unmodifiable(updaters),
         assert(
           updaterSources.length == updaterSpans.length,
           'updaterSources and updaterSpans must have the same length',
+        ),
+        assert(
+          updaters.length == updaterSources.length,
+          'updaters list must have the same length as updaterSources',
         );
 
   /// Raw source of the init clause (e.g. `var i = 0`, `i = 0`), or
   /// null when the init is empty (`for (; cond; updater)`).
+  /// Note: init is NOT surfaced as a structured `ExpressionNode`
+  /// because it can be either a variable declaration OR an expression
+  /// OR empty — modeling that variant requires a sealed `ForLoopInit`
+  /// type, deferred to M8.x+.
   final String? initSource;
   final SourceSpan? initSpan;
 
@@ -1714,6 +1745,10 @@ class CStyleForHeader extends ForLoopHeader {
   final String? conditionSource;
   final SourceSpan? conditionSpan;
 
+  /// Structured expression view of the condition (M8.6). Null when
+  /// the condition is absent.
+  final ExpressionNode? condition;
+
   /// Span of the second `;` separator (after condition).
   final SourceSpan rightSeparatorSpan;
 
@@ -1721,6 +1756,10 @@ class CStyleForHeader extends ForLoopHeader {
   /// Empty when no updaters.
   final List<String> updaterSources;
   final List<SourceSpan> updaterSpans;
+
+  /// Structured expression views of the updaters (M8.6). Length
+  /// matches `updaterSources` / `updaterSpans`.
+  final List<ExpressionNode> updaters;
 
   @override
   final SourceSpan sourceSpan;

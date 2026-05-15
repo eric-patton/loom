@@ -487,9 +487,11 @@ CStyleForHeader _convertCStyleHeader({
   final condition = parts.condition;
   final updaterSources = <String>[];
   final updaterSpans = <SourceSpan>[];
+  final updaters = <ExpressionNode>[];
   for (final u in parts.updaters) {
     updaterSources.add(source.substring(u.offset, u.offset + u.length));
     updaterSpans.add(SourceSpan(offset: u.offset, length: u.length));
+    updaters.add(_convertExpression(u, source));
   }
   return CStyleForHeader(
     initSource: initSource,
@@ -507,12 +509,14 @@ CStyleForHeader _convertCStyleHeader({
     conditionSpan: condition == null
         ? null
         : SourceSpan(offset: condition.offset, length: condition.length),
+    condition: condition == null ? null : _convertExpression(condition, source),
     rightSeparatorSpan: SourceSpan(
       offset: parts.rightSeparator.offset,
       length: parts.rightSeparator.length,
     ),
     updaterSources: updaterSources,
     updaterSpans: updaterSpans,
+    updaters: updaters,
     sourceSpan: headerSpan,
   );
 }
@@ -722,6 +726,7 @@ SwitchStatementNode? _tryConvertSwitchStatement(
             caseExpression.offset + caseExpression.length,
           ),
           expressionSpan: patternSpan,
+          expression: _convertExpression(caseExpression, source),
           sourceSpan: patternSpan,
         ),
         whenKeywordSpan: null,
@@ -803,6 +808,7 @@ SwitchStatementNode? _tryConvertSwitchStatement(
     ),
     expressionSource: expressionSource,
     expressionSpan: expressionSpan,
+    expression: _convertExpression(expression, source),
     leftBracketSpan: SourceSpan(
       offset: stmt.leftBracket.offset,
       length: stmt.leftBracket.length,
@@ -922,6 +928,7 @@ PatternNode _convertPattern(DartPattern pattern, String source) {
         expr.offset + expr.length,
       ),
       expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
+      expression: _convertExpression(expr, source),
       sourceSpan: span,
     );
   }
@@ -1095,6 +1102,7 @@ PatternNode _convertPattern(DartPattern pattern, String source) {
         offset: pattern.operand.offset,
         length: pattern.operand.length,
       ),
+      operand: _convertExpression(pattern.operand, source),
       sourceSpan: span,
     );
   }
@@ -1256,6 +1264,7 @@ MapPatternElement _convertMapPatternElement(
         offset: element.key.offset,
         length: element.key.length,
       ),
+      keyExpression: _convertExpression(element.key, source),
       colonSpan: SourceSpan(
         offset: element.separator.offset,
         length: element.separator.length,
@@ -1404,6 +1413,7 @@ SwitchExpressionNode _convertSwitchExpression(
     ),
     subjectSpan: SourceSpan(
         offset: expr.expression.offset, length: expr.expression.length),
+    subjectExpression: _convertExpression(expr.expression, source),
     leftBracketSpan: SourceSpan(
       offset: expr.leftBracket.offset,
       length: expr.leftBracket.length,

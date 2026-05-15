@@ -1628,6 +1628,117 @@ void use(Object o) {}
     });
   });
 
+  group('M8.6 — expressions surfaced in remaining positions', () {
+    test('SwitchStatementNode.expression surfaces structured view', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 0:
+      return 'zero';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      expect(sw.expression, isA<IdentifierExpressionNode>());
+      expect((sw.expression as IdentifierExpressionNode).name, equals('x'));
+    });
+
+    test('SwitchExpressionNode.subjectExpression surfaces structured view', () {
+      const source = '''
+String f(int x) {
+  final r = switch (x) {
+    0 => 'zero',
+    _ => 'other',
+  };
+  return r;
+}
+''';
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      expect(sx.subjectExpression, isA<IdentifierExpressionNode>());
+    });
+
+    test('ConstantPatternNode.expression surfaces structured view', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 42:
+      return 'forty-two';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c = sw.members[0] as SwitchCaseNode;
+      final p = c.pattern as ConstantPatternNode;
+      expect(p.expression, isA<LiteralExpressionNode>());
+      expect((p.expression as LiteralExpressionNode).source, equals('42'));
+    });
+
+    test('RelationalPatternNode.operand surfaces structured view', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case > 100:
+      return 'big';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c = sw.members[0] as SwitchCaseNode;
+      final rp = c.pattern as RelationalPatternNode;
+      expect(rp.operand, isA<LiteralExpressionNode>());
+      expect((rp.operand as LiteralExpressionNode).source, equals('100'));
+    });
+
+    test('MapPatternEntryNode.keyExpression surfaces structured view', () {
+      const source = '''
+String f(Map<String, int> m) {
+  switch (m) {
+    case {'name': int n}:
+      return 'name=\$n';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c = sw.members[0] as SwitchCaseNode;
+      final mp = c.pattern as MapPatternNode;
+      final entry = mp.elements[0] as MapPatternEntryNode;
+      expect(entry.keyExpression, isA<LiteralExpressionNode>());
+    });
+
+    test('CStyleForHeader.condition + updaters surface structured views', () {
+      const source = '''
+int f(int n) {
+  var total = 0;
+  for (var i = 0; i < n; i++) {
+    total = total + i;
+  }
+  return total;
+}
+''';
+      final body = parseFunctionBody(source);
+      final f = body.statements[1] as ForStatementNode;
+      final h = f.header as CStyleForHeader;
+      expect(h.condition, isA<BinaryExpressionNode>());
+      expect((h.condition as BinaryExpressionNode).operator, equals('<'));
+      expect(h.updaters, hasLength(1));
+      expect(h.updaters[0], isA<PostfixExpressionNode>());
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';
