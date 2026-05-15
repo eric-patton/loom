@@ -154,8 +154,12 @@ StatementNode _convertStatement(Statement stmt, String source) {
     final asTry = _tryConvertTryStatement(stmt, source, span);
     if (asTry != null) return asTry;
   }
-  // Anything else (switch/...) or an unsupported control-flow
-  // shape — preserve verbatim.
+  if (stmt is SwitchStatement) {
+    final asSwitch = _tryConvertSwitchStatement(stmt, source, span);
+    if (asSwitch != null) return asSwitch;
+  }
+  // Anything else (yield/break/continue/labeled stmts/...) or an
+  // unsupported control-flow shape — preserve verbatim.
   return OpaqueStatementNode(
     sourceText: source.substring(stmt.offset, stmt.offset + stmt.length),
     sourceSpan: span,
@@ -402,6 +406,157 @@ CatchClauseNode? _convertCatchClause(CatchClause clause, String source) {
           ),
     body: _convertBlock(body, source),
     sourceSpan: SourceSpan(offset: clause.offset, length: clause.length),
+  );
+}
+
+/// Attempts to convert a `SwitchStatement` into a `SwitchStatementNode`.
+/// Each member (case / default) becomes a `SwitchMemberNode` with a
+/// brace-less `StatementBlock` body. The pattern of a case is captured
+/// as opaque source (whether it's a Dart 2 constant expression or a
+/// Dart 3 pattern); same for the optional `when` guard.
+SwitchStatementNode? _tryConvertSwitchStatement(
+  SwitchStatement stmt,
+  String source,
+  SourceSpan span,
+) {
+  final expression = stmt.expression;
+  final expressionSpan =
+      SourceSpan(offset: expression.offset, length: expression.length);
+  final expressionSource = source.substring(
+    expression.offset,
+    expression.offset + expression.length,
+  );
+
+  final members = <SwitchMemberNode>[];
+  final memberList = stmt.members;
+  final rightBracketOffset = stmt.rightBracket.offset;
+  for (var i = 0; i < memberList.length; i++) {
+    final member = memberList[i];
+    // Body span: from just after this member's `:` colon, up to either
+    // the next member's start (its first label or keyword) or the
+    // switch's closing `}`.
+    final bodyStart = member.colon.offset + member.colon.length;
+    final bodyEnd = i + 1 < memberList.length
+        ? memberList[i + 1].offset
+        : rightBracketOffset;
+    final bodyLength = bodyEnd - bodyStart;
+    final bodySpan = SourceSpan(offset: bodyStart, length: bodyLength);
+
+    final bodyStatements = <StatementNode>[
+      for (final s in member.statements) _convertStatement(s, source),
+    ];
+    final body = StatementBlock(
+      blockSpan: bodySpan,
+      innerSpan: bodySpan,
+      statements: bodyStatements,
+      hasBraces: false,
+    );
+
+    final memberSpan = SourceSpan(offset: member.offset, length: member.length);
+
+    if (member is SwitchCase) {
+      final caseExpression = member.expression;
+      members.add(SwitchCaseNode(
+        keywordSpan: SourceSpan(
+          offset: member.keyword.offset,
+          length: member.keyword.length,
+        ),
+        patternSource: source.substring(
+          caseExpression.offset,
+          caseExpression.offset + caseExpression.length,
+        ),
+        patternSpan: SourceSpan(
+          offset: caseExpression.offset,
+          length: caseExpression.length,
+        ),
+        whenKeywordSpan: null,
+        whenGuardSource: null,
+        whenGuardSpan: null,
+        colonSpan: SourceSpan(
+          offset: member.colon.offset,
+          length: member.colon.length,
+        ),
+        body: body,
+        sourceSpan: memberSpan,
+      ));
+    } else if (member is SwitchPatternCase) {
+      final guarded = member.guardedPattern;
+      final pattern = guarded.pattern;
+      final whenClause = guarded.whenClause;
+      members.add(SwitchCaseNode(
+        keywordSpan: SourceSpan(
+          offset: member.keyword.offset,
+          length: member.keyword.length,
+        ),
+        patternSource: source.substring(
+          pattern.offset,
+          pattern.offset + pattern.length,
+        ),
+        patternSpan: SourceSpan(
+          offset: pattern.offset,
+          length: pattern.length,
+        ),
+        whenKeywordSpan: whenClause == null
+            ? null
+            : SourceSpan(
+                offset: whenClause.whenKeyword.offset,
+                length: whenClause.whenKeyword.length,
+              ),
+        whenGuardSource: whenClause == null
+            ? null
+            : source.substring(
+                whenClause.expression.offset,
+                whenClause.expression.offset + whenClause.expression.length,
+              ),
+        whenGuardSpan: whenClause == null
+            ? null
+            : SourceSpan(
+                offset: whenClause.expression.offset,
+                length: whenClause.expression.length,
+              ),
+        colonSpan: SourceSpan(
+          offset: member.colon.offset,
+          length: member.colon.length,
+        ),
+        body: body,
+        sourceSpan: memberSpan,
+      ));
+    } else if (member is SwitchDefault) {
+      members.add(SwitchDefaultNode(
+        keywordSpan: SourceSpan(
+          offset: member.keyword.offset,
+          length: member.keyword.length,
+        ),
+        colonSpan: SourceSpan(
+          offset: member.colon.offset,
+          length: member.colon.length,
+        ),
+        body: body,
+        sourceSpan: memberSpan,
+      ));
+    } else {
+      // Unknown member kind — reject the whole switch to opaque.
+      return null;
+    }
+  }
+
+  return SwitchStatementNode(
+    switchKeywordSpan: SourceSpan(
+      offset: stmt.switchKeyword.offset,
+      length: stmt.switchKeyword.length,
+    ),
+    expressionSource: expressionSource,
+    expressionSpan: expressionSpan,
+    leftBracketSpan: SourceSpan(
+      offset: stmt.leftBracket.offset,
+      length: stmt.leftBracket.length,
+    ),
+    members: members,
+    rightBracketSpan: SourceSpan(
+      offset: stmt.rightBracket.offset,
+      length: stmt.rightBracket.length,
+    ),
+    sourceSpan: span,
   );
 }
 

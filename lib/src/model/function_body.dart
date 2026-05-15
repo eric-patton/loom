@@ -51,19 +51,31 @@ class FunctionBodyModel {
 /// widget catalog — captures the surrounding-source structure so that
 /// `addStatement` / `removeStatement` can target the right insertion
 /// point regardless of how deeply nested the block is.
+///
+/// **Brace-less variant (M8.0e):** switch-case bodies in Dart don't
+/// have their own `{ ... }` — the body runs from after the `case X:`
+/// colon to the start of the next case/default or to the switch's `}`.
+/// For those, the same `StatementBlock` is reused with `hasBraces:
+/// false`. `blockSpan` and `innerSpan` are equal in that case (both
+/// covering just the statement run, no braces).
 class StatementBlock {
   StatementBlock({
     required this.blockSpan,
     required this.innerSpan,
     required List<StatementNode> statements,
+    this.hasBraces = true,
   }) : statements = List.unmodifiable(statements);
 
-  /// Span of the full block, including the surrounding `{` and `}`.
+  /// Span of the full block. For braced blocks (function bodies, if/
+  /// for/while/do/try bodies), this includes the surrounding `{` and
+  /// `}`. For brace-less switch-case bodies, this is just the statement
+  /// run (same as `innerSpan`).
   final SourceSpan blockSpan;
 
-  /// Span of the block's interior — between `{` and `}` (exclusive of
-  /// the braces themselves). Used as the anchor for `addStatement` when
-  /// the block is otherwise empty.
+  /// Span of the block's interior. For braced blocks, this is between
+  /// `{` and `}` (exclusive of the braces themselves). For brace-less
+  /// switch-case bodies, identical to `blockSpan`. Used as the anchor
+  /// for `addStatement` when the block is otherwise empty.
   final SourceSpan innerSpan;
 
   /// Statements in source order. Pattern-match on subtype to distinguish
@@ -71,8 +83,16 @@ class StatementBlock {
   /// (M8.0b+) control-flow statements.
   final List<StatementNode> statements;
 
+  /// Whether this block is delimited by `{ ... }`. True for function
+  /// bodies and braced control-flow bodies; false for switch-case bodies.
+  ///
+  /// Affects `addStatement`'s empty-block path — brace-less blocks insert
+  /// at the start of the body without re-emitting a closing brace.
+  final bool hasBraces;
+
   @override
-  String toString() => 'StatementBlock(${statements.length} statement(s))';
+  String toString() => 'StatementBlock(${statements.length} statement(s)'
+      '${hasBraces ? '' : ', brace-less'})';
 }
 
 /// Base type for a function-body statement.
@@ -560,9 +580,166 @@ class ThrowStatementNode extends StatementNode {
   String toString() => 'ThrowStatementNode($expressionSource)';
 }
 
-/// A statement kind not yet modeled — `switch`, etc. (and `if`/`for`/
-/// `while`/`do`/`try` with bare-statement bodies, which the M8.0d parser
-/// punts on). Preserves the source verbatim through any edit to
+/// A modeled `switch (expr) { ...members... }` statement.
+///
+/// Captures the switched expression as raw source plus an ordered list
+/// of `SwitchMemberNode`s. Switch **expressions** (the `switch (x) { 1
+/// => 'a', _ => 'b' }` form) live inside expression context and are
+/// NOT statements — they stay opaque inside the host expression's
+/// source (no separate node).
+///
+/// **Pattern surface (M8.0e scope):** every pattern is captured as
+/// opaque source. Differentiating constant patterns, type-test patterns,
+/// `||` alternatives, object/record/list/map patterns, and so on
+/// requires a dozen new node kinds — deferred until concrete edits
+/// demand it. Same opaque-source-for-now play as `ForStatementNode`'s
+/// header.
+class SwitchStatementNode extends StatementNode {
+  SwitchStatementNode({
+    required this.switchKeywordSpan,
+    required this.expressionSource,
+    required this.expressionSpan,
+    required this.leftBracketSpan,
+    required List<SwitchMemberNode> members,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  }) : members = List.unmodifiable(members);
+
+  /// Span of the `switch` keyword token.
+  final SourceSpan switchKeywordSpan;
+
+  /// Raw source of the switched expression (without surrounding parens).
+  final String expressionSource;
+
+  /// Span of just the expression (excludes the `(` and `)`).
+  final SourceSpan expressionSpan;
+
+  /// Span of the switch body's opening `{`.
+  final SourceSpan leftBracketSpan;
+
+  /// Switch members (cases + default) in source order.
+  final List<SwitchMemberNode> members;
+
+  /// Span of the switch body's closing `}`.
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'SwitchStatementNode('
+      'on=$expressionSource, '
+      '${members.length} member(s))';
+}
+
+/// Base type for a member of a `SwitchStatementNode`. Sealed across
+/// `SwitchCaseNode` and `SwitchDefaultNode`. Pattern-match on subtype.
+///
+/// Each member has its own brace-less `StatementBlock` body — the
+/// statements after the `:` colon up to the next case/default keyword
+/// or the switch's closing `}`.
+sealed class SwitchMemberNode {
+  const SwitchMemberNode();
+
+  /// Span of just the introducer keyword (`case` or `default`).
+  SourceSpan get keywordSpan;
+
+  /// Span of the `:` colon separating the case header from its body.
+  SourceSpan get colonSpan;
+
+  /// The case/default's statement body, brace-less (`hasBraces: false`).
+  StatementBlock get body;
+
+  /// Full span of this member from its keyword (or first label) through
+  /// the last statement (or the colon, when the body is empty).
+  SourceSpan get sourceSpan;
+}
+
+/// A `case [pattern] [when guard]: ...statements...` member.
+///
+/// Covers both the legacy `case constantExpr:` form and the Dart 3
+/// `case pattern [when guard]:` pattern-case form. Both shapes capture
+/// the pattern/expression as opaque source under `patternSource`. Legacy
+/// cases have `whenGuardSource == null`.
+class SwitchCaseNode extends SwitchMemberNode {
+  const SwitchCaseNode({
+    required this.keywordSpan,
+    required this.patternSource,
+    required this.patternSpan,
+    required this.whenKeywordSpan,
+    required this.whenGuardSource,
+    required this.whenGuardSpan,
+    required this.colonSpan,
+    required this.body,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `case` keyword token.
+  @override
+  final SourceSpan keywordSpan;
+
+  /// Raw source of the pattern (Dart 3) or constant expression (legacy).
+  final String patternSource;
+  final SourceSpan patternSpan;
+
+  /// Span of the `when` keyword token, when a guard is present; null
+  /// otherwise. Only valid on pattern cases (Dart 3); legacy `case`
+  /// forms can't have guards.
+  final SourceSpan? whenKeywordSpan;
+
+  /// Raw source of the `when` guard expression (no `when` keyword);
+  /// null when there's no guard.
+  final String? whenGuardSource;
+  final SourceSpan? whenGuardSpan;
+
+  @override
+  final SourceSpan colonSpan;
+
+  @override
+  final StatementBlock body;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() {
+    final guard = whenGuardSource == null ? '' : ' when $whenGuardSource';
+    return 'SwitchCaseNode('
+        'case $patternSource$guard:, '
+        '${body.statements.length} stmt(s))';
+  }
+}
+
+/// A `default: ...statements...` member of a switch statement.
+class SwitchDefaultNode extends SwitchMemberNode {
+  const SwitchDefaultNode({
+    required this.keywordSpan,
+    required this.colonSpan,
+    required this.body,
+    required this.sourceSpan,
+  });
+
+  /// Span of the `default` keyword token.
+  @override
+  final SourceSpan keywordSpan;
+
+  @override
+  final SourceSpan colonSpan;
+
+  @override
+  final StatementBlock body;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'SwitchDefaultNode(${body.statements.length} stmt(s))';
+}
+
+/// A statement kind not yet modeled — `yield`, `break`, `continue`,
+/// labeled statements, etc. (and `if`/`for`/`while`/`do`/`try`/`switch`
+/// with bare-statement or otherwise unsupported shapes, which the M8.0e
+/// parser punts on). Preserves the source verbatim through any edit to
 /// surrounding statements; the kernel makes no guarantees about edits
 /// that would target opaque content.
 class OpaqueStatementNode extends StatementNode {

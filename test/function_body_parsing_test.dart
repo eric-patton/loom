@@ -442,6 +442,131 @@ void use(int x) {}
     });
   });
 
+  group('parseFunctionBody on function_body_with_switch.dart (M8.0e)', () {
+    late String source;
+    late FunctionBodyModel body;
+    late SwitchStatementNode switchStmt;
+
+    setUpAll(() {
+      source = File('test/fixtures/function_body_with_switch.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+      switchStmt = body.statements.first as SwitchStatementNode;
+    });
+
+    test('the function body is a single switch statement', () {
+      expect(body.statements, hasLength(1));
+      expect(body.statements.first, isA<SwitchStatementNode>());
+    });
+
+    test('switched expression is captured', () {
+      expect(switchStmt.expressionSource, equals('value'));
+    });
+
+    test('five members in order: 4 cases + default', () {
+      expect(switchStmt.members, hasLength(5));
+      expect(switchStmt.members[0], isA<SwitchCaseNode>());
+      expect(switchStmt.members[1], isA<SwitchCaseNode>());
+      expect(switchStmt.members[2], isA<SwitchCaseNode>());
+      expect(switchStmt.members[3], isA<SwitchCaseNode>());
+      expect(switchStmt.members[4], isA<SwitchDefaultNode>());
+    });
+
+    test('first case is the legacy `case 0:` form with no guard', () {
+      final c0 = switchStmt.members[0] as SwitchCaseNode;
+      expect(c0.patternSource, equals('0'));
+      expect(c0.whenGuardSource, isNull);
+      expect(c0.body.statements, hasLength(1));
+      expect(c0.body.statements.first, isA<ReturnStatementNode>());
+    });
+
+    test('pattern case with `when n < 0` guard parses correctly', () {
+      final c1 = switchStmt.members[1] as SwitchCaseNode;
+      expect(c1.patternSource, equals('int n'));
+      expect(c1.whenGuardSource, equals('n < 0'));
+      expect(c1.whenKeywordSpan, isNotNull);
+    });
+
+    test('pattern case with `when n > 100` guard parses correctly', () {
+      final c2 = switchStmt.members[2] as SwitchCaseNode;
+      expect(c2.patternSource, equals('int n'));
+      expect(c2.whenGuardSource, equals('n > 100'));
+    });
+
+    test('pattern case without guard parses correctly', () {
+      final c3 = switchStmt.members[3] as SwitchCaseNode;
+      expect(c3.patternSource, equals('String s'));
+      expect(c3.whenGuardSource, isNull);
+    });
+
+    test('default has a body with one statement', () {
+      final d = switchStmt.members[4] as SwitchDefaultNode;
+      expect(d.body.statements, hasLength(1));
+      expect(d.body.statements.first, isA<ReturnStatementNode>());
+    });
+
+    test('case body block is brace-less', () {
+      for (final m in switchStmt.members) {
+        expect(m.body.hasBraces, isFalse);
+      }
+    });
+
+    test('switch keyword + brackets spans line up with source', () {
+      final kw = source.substring(
+        switchStmt.switchKeywordSpan.offset,
+        switchStmt.switchKeywordSpan.offset +
+            switchStmt.switchKeywordSpan.length,
+      );
+      expect(kw, equals('switch'));
+      final lb = source.substring(
+        switchStmt.leftBracketSpan.offset,
+        switchStmt.leftBracketSpan.offset + switchStmt.leftBracketSpan.length,
+      );
+      expect(lb, equals('{'));
+      final rb = source.substring(
+        switchStmt.rightBracketSpan.offset,
+        switchStmt.rightBracketSpan.offset + switchStmt.rightBracketSpan.length,
+      );
+      expect(rb, equals('}'));
+    });
+
+    test('multi-case fall-through parses as separate empty-body cases', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 1:
+    case 2:
+      return 'small';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final s = body.statements.first as SwitchStatementNode;
+      expect(s.members, hasLength(3));
+      final c1 = s.members[0] as SwitchCaseNode;
+      final c2 = s.members[1] as SwitchCaseNode;
+      expect(c1.body.statements, isEmpty);
+      expect(c2.body.statements, hasLength(1));
+    });
+
+    test('switch expression (not a statement) stays opaque inside its host',
+        () {
+      const source = '''
+String tag(int x) {
+  final result = switch (x) { 1 => 'one', _ => 'other' };
+  return result;
+}
+''';
+      final body = parseFunctionBody(source);
+      // The variable declaration is structured, but its initializer
+      // (the switch expression) is captured as opaque source text.
+      final v0 = body.statements.first as VariableDeclarationStatementNode;
+      expect(v0.variables.first.initializerSource, startsWith('switch ('));
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';

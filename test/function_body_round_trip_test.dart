@@ -524,4 +524,161 @@ void main() {
       expect(reparsedThrow.expressionSource, startsWith('StateError'));
     });
   });
+
+  group('switch edits (M8.0e)', () {
+    test('idempotence on function_body_with_switch.dart', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(1));
+    });
+
+    test('changeSwitchExpression rewrites the switched value', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeSwitchExpression(
+        statement: sw,
+        newExpressionSource: 'value.runtimeType',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      expect(reparsedSw.expressionSource, equals('value.runtimeType'));
+      expect(reparsedSw.members, hasLength(5));
+    });
+
+    test('changeSwitchCasePattern rewrites a legacy case pattern', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+
+      final edit = FunctionBodyEditPlanner.changeSwitchCasePattern(
+        caseMember: c0,
+        newPatternSource: '1',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      expect(reparsedC0.patternSource, equals('1'));
+    });
+
+    test('changeSwitchCaseGuard rewrites a pattern-case guard', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[1] is `case int n when n < 0:`.
+      final c1 = sw.members[1] as SwitchCaseNode;
+
+      final edit = FunctionBodyEditPlanner.changeSwitchCaseGuard(
+        caseMember: c1,
+        newGuardSource: 'n <= -1',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC1 = reparsedSw.members[1] as SwitchCaseNode;
+      expect(reparsedC1.whenGuardSource, equals('n <= -1'));
+    });
+
+    test('changeSwitchCaseGuard throws when no guard exists', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[0] is `case 0:` — no guard.
+      final c0 = sw.members[0] as SwitchCaseNode;
+      expect(
+        () => FunctionBodyEditPlanner.changeSwitchCaseGuard(
+          caseMember: c0,
+          newGuardSource: 'true',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('addStatement into a non-empty case body', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      expect(c0.body.statements, hasLength(1));
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: c0.body,
+        index: 0,
+        newStatementSource: 'log("zero");',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      expect(reparsedC0.body.statements, hasLength(2));
+      expect(
+        reparsedC0.body.statements.first,
+        isA<ExpressionStatementNode>(),
+      );
+    });
+
+    test('addStatement into a brace-less EMPTY case body (fall-through)', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case 1:
+    case 2:
+      return 'small';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      // members[0] is `case 1:` with an empty body (fall-through).
+      final c0 = sw.members[0] as SwitchCaseNode;
+      expect(c0.body.statements, isEmpty);
+
+      final edit = FunctionBodyEditPlanner.addStatement(
+        block: c0.body,
+        index: 0,
+        newStatementSource: 'log("one");',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // Re-parse: case 1 should now have 1 statement, the next case
+      // still parses cleanly, no syntax damage.
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      expect(reparsedC0.body.statements, hasLength(1));
+      expect(reparsedSw.members, hasLength(3));
+    });
+
+    test('removeStatement from a case body', () {
+      final source = _loadFixture('function_body_with_switch.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+
+      final edit = FunctionBodyEditPlanner.removeStatement(
+        statement: c0.body.statements.first,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      // The case body is now empty, but the switch still parses.
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedSw = reparsed.statements.first as SwitchStatementNode;
+      final reparsedC0 = reparsedSw.members[0] as SwitchCaseNode;
+      expect(reparsedC0.body.statements, isEmpty);
+    });
+  });
 }

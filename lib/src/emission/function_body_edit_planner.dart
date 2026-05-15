@@ -44,14 +44,30 @@ import 'source_edit.dart';
 ///   * Try-block, catch-clause body, and finally-block edits all reuse
 ///     the `StatementBlock`-taking statement-list ops above.
 ///
+/// Switch operations (M8.0e):
+///   * `changeSwitchExpression` — replace the value being switched on.
+///   * `changeSwitchCasePattern` — replace the pattern of a single case
+///     (works on both legacy `case expr:` and Dart 3 `case pattern:`).
+///   * `changeSwitchCaseGuard` — replace the `when ...` guard of a
+///     pattern case (requires an existing guard).
+///   * Case/default body edits reuse the `StatementBlock`-taking ops
+///     above. Switch-case bodies are brace-less (`StatementBlock`'s
+///     `hasBraces` is false); `addStatement` handles that path.
+///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
 ///     `for (x in xs) f(x);`) — opaqued.
-///   * Other control flow: switch (with patterns), yield, break,
-///     continue, labeled statements.
+///   * Other control flow: yield, break, continue, labeled statements.
 ///   * Modeling the c-style/for-each structure inside
 ///     `ForStatementNode.headerSource`.
-///   * Adding/removing/reordering catch clauses on a try statement.
+///   * Modeling switch case patterns (constant / type-test / object /
+///     record / list / map / `||` alternatives) — currently opaque.
+///   * Adding a `when` guard to a guard-less case (requires inserting
+///     the `when` keyword).
+///   * Adding/removing/reordering catch clauses on a try statement, or
+///     switch cases on a switch statement.
+///   * Switch **expressions** (the `=>`-based form) — they're
+///     expressions, not statements; stay opaque inside the host.
 ///   * Editing inside `ExpressionStatement.expressionSource` —
 ///     requires modeling expression structure.
 ///   * Adding type annotation to an untyped variable declaration.
@@ -85,8 +101,21 @@ class FunctionBodyEditPlanner {
       );
     }
 
-    // Empty block: `{}` → `{\n  newStmt;\n}` with inferred indent.
+    // Empty block. Two flavors: braced (`{}` → `{\n  newStmt;\n}`) and
+    // brace-less (switch-case bodies — insert after the `:` without a
+    // re-emitted closing brace).
     if (block.statements.isEmpty) {
+      if (!block.hasBraces) {
+        // Brace-less: peek BACKWARDS to find the line the case
+        // keyword starts on, indent from there + one level.
+        final caseIndent = _lineIndentBefore(block.blockSpan.offset, source);
+        final innerIndent = '$caseIndent  ';
+        return SourceEdit(
+          offset: block.innerSpan.offset,
+          length: 0,
+          replacement: '\n$innerIndent$newStatementSource',
+        );
+      }
       final outerIndent = _lineIndentBefore(block.blockSpan.offset, source);
       final innerIndent = '$outerIndent  ';
       return SourceEdit(
@@ -258,6 +287,61 @@ class FunctionBodyEditPlanner {
       offset: statement.conditionSpan.offset,
       length: statement.conditionSpan.length,
       replacement: newConditionSource,
+    );
+  }
+
+  // ----------------------- Switch-statement ops (M8.0e) ----------
+
+  /// Replaces the expression of a `switch (expr) { ... }` statement
+  /// with `newExpressionSource`. The new source should NOT include the
+  /// surrounding parentheses — they're preserved verbatim.
+  static SourceEdit changeSwitchExpression({
+    required SwitchStatementNode statement,
+    required String newExpressionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.expressionSpan.offset,
+      length: statement.expressionSpan.length,
+      replacement: newExpressionSource,
+    );
+  }
+
+  /// Replaces the pattern of a single `case` clause with
+  /// `newPatternSource`. Works on both legacy `case expr:` and Dart 3
+  /// `case pattern [when guard]:` shapes.
+  ///
+  /// The new source replaces only the pattern; any `when` guard is
+  /// preserved separately.
+  static SourceEdit changeSwitchCasePattern({
+    required SwitchCaseNode caseMember,
+    required String newPatternSource,
+  }) {
+    return SourceEdit(
+      offset: caseMember.patternSpan.offset,
+      length: caseMember.patternSpan.length,
+      replacement: newPatternSource,
+    );
+  }
+
+  /// Replaces the `when` guard expression of a pattern case with
+  /// `newGuardSource`. The case must already have a `when` guard;
+  /// throws otherwise (adding a guard to a guard-less case is
+  /// deferred — it would require inserting the `when` keyword).
+  static SourceEdit changeSwitchCaseGuard({
+    required SwitchCaseNode caseMember,
+    required String newGuardSource,
+  }) {
+    final span = caseMember.whenGuardSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Switch case has no `when` guard to replace. Adding a guard '
+        'to a guard-less case is not yet supported.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newGuardSource,
     );
   }
 

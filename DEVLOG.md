@@ -8,40 +8,45 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0d — control flow: do-while + try/catch/finally + throw
-**Last touched:** 2026-05-15 — extended function-body modeling with do-while loops, try/catch/finally statements (multi-clause), and top-level throw statements. Two new edit ops; try-clause bodies + finally block reuse the `StatementBlock` foundation.
+**Active milestone:** M8.0e — control flow: switch (statements, with opaque patterns)
+**Last touched:** 2026-05-15 — added `SwitchStatementNode` + sealed `SwitchMemberNode` (`SwitchCaseNode` + `SwitchDefaultNode`) covering legacy `case expr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Pattern + `when` guard captured as opaque source. Switch case bodies use a new brace-less `StatementBlock` variant (`hasBraces: false`).
 
-**M8.0d surface added (just now):** extends M8.0c. Three new statement kinds + two new edit ops.
+**M8.0e surface added (just now):** extends M8.0d. One new statement kind + one new member hierarchy + three new edit ops + a `StatementBlock` extension.
 
-**`DoStatementNode` added** — `do { body } while (cond);`. Captures `doKeywordSpan`, `body: StatementBlock`, `whileKeywordSpan`, condition source + span. Only fully-braced bodies are modeled.
+**`SwitchStatementNode` added** — `switch (expr) { ...members... }`. Captures `switchKeywordSpan`, expression source + span (raw, no parens), `leftBracketSpan` / `rightBracketSpan` for the body's braces, and an ordered `members: List<SwitchMemberNode>`. Switch **expressions** (the `switch (x) { 1 => 'a', _ => 'b' }` form) are NOT statements and stay opaque inside their host expression's source.
 
-**`TryStatementNode` added** — `try { body } [on T] [catch (e [, s])] { ... }* [finally { ... }]?`. Captures `tryKeywordSpan`, `tryBlock: StatementBlock`, an ordered `catchClauses: List<CatchClauseNode>`, and an optional `finallyKeywordSpan` + `finallyBlock`. Per Dart grammar, every try statement has at least one catch clause OR a finally clause.
+**`SwitchMemberNode` sealed** — two subtypes:
+- `SwitchCaseNode` — covers both legacy `case constantExpr:` and Dart 3 `case pattern [when guard]:`. Captures `keywordSpan` (the `case` token), `patternSource` + `patternSpan` (opaque — Dart 3 pattern internals are not modeled), optional `whenKeywordSpan` + `whenGuardSource` + `whenGuardSpan`, `colonSpan`, body.
+- `SwitchDefaultNode` — `default:` with body. Just `keywordSpan`, `colonSpan`, body.
 
-**`CatchClauseNode` added** — captures `onKeywordSpan` (optional), `exceptionTypeSource` + `exceptionTypeSpan` (optional), `catchKeywordSpan` (optional), `exceptionParameterName` + span (optional), `stackTraceParameterName` + span (optional, the second `catch` param), and the handler `body: StatementBlock`. Models all four Dart shapes: bare `on T`, `catch (e)`, `catch (e, s)`, and `on T catch (e [, s])`.
+Each member's body is a brace-less `StatementBlock` (see below).
 
-**`ThrowStatementNode` added** — detected when an `ExpressionStatement`'s expression is a `ThrowExpression`. Mirrors `ReturnStatementNode` shape. Captures `throwKeywordSpan` + expression source + span. A `throw` buried inside a larger expression (e.g. `cond ? value : throw Foo()`) stays opaque inside the host `ExpressionStatementNode.expressionSource` — only top-level throws get their own node.
+**`StatementBlock.hasBraces` flag added** — distinguishes braced blocks (function bodies, if/for/while/do/try bodies — all `hasBraces: true`, the default) from brace-less ones (switch case bodies — `hasBraces: false`). For brace-less blocks, `blockSpan` and `innerSpan` are equal — both cover the statement run from after the `:` colon to the start of the next member or the switch's `}`. `addStatement`'s empty-block path now branches on this: for brace-less blocks, the insertion is a simple "newline + indented statement" at the body's start (no re-emitted closing brace).
 
-**Parser scope:** do-while and try statements only model fully-braced bodies (and braced catch/finally blocks). Switch statements still fall through to `OpaqueStatementNode` — pattern matching is a multi-milestone surface deferred to M8.0e.
+**Parser scope:** all three member kinds the analyzer exposes are handled — `SwitchCase` (legacy), `SwitchPatternCase` (Dart 3), `SwitchDefault`. Both `SwitchCase` and `SwitchPatternCase` collapse into the same `SwitchCaseNode` model class; differentiating them in the model would only matter for codegen, and we're preserving source bytes anyway. Pattern internals are opaque source — `case Foo(x: 1)` captures `'Foo(x: 1)'` as text. Switch expressions stay opaque inside host expression source.
 
 **New edit ops:**
-- `changeDoWhileCondition(statement, newConditionSource)` — replaces the trailing condition of a `do { } while (cond);`.
-- `changeThrownExpression(statement, newExpressionSource)` — replaces the expression of a `throw expr;`.
-- Try-block, catch-clause body, and finally-block edits all reuse the `StatementBlock`-taking ops: `addStatement` / `removeStatement` / `replaceStatement`. No new try-specific ops were needed.
+- `changeSwitchExpression(statement, newExpressionSource)` — replace the value being switched on.
+- `changeSwitchCasePattern(caseMember, newPatternSource)` — replace the pattern of a single case (works on both legacy and pattern-case forms).
+- `changeSwitchCaseGuard(caseMember, newGuardSource)` — replace the `when ...` guard of a pattern case. Throws when no guard exists (adding a guard to a guard-less case requires inserting `when`, deferred).
+- Case/default body edits reuse `addStatement` / `removeStatement` / `replaceStatement` against the member's `body` block. `addStatement` handles brace-less empty bodies (e.g. adding a statement to a fall-through `case 1:`).
 
-**Validation:** 314 tests green (was 291, +23 new across parsing + round-trip). New fixtures: `function_body_with_do_while.dart` (countdown loop), `function_body_with_try.dart` (parseOrDefault with `on FormatException catch (e)` + `catch (e, s)` + finally), and `function_body_with_throw.dart` (requirePositive guard). Tests cover bare-body do-while → opaque, throw-buried-in-expression staying as `VariableDeclarationStatementNode`, addStatement recursing into try body / finally block, removeStatement from a catch-clause body, and changeThrownExpression.
+**Validation:** 334 tests green (was 314, +20 new across parsing + round-trip). New fixture `function_body_with_switch.dart` — `describe(value)` with a legacy `case 0:`, two pattern cases with `when` guards, one pattern case without a guard, and a `default:`. Tests cover all the above edits, multi-case fall-through parsing, switch-expression-inside-host staying opaque, and removeStatement from a case body.
 
-**Deliberately deferred (M8.0e+):**
-- `switch` (with patterns) — large surface; gets its own milestone. Most consequential for OutSystems multi-way decisions.
+**Deliberately deferred (M8.0f+ / M8.1+):**
+- Modeling switch case patterns themselves (constant / type-test / object / record / list / map / `||` alternatives, etc.) — currently opaque. Large surface; deserves its own milestone.
 - `yield` / `break` / `continue` / labeled statements.
+- Adding a `when` guard to a guard-less case (requires inserting the `when` keyword).
+- Adding/removing/reordering switch cases on an existing switch (or catch clauses on a try).
+- Modeling switch **expressions** (the `=>`-based form).
 - Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource` — currently opaque.
-- Adding/removing/reordering catch clauses on an existing try statement.
-- Editing inside catch-clause parameters (rename `e` → `error`, change exception type).
+- Editing inside catch-clause parameters.
 - Bare-statement control-flow bodies — opaque.
 - Expression-internal structure inside `ExpressionStatementNode`.
 - Statement reordering (use add + remove for now).
 
 **Blockers:** none
-**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d series (20 commits total). Then M8.0e — `switch` with pattern matching (the OutSystems-relevant one).
+**Next action:** Eric review of M6 + M7 + M8.0a + M8.0b + M8.0c + M8.0d + M8.0e series (21 commits total). Procedural control flow is now feature-complete at the statement level; the next milestone slot is open — likely M8.1 (cross-statement features like statement reordering or local-var qualifier editing) or M8.0f (model pattern internals for `case` clauses to unlock pattern-aware editing).
 
 ---
 
@@ -307,7 +312,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0b** (shipped 2026-05-14) | Control flow: `if (cond) { ... } else { ... }`. Extracted `StatementBlock` so statement-list ops (addStatement/removeStatement/replaceStatement) work recursively on nested then/else bodies. Bare-statement bodies and `else if` chains fall through to OpaqueStatementNode (M8.0c). | Basic conditional logic — most OutSystems "decision" nodes map to an if/else. |
 | **M8.0c** (shipped 2026-05-14) | Else-if chains (recursive `IfStatementNode.elseIf`), for-loops (c-style + for-each + await-for, header captured opaque), while-loops with `changeWhileCondition`. All reuse `StatementBlock` for recursive body editing — no new statement-list ops needed. Bare-body branches anywhere in an else-if chain reject the whole chain to opaque. | Common loop + multi-way decision shapes — most OutSystems flows that aren't a simple if/else are a chain of conditions or an iteration. |
 | **M8.0d** (shipped 2026-05-15) | `do { } while (cond);` (`DoStatementNode` + `changeDoWhileCondition`), `try / on T / catch (e, s) / finally` (`TryStatementNode` + `CatchClauseNode`; bodies are `StatementBlock`s — no new ops needed), and top-level `throw expr;` (`ThrowStatementNode` + `changeThrownExpression`). All four catch-clause shapes covered: bare `on T`, `catch (e)`, `catch (e, s)`, `on T catch (e [, s])`. | Completes imperative control-flow basics. Error handling (try/catch/finally) is foundational for any real Dart code; throw closes the symmetric `return`-shaped surface. |
-| M8.0e+ | `switch` with pattern matching — most consequential for OutSystems multi-way decisions, deferred as its own milestone because the pattern surface is large (constant patterns, `||` alternatives, `when` guards, object/record/list/map patterns, switch expressions, etc.). Plus `yield`/`break`/`continue`/labels, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses, and editing catch-clause parameters. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0e** (shipped 2026-05-15) | `switch` statements (procedural form). `SwitchStatementNode` + sealed `SwitchMemberNode` (`SwitchCaseNode` + `SwitchDefaultNode`). Covers legacy `case expr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Pattern + `when` guard captured as opaque source. `StatementBlock.hasBraces` flag added — switch-case bodies are brace-less and `addStatement` handles that. Three new edit ops: `changeSwitchExpression`, `changeSwitchCasePattern`, `changeSwitchCaseGuard`. | Multi-way decisions — the OutSystems-relevant control-flow shape. Procedural switch statements are now feature-complete at the structural level (modulo pattern internals, which are a separate large surface). |
+| M8.0f+ | Model switch case patterns themselves (constant / type-test / object / record / list / map / `||` alternatives / null-check / cast / wildcard patterns). Plus `yield`/`break`/`continue`/labels, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses + switch cases, editing catch-clause parameters, and modeling switch **expressions** (the `=>`-based form). | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -390,6 +396,40 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.0e — control flow: switch statements with opaque patterns
+**Worked on:** Fourth control-flow slice. Added `SwitchStatementNode` and a sealed `SwitchMemberNode` hierarchy (`SwitchCaseNode` + `SwitchDefaultNode`) covering legacy `case constantExpr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Patterns and `when` guards are captured as opaque source text — modeling pattern internals (constant / type-test / object / record / list / map / alternatives / etc.) is a separate large surface deferred to M8.0f+. Switch **expressions** (the `=>`-based form) are not statements; they stay opaque inside their host expression's source.
+
+**`StatementBlock.hasBraces` flag added.** Switch-case bodies in Dart aren't delimited by `{ ... }` — the body runs from after the `case X:` colon to the start of the next member or to the switch's `}`. To keep the same `StatementBlock`-foundation narrative, I extended `StatementBlock` with a `hasBraces: bool` flag (defaulting to true). For brace-less blocks, `blockSpan` and `innerSpan` are equal and both cover just the statement run. `addStatement`'s empty-block path now branches on `hasBraces`: for brace-less blocks, the insertion is just "newline + indented statement" at the body start, without the re-emitted closing brace that braced empties need.
+
+**`SwitchCaseNode` collapses two analyzer types.** The analyzer exposes `SwitchCase` (legacy) and `SwitchPatternCase` (Dart 3) as separate AST nodes. The model collapses them into one class because:
+- The same edit ops apply to both (rewrite the pattern source).
+- Differentiating them in the model would only matter for codegen, and the kernel preserves source bytes rather than generating syntax.
+- A nullable `whenGuardSource` covers the only structural difference (legacy cases can't have `when` guards).
+
+Same pattern as `CatchClauseNode` in M8.0d collapsing four catch-clause variants into one class.
+
+**Three new edit ops:**
+- `changeSwitchExpression` — rewrite the value being switched on.
+- `changeSwitchCasePattern` — rewrite the pattern of a single case.
+- `changeSwitchCaseGuard` — rewrite the `when` guard of a pattern case. Throws when no guard exists (adding a guard requires inserting the `when` keyword; deferred).
+
+Body edits (add/remove/replace statements inside a case or default body) reuse the `StatementBlock`-taking ops. The `hasBraces: false` path in `addStatement` is the only delta needed to support brace-less switch case bodies.
+
+**Fixture:** `function_body_with_switch.dart` — `describe(value)` with a legacy `case 0:`, two pattern cases with `when` guards (`when n < 0`, `when n > 100`), one pattern case without a guard (`case String s:`), and a `default:`.
+
+**Test coverage (20 new):**
+- Parsing: 5-member structure, legacy case pattern (`'0'`), pattern cases with guards, default, brace-less body flag, span alignment for `switch` keyword + bracket spans, multi-case fall-through producing separate empty-body cases, switch expression inside host staying opaque.
+- Round-trip: idempotence, `changeSwitchExpression`, `changeSwitchCasePattern` on a legacy case, `changeSwitchCaseGuard` on a pattern case, throws when no guard exists, `addStatement` into a non-empty case body, `addStatement` into a brace-less EMPTY case body (the fall-through edge case), `removeStatement` from a case body.
+
+**Validation:** 334 tests green (was 314, +20 new). `dart analyze` clean. `dart format` clean.
+
+**Learned:**
+- **`StatementBlock` was the right abstraction even with brace-less bodies.** Adding a `hasBraces` flag was a 4-line addition to `StatementBlock` + a single conditional in `addStatement`. The rest of the body-editing surface (`removeStatement`, `replaceStatement`, `addStatement` for non-empty blocks) works identically regardless of braces. The decision in M8.0b to make `StatementBlock` the shared body abstraction continues to pay compound interest into M8.0e.
+- **Collapsing AST shapes into single model classes when the edit ops don't care.** The analyzer has separate `SwitchCase` and `SwitchPatternCase` nodes, but the kernel cares only about "pattern source + optional guard + body." Two analyzer types → one model class. Same play as `CatchClauseNode` in M8.0d. This keeps the model surface small and forces edit ops to be written once, not twice.
+- **Opaque patterns are the right scoping call for now.** A first attempt at modeling pattern internals would require ~10 new node kinds (constant, type-test, object, record, list, map, alternatives, null-check, cast, wildcard, declared-variable). Most edit use cases (rewrite a pattern, change a guard) work against opaque pattern source. Pattern-aware editing (e.g. "rename the variable `n` to `value` in `case int n when n > 100:`") becomes a future milestone once we have concrete fixtures.
+
+**Next:** Eric review of M6 + M7 + M8.0a–e series (21 commits total). Procedural control flow is now feature-complete at the statement level. The next slot is open — likely M8.1 (cross-statement features like reordering or local-var qualifier editing) or M8.0f (model pattern internals for pattern-aware editing).
 
 ### [2026-05-15] M8.0d — control flow: do-while + try/catch/finally + throw
 **Worked on:** Third control-flow slice. Added three new statement kinds — `DoStatementNode`, `TryStatementNode`, `ThrowStatementNode` — plus a supporting `CatchClauseNode` class. Two new edit ops; try-block + catch-clause + finally-block edits all reuse the `StatementBlock` foundation.
