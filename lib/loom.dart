@@ -5,6 +5,7 @@
 /// edits back. See PROJECT_SPEC.md for the contract and invariants.
 library;
 
+export 'src/analysis/resolved_project.dart';
 export 'src/catalog/pipeline_catalog.dart' show PipelineCatalog, PipelineSpec;
 export 'src/catalog/route_catalog.dart' show RouteCatalog, RouteSpec;
 export 'src/emission/annotation_edit_planner.dart';
