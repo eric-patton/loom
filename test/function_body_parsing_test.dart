@@ -137,8 +137,8 @@ void main() {
     });
   });
 
-  group('parseFunctionBody — if with bare body falls through to opaque', () {
-    test('bare-statement then-body opaqued', () {
+  group('parseFunctionBody — if with bare body (M8.7)', () {
+    test('bare-statement then-body wraps in brace-less StatementBlock', () {
       const source = '''
 void f() {
   if (true) doIt();
@@ -147,7 +147,10 @@ void doIt() {}
 ''';
       final body = parseFunctionBody(source);
       expect(body.statements, hasLength(1));
-      expect(body.statements.first, isA<OpaqueStatementNode>());
+      expect(body.statements.first, isA<IfStatementNode>());
+      final ifStmt = body.statements.first as IfStatementNode;
+      expect(ifStmt.thenBlock.hasBraces, isFalse);
+      expect(ifStmt.thenBlock.statements, hasLength(1));
     });
   });
 
@@ -192,7 +195,9 @@ void doIt() {}
       expect(second.elseKeywordSpan, isNotNull);
     });
 
-    test('bare-body else-if anywhere in chain → whole chain opaque', () {
+    test(
+        'bare-body else-if in chain still parses (M8.7 — brace-less '
+        'block)', () {
       const source = '''
 void f() {
   if (true) {
@@ -204,7 +209,10 @@ void b() {}
 ''';
       final body = parseFunctionBody(source);
       expect(body.statements, hasLength(1));
-      expect(body.statements.first, isA<OpaqueStatementNode>());
+      final ifStmt = body.statements.first as IfStatementNode;
+      final elseIf = ifStmt.elseIf!;
+      expect(elseIf.thenBlock.hasBraces, isFalse);
+      expect(elseIf.thenBlock.statements, hasLength(1));
     });
   });
 
@@ -312,7 +320,7 @@ void f() {
       expect(doStmt.conditionSource, equals('n > floor'));
     });
 
-    test('do-while bare body falls through to opaque', () {
+    test('do-while bare body now models (M8.7 brace-less block)', () {
       const source = '''
 void f() {
   var i = 0;
@@ -320,7 +328,10 @@ void f() {
 }
 ''';
       final body = parseFunctionBody(source);
-      expect(body.statements[1], isA<OpaqueStatementNode>());
+      expect(body.statements[1], isA<DoStatementNode>());
+      final d = body.statements[1] as DoStatementNode;
+      expect(d.body.hasBraces, isFalse);
+      expect(d.body.statements, hasLength(1));
     });
   });
 

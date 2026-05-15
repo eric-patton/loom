@@ -64,6 +64,22 @@ FunctionBodyModel parseFunctionBody(String source, {SourceSpan? bodySpan}) {
   );
 }
 
+/// Converts either an analyzer `Block` or a single statement into a
+/// `StatementBlock`. For a `Block`, returns the obvious conversion.
+/// For a single statement (bare-body control-flow form like
+/// `if (cond) doIt();`), wraps it in a synthetic 1-statement block
+/// with `hasBraces: false`. (M8.7)
+StatementBlock _convertStatementOrBlock(Statement stmt, String source) {
+  if (stmt is Block) return _convertBlock(stmt, source);
+  final span = SourceSpan(offset: stmt.offset, length: stmt.length);
+  return StatementBlock(
+    blockSpan: span,
+    innerSpan: span,
+    statements: [_convertStatement(stmt, source)],
+    hasBraces: false,
+  );
+}
+
 /// Converts an analyzer `Block` to a `StatementBlock`. Shared between
 /// function bodies and nested then/else blocks of `IfStatementNode`.
 StatementBlock _convertBlock(Block block, String source) {
@@ -271,28 +287,22 @@ IfStatementNode? _tryConvertIfStatement(
   String source,
   SourceSpan span,
 ) {
+  // M8.7: both braced AND bare-statement bodies are accepted.
+  // Bare bodies are wrapped in a brace-less StatementBlock.
   final thenStmt = stmt.thenStatement;
-  if (thenStmt is! Block) {
-    return null;
-  }
   final elseStmt = stmt.elseStatement;
-  // Allowed: no else, else-block, or else-if (recursively supported).
-  // Reject `else <bareStatement>;`.
   IfStatementNode? elseIf;
   StatementBlock? elseBlock;
-  if (elseStmt is Block) {
-    elseBlock = _convertBlock(elseStmt, source);
-  } else if (elseStmt is IfStatement) {
+  if (elseStmt is IfStatement) {
     final nestedSpan =
         SourceSpan(offset: elseStmt.offset, length: elseStmt.length);
     elseIf = _tryConvertIfStatement(elseStmt, source, nestedSpan);
     if (elseIf == null) {
-      // The nested else-if is itself unsupported (e.g. bare-body branch).
-      // Reject the entire chain so the caller falls through to opaque.
+      // Nested else-if rejected — propagate.
       return null;
     }
   } else if (elseStmt != null) {
-    return null;
+    elseBlock = _convertStatementOrBlock(elseStmt, source);
   }
 
   final condition = stmt.expression;
@@ -311,7 +321,7 @@ IfStatementNode? _tryConvertIfStatement(
     conditionSource: conditionSource,
     conditionSpan: conditionSpan,
     condition: _convertExpression(condition, source),
-    thenBlock: _convertBlock(thenStmt, source),
+    thenBlock: _convertStatementOrBlock(thenStmt, source),
     elseKeywordSpan: stmt.elseKeyword == null
         ? null
         : SourceSpan(
@@ -335,8 +345,7 @@ ForStatementNode? _tryConvertForStatement(
   SourceSpan span,
 ) {
   final body = stmt.body;
-  if (body is! Block) return null;
-
+  // M8.7: bare-statement bodies wrapped in synthetic blocks.
   final lp = stmt.leftParenthesis;
   final rp = stmt.rightParenthesis;
   final headerOffset = lp.offset;
@@ -361,7 +370,7 @@ ForStatementNode? _tryConvertForStatement(
     headerSource: headerSource,
     headerSpan: headerSpan,
     header: _convertForLoopHeader(stmt, source, headerSource, headerSpan),
-    body: _convertBlock(body, source),
+    body: _convertStatementOrBlock(body, source),
     sourceSpan: span,
   );
 }
@@ -522,15 +531,13 @@ CStyleForHeader _convertCStyleHeader({
 }
 
 /// Attempts to convert a `DoStatement` into a `DoStatementNode`.
-/// Returns null when the body isn't a `Block`.
+/// Accepts both braced and bare-statement bodies (M8.7).
 DoStatementNode? _tryConvertDoStatement(
   DoStatement stmt,
   String source,
   SourceSpan span,
 ) {
   final body = stmt.body;
-  if (body is! Block) return null;
-
   final condition = stmt.condition;
   final conditionSpan =
       SourceSpan(offset: condition.offset, length: condition.length);
@@ -544,7 +551,7 @@ DoStatementNode? _tryConvertDoStatement(
       offset: stmt.doKeyword.offset,
       length: stmt.doKeyword.length,
     ),
-    body: _convertBlock(body, source),
+    body: _convertStatementOrBlock(body, source),
     whileKeywordSpan: SourceSpan(
       offset: stmt.whileKeyword.offset,
       length: stmt.whileKeyword.length,
@@ -823,15 +830,13 @@ SwitchStatementNode? _tryConvertSwitchStatement(
 }
 
 /// Attempts to convert a `WhileStatement` into a `WhileStatementNode`.
-/// Returns null when the body isn't a `Block`.
+/// Accepts both braced and bare-statement bodies (M8.7).
 WhileStatementNode? _tryConvertWhileStatement(
   WhileStatement stmt,
   String source,
   SourceSpan span,
 ) {
   final body = stmt.body;
-  if (body is! Block) return null;
-
   final condition = stmt.condition;
   final conditionSpan =
       SourceSpan(offset: condition.offset, length: condition.length);
@@ -848,7 +853,7 @@ WhileStatementNode? _tryConvertWhileStatement(
     conditionSource: conditionSource,
     conditionSpan: conditionSpan,
     condition: _convertExpression(condition, source),
-    body: _convertBlock(body, source),
+    body: _convertStatementOrBlock(body, source),
     sourceSpan: span,
   );
 }
