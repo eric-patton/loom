@@ -762,12 +762,136 @@ class SwitchDefaultNode extends SwitchMemberNode {
   String toString() => 'SwitchDefaultNode(${body.statements.length} stmt(s))';
 }
 
-/// A statement kind not yet modeled — `yield`, `break`, `continue`,
-/// labeled statements, etc. (and `if`/`for`/`while`/`do`/`try`/`switch`
-/// with bare-statement or otherwise unsupported shapes, which the M8.0e
-/// parser punts on). Preserves the source verbatim through any edit to
-/// surrounding statements; the kernel makes no guarantees about edits
-/// that would target opaque content.
+/// A modeled `yield expr;` or `yield* expr;` statement.
+///
+/// Used inside `sync*` / `async*` generator functions. The `*` form
+/// delegates iteration to another iterable/stream; the bare form
+/// yields a single value. The expression is captured as raw source.
+class YieldStatementNode extends StatementNode {
+  const YieldStatementNode({
+    required this.yieldKeywordSpan,
+    required this.starSpan,
+    required this.expressionSource,
+    required this.expressionSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan yieldKeywordSpan;
+
+  /// Span of the `*` token, when present (`yield*` form). Null
+  /// otherwise.
+  final SourceSpan? starSpan;
+
+  final String expressionSource;
+  final SourceSpan expressionSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  /// True when this is a `yield*` (delegating yield).
+  bool get isDelegating => starSpan != null;
+
+  @override
+  String toString() => 'YieldStatementNode('
+      '${isDelegating ? 'yield* ' : 'yield '}$expressionSource)';
+}
+
+/// A modeled `break;` or `break label;` statement.
+class BreakStatementNode extends StatementNode {
+  const BreakStatementNode({
+    required this.breakKeywordSpan,
+    required this.labelName,
+    required this.labelSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan breakKeywordSpan;
+
+  /// The target label name (e.g. `'outer'` in `break outer;`), or null
+  /// for a bare `break;`.
+  final String? labelName;
+  final SourceSpan? labelSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() =>
+      'BreakStatementNode(${labelName == null ? 'break' : 'break $labelName'})';
+}
+
+/// A modeled `continue;` or `continue label;` statement.
+class ContinueStatementNode extends StatementNode {
+  const ContinueStatementNode({
+    required this.continueKeywordSpan,
+    required this.labelName,
+    required this.labelSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan continueKeywordSpan;
+
+  /// The target label name (e.g. `'outer'` in `continue outer;`), or
+  /// null for a bare `continue;`.
+  final String? labelName;
+  final SourceSpan? labelSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ContinueStatementNode('
+      '${labelName == null ? 'continue' : 'continue $labelName'})';
+}
+
+/// A modeled `label: stmt;` statement. A statement can carry MULTIPLE
+/// labels stacked (`outer: inner: while (true) {...}`) — labels are
+/// captured in source order.
+class LabeledStatementNode extends StatementNode {
+  LabeledStatementNode({
+    required List<LabelNode> labels,
+    required this.statement,
+    required this.sourceSpan,
+  }) : labels = List.unmodifiable(labels);
+
+  /// Labels in source order. Length >= 1 (otherwise this wouldn't be
+  /// a labeled statement at all).
+  final List<LabelNode> labels;
+
+  /// The inner (labeled) statement. Itself a structured `StatementNode`
+  /// — typically a loop, switch, or block that the labels target.
+  final StatementNode statement;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() =>
+      'LabeledStatementNode(${labels.map((l) => l.name).join(', ')}: '
+      '$statement)';
+}
+
+/// A single `name:` label preceding a labeled statement.
+class LabelNode {
+  const LabelNode({
+    required this.name,
+    required this.nameSpan,
+    required this.colonSpan,
+    required this.sourceSpan,
+  });
+
+  final String name;
+  final SourceSpan nameSpan;
+  final SourceSpan colonSpan;
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'LabelNode($name:)';
+}
+
+/// A statement kind not yet modeled. With M8.1 all Dart statement
+/// shapes the parser knows about have structural modeling; this is
+/// now only a safety fallback for unrecognized future shapes.
 class OpaqueStatementNode extends StatementNode {
   const OpaqueStatementNode({
     required this.sourceText,

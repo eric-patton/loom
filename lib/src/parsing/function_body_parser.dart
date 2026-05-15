@@ -167,8 +167,83 @@ StatementNode _convertStatement(Statement stmt, String source) {
     final asSwitch = _tryConvertSwitchStatement(stmt, source, span);
     if (asSwitch != null) return asSwitch;
   }
-  // Anything else (yield/break/continue/labeled stmts/...) or an
-  // unsupported control-flow shape — preserve verbatim.
+  if (stmt is YieldStatement) {
+    final expr = stmt.expression;
+    return YieldStatementNode(
+      yieldKeywordSpan: SourceSpan(
+        offset: stmt.yieldKeyword.offset,
+        length: stmt.yieldKeyword.length,
+      ),
+      starSpan: stmt.star == null
+          ? null
+          : SourceSpan(
+              offset: stmt.star!.offset,
+              length: stmt.star!.length,
+            ),
+      expressionSource: source.substring(
+        expr.offset,
+        expr.offset + expr.length,
+      ),
+      expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
+      sourceSpan: span,
+    );
+  }
+  if (stmt is BreakStatement) {
+    final label = stmt.label;
+    return BreakStatementNode(
+      breakKeywordSpan: SourceSpan(
+        offset: stmt.breakKeyword.offset,
+        length: stmt.breakKeyword.length,
+      ),
+      labelName: label?.name.lexeme,
+      labelSpan: label == null
+          ? null
+          : SourceSpan(
+              offset: label.name.offset,
+              length: label.name.length,
+            ),
+      sourceSpan: span,
+    );
+  }
+  if (stmt is ContinueStatement) {
+    final label = stmt.label;
+    return ContinueStatementNode(
+      continueKeywordSpan: SourceSpan(
+        offset: stmt.continueKeyword.offset,
+        length: stmt.continueKeyword.length,
+      ),
+      labelName: label?.name.lexeme,
+      labelSpan: label == null
+          ? null
+          : SourceSpan(
+              offset: label.name.offset,
+              length: label.name.length,
+            ),
+      sourceSpan: span,
+    );
+  }
+  if (stmt is LabeledStatement) {
+    return LabeledStatementNode(
+      labels: [
+        for (final l in stmt.labels)
+          LabelNode(
+            name: l.name.lexeme,
+            nameSpan: SourceSpan(
+              offset: l.name.offset,
+              length: l.name.length,
+            ),
+            colonSpan: SourceSpan(
+              offset: l.colon.offset,
+              length: l.colon.length,
+            ),
+            sourceSpan: SourceSpan(offset: l.offset, length: l.length),
+          ),
+      ],
+      statement: _convertStatement(stmt.statement, source),
+      sourceSpan: span,
+    );
+  }
+  // Anything else (rare or future statement shapes) — preserve verbatim.
   return OpaqueStatementNode(
     sourceText: source.substring(stmt.offset, stmt.offset + stmt.length),
     sourceSpan: span,

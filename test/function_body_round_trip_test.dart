@@ -1146,6 +1146,213 @@ String f(Object o) {
     });
   });
 
+  group('yield/break/continue/labeled edits (M8.1)', () {
+    test('idempotence on function_body_with_yield_break_continue.dart', () {
+      final source =
+          _loadFixture('function_body_with_yield_break_continue.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(1));
+    });
+
+    test('changeYieldExpression rewrites the yielded value', () {
+      final source =
+          _loadFixture('function_body_with_yield_break_continue.dart');
+      final body = parseFunctionBody(source);
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      final y0 = forStmt.body.statements[3] as YieldStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeYieldExpression(
+        statement: y0,
+        newExpressionSource: 'v + 1',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedY0 = ((reparsed.statements[0] as LabeledStatementNode)
+              .statement as ForStatementNode)
+          .body
+          .statements[3] as YieldStatementNode;
+      expect(reparsedY0.expressionSource, equals('v + 1'));
+      expect(reparsedY0.isDelegating, isFalse);
+    });
+
+    test('changeBreakLabel rewrites the target label', () {
+      final source =
+          _loadFixture('function_body_with_yield_break_continue.dart');
+      final body = parseFunctionBody(source);
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      final secondIf = forStmt.body.statements[2] as IfStatementNode;
+      final brk = secondIf.thenBlock.statements.first as BreakStatementNode;
+
+      final edit = FunctionBodyEditPlanner.changeBreakLabel(
+        statement: brk,
+        newLabel: 'mainLoop',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      // Note: the labeled statement still says `outer:` — the user
+      // would need to update that too (or use a future symbol-aware
+      // label rename). Just verify the break's label was rewritten.
+      expect(newSource, contains('break mainLoop;'));
+    });
+
+    test('changeBreakLabel throws on bare break', () {
+      const source = '''
+void f() {
+  while (true) {
+    break;
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final forStmt = body.statements[0] as WhileStatementNode;
+      final brk = forStmt.body.statements.first as BreakStatementNode;
+      expect(
+        () => FunctionBodyEditPlanner.changeBreakLabel(
+          statement: brk,
+          newLabel: 'foo',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('renameStatementLabel renames the label declaration', () {
+      final source =
+          _loadFixture('function_body_with_yield_break_continue.dart');
+      final body = parseFunctionBody(source);
+      final labeled = body.statements[0] as LabeledStatementNode;
+
+      final edit = FunctionBodyEditPlanner.renameStatementLabel(
+        label: labeled.labels[0],
+        newName: 'mainLoop',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      // The label declaration is renamed; break/continue refs are NOT
+      // updated (that's documented as caller-responsible).
+      expect(newSource, contains('mainLoop:'));
+      // Original refs remain pointing at the old name.
+      expect(newSource, contains('continue outer;'));
+    });
+
+    test('moveStatement swaps two adjacent expression statements', () {
+      const source = '''
+void f() {
+  a();
+  b();
+  c();
+}
+void a() {}
+void b() {}
+void c() {}
+''';
+      final body = parseFunctionBody(source);
+      // Move statement at index 0 to index 1, producing: b, a, c.
+      final edit = FunctionBodyEditPlanner.moveStatement(
+        block: body.body,
+        fromIndex: 0,
+        toIndex: 1,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      final reparsed = parseFunctionBody(newSource);
+      expect(
+        (reparsed.statements[0] as ExpressionStatementNode).expressionSource,
+        equals('b()'),
+      );
+      expect(
+        (reparsed.statements[1] as ExpressionStatementNode).expressionSource,
+        equals('a()'),
+      );
+      expect(
+        (reparsed.statements[2] as ExpressionStatementNode).expressionSource,
+        equals('c()'),
+      );
+    });
+
+    test('moveStatement from last to first reorders correctly', () {
+      const source = '''
+void f() {
+  a();
+  b();
+  c();
+}
+void a() {}
+void b() {}
+void c() {}
+''';
+      final body = parseFunctionBody(source);
+      // Move statement at index 2 to index 0, producing: c, a, b.
+      final edit = FunctionBodyEditPlanner.moveStatement(
+        block: body.body,
+        fromIndex: 2,
+        toIndex: 0,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      final reparsed = parseFunctionBody(newSource);
+      expect(
+        (reparsed.statements[0] as ExpressionStatementNode).expressionSource,
+        equals('c()'),
+      );
+      expect(
+        (reparsed.statements[1] as ExpressionStatementNode).expressionSource,
+        equals('a()'),
+      );
+      expect(
+        (reparsed.statements[2] as ExpressionStatementNode).expressionSource,
+        equals('b()'),
+      );
+    });
+
+    test('moveStatement no-op when fromIndex == toIndex', () {
+      const source = '''
+void f() {
+  a();
+  b();
+}
+void a() {}
+void b() {}
+''';
+      final body = parseFunctionBody(source);
+      final edit = FunctionBodyEditPlanner.moveStatement(
+        block: body.body,
+        fromIndex: 1,
+        toIndex: 1,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      // Source-equivalent — `a();` and `b();` still in order.
+      expect(newSource, contains('a();'));
+      expect(newSource, contains('b();'));
+      final reparsed = parseFunctionBody(newSource);
+      expect(reparsed.statements, hasLength(2));
+    });
+
+    test('moveStatement throws on out-of-range indices', () {
+      final source = _loadFixture('function_body_simple.dart');
+      final body = parseFunctionBody(source);
+      expect(
+        () => FunctionBodyEditPlanner.moveStatement(
+          block: body.body,
+          fromIndex: 999,
+          toIndex: 0,
+          source: source,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => FunctionBodyEditPlanner.moveStatement(
+          block: body.body,
+          fromIndex: 0,
+          toIndex: -1,
+          source: source,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+
   group('symbol-aware rename (M8.0h)', () {
     test('renames pattern variable AND its references in guard + body', () {
       const source = '''

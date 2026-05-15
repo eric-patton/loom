@@ -1008,6 +1008,108 @@ class Empty {
     });
   });
 
+  group(
+      'parseFunctionBody on function_body_with_yield_break_continue.dart '
+      '(M8.1)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/function_body_with_yield_break_continue.dart')
+              .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('top-level body has 1 statement (the labeled for-loop)', () {
+      expect(body.statements, hasLength(1));
+      expect(body.statements[0], isA<LabeledStatementNode>());
+    });
+
+    test('labeled statement carries one label named "outer"', () {
+      final labeled = body.statements[0] as LabeledStatementNode;
+      expect(labeled.labels, hasLength(1));
+      expect(labeled.labels[0].name, equals('outer'));
+      expect(labeled.statement, isA<ForStatementNode>());
+    });
+
+    test('for-body has 5 statements: var, if, if, yield, yield*', () {
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      expect(forStmt.body.statements, hasLength(5));
+      expect(forStmt.body.statements[3], isA<YieldStatementNode>());
+      expect(forStmt.body.statements[4], isA<YieldStatementNode>());
+    });
+
+    test('first yield is a single value (no star)', () {
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      final y0 = forStmt.body.statements[3] as YieldStatementNode;
+      expect(y0.isDelegating, isFalse);
+      expect(y0.starSpan, isNull);
+      expect(y0.expressionSource, equals('v'));
+    });
+
+    test('second yield is yield* with a list expression', () {
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      final y1 = forStmt.body.statements[4] as YieldStatementNode;
+      expect(y1.isDelegating, isTrue);
+      expect(y1.starSpan, isNotNull);
+      expect(y1.expressionSource, equals('[v + 100, v + 200]'));
+    });
+
+    test('continue and break carry the "outer" label name', () {
+      final labeled = body.statements[0] as LabeledStatementNode;
+      final forStmt = labeled.statement as ForStatementNode;
+      // First if's then-block: continue outer;
+      final firstIf = forStmt.body.statements[1] as IfStatementNode;
+      final cont = firstIf.thenBlock.statements.first as ContinueStatementNode;
+      expect(cont.labelName, equals('outer'));
+      // Second if's then-block: break outer;
+      final secondIf = forStmt.body.statements[2] as IfStatementNode;
+      final brk = secondIf.thenBlock.statements.first as BreakStatementNode;
+      expect(brk.labelName, equals('outer'));
+    });
+
+    test('bare break and bare continue have null labelName', () {
+      const source = '''
+void f(List<int> xs) {
+  for (final x in xs) {
+    if (x < 0) {
+      continue;
+    }
+    if (x > 10) {
+      break;
+    }
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final forStmt = body.statements.first as ForStatementNode;
+      final firstIf = forStmt.body.statements[0] as IfStatementNode;
+      final cont = firstIf.thenBlock.statements.first as ContinueStatementNode;
+      expect(cont.labelName, isNull);
+      final secondIf = forStmt.body.statements[1] as IfStatementNode;
+      final brk = secondIf.thenBlock.statements.first as BreakStatementNode;
+      expect(brk.labelName, isNull);
+    });
+
+    test('multi-label stack is captured in source order', () {
+      const source = '''
+void f() {
+  a: b: while (true) {
+    break a;
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final labeled = body.statements.first as LabeledStatementNode;
+      expect(labeled.labels, hasLength(2));
+      expect(labeled.labels[0].name, equals('a'));
+      expect(labeled.labels[1].name, equals('b'));
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';

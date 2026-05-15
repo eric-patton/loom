@@ -8,8 +8,47 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0h — close pattern surface (14/14) + switch expressions + symbol-aware rename
-**Last touched:** 2026-05-15 — three landing slices in one milestone: (1) the 8 remaining Dart 3 pattern kinds (list, map, relational, null-check, null-assert, cast, parenthesized, logical-and) — pattern coverage now 14/14; (2) switch expressions surfaced as structured views on variable initializers and return expressions; (3) symbol-aware rename for pattern variables that rewrites references across the case's guard + body via AST walking. **Note:** the M8.0g entry below is preserved.
+**Active milestone:** M8.1 — close statement surface (yield/break/continue/labeled) + moveStatement
+**Last touched:** 2026-05-15 — four new statement kinds plus the long-deferred `moveStatement` (statement reordering) op. The function-body **statement** surface is now feature-complete at the structural level — every Dart statement shape the parser recognizes has a dedicated node type.
+
+**M8.1 surface added (just now):** four new statement nodes + one new structural edit op + four targeted edit ops.
+
+**`YieldStatementNode`** — `yield expr;` and `yield* expr;` (delegating yield). Captures `yieldKeywordSpan`, optional `starSpan`, and expression source + span. `isDelegating` getter for the convenient check.
+
+**`BreakStatementNode`** / **`ContinueStatementNode`** — `break;` / `break label;` / `continue;` / `continue label;`. Each captures the keyword span + optional `labelName` + `labelSpan`. Bare forms have null label.
+
+**`LabeledStatementNode`** — wraps a statement with one or more leading `name:` labels. The inner statement is itself a full `StatementNode` (typically a loop or switch). `LabelNode` is the per-label sub-class (name + name span + colon span).
+
+**Parser:** straightforward dispatch on each statement kind. `LabeledStatement` recurses to convert its inner statement, so a labeled for-loop produces `LabeledStatementNode { statement: ForStatementNode { ... } }`.
+
+**`moveStatement`** — the long-deferred reordering op. `moveStatement(block, fromIndex, toIndex, source)` reorders a statement within its `StatementBlock`. Emits a single replace-range edit covering only the affected sub-range of the block; statements outside `[min(from,to), max(from,to)]` are untouched. Inter-statement gaps (whitespace/newlines) are preserved by re-emitting the ORIGINAL gap text in the new positions — visual spacing patterns carry through.
+
+**Targeted edit ops:**
+- `changeYieldExpression` — replace yield's expression.
+- `changeBreakLabel` / `changeContinueLabel` — replace target labels (throws on bare forms).
+- `renameStatementLabel` — rename a label declaration (does NOT update break/continue references — that's a future symbol-aware label rename op).
+
+**Validation:** 412 tests green (was 395, +17 new). New fixture `function_body_with_yield_break_continue.dart` — `walk(xs)` is a `sync*` generator with a labeled for-loop, conditional `continue outer;` / `break outer;`, and both yield forms. Round-trip tests cover all five new ops plus three moveStatement variants (swap adjacent, last-to-first, no-op, out-of-range).
+
+**Statement coverage final tally.** The function-body statement-level surface is feature-complete:
+- Modeled: variable declarations, expression statements, return, throw, if/else (with else-if chains), for, while, do-while, try/catch/finally, switch (including pattern matching, switch expressions in initializers + returns), yield, break, continue, labeled.
+- Opaque: only true safety fallback for unrecognized future shapes.
+
+**Deliberately deferred (M8.2+ / M9+):**
+- Modeling expression internals (function calls, await, binary ops, assignment, etc.) — currently all inside `expressionSource` as raw text. This is the biggest remaining surface in function bodies.
+- Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource`.
+- Adding labels to a bare `break;` / `continue;`.
+- Symbol-aware label rename (update break/continue references when renaming a label declaration).
+- Adding/removing/reordering pattern elements (list, map entries, logical-or/logical-and operands, switch cases, catch clauses, object/record fields).
+- Bare-statement control-flow bodies (`if (cond) doIt();`).
+- Modeling switch expressions buried deeply inside other expressions (`f(switch (x) {...})`).
+- Cross-file modeling (M9): imports/exports, multi-file project view.
+- Function signatures (parameters, return types, async modifiers) at the function-decl level.
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a–h + M8.1 series (25 commits total). Function-body statement modeling is now complete; M8.2+ pivots to expression internals OR M9 jumps a level up to cross-file modeling.
+
+**Note:** the M8.0h entry below is preserved.
 
 **M8.0h surface added (just now):**
 
@@ -363,7 +402,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0f** (shipped 2026-05-15) | Pattern internals. Sealed `PatternNode` with 4 structured kinds (constant, declared variable, wildcard, logical-or) + `OpaquePatternNode` catch-all. `SwitchCaseNode.pattern` now exposes structured patterns alongside `patternSource`. Three pattern-internal edit ops: `renameDeclaredPatternVariable`, `changeDeclaredPatternType`, `changeConstantPatternExpression`. Logical-or operand-level edits work (e.g. rewriting `2` in `case 1 \|\| 2 \|\| 3:`). | Pattern-aware editing — the substructure inside switch cases. Most common pattern shapes (constants, type-test bindings, alternatives, wildcards) are now first-class. |
 | **M8.0g** (shipped 2026-05-15) | Object + record patterns. `ObjectPatternNode` (`case Foo(x: 1, y: var n):`) + `RecordPatternNode` (`case (1, 2):`) sharing a `PatternField` class that handles positional / explicit-named / shorthand-named (`:varX`) shapes. Three new ops: `changeObjectPatternType`, `renamePatternFieldName`, `replacePatternFieldPattern`. Existing pattern-internal ops work recursively inside fields. Pattern coverage now 6/14. | OutSystems-style decomposition — matching record/value shapes with field-level destructuring. Compound patterns are now first-class. |
 | **M8.0h** (shipped 2026-05-15) | Close pattern surface (14/14). 8 new pattern kinds: `ListPatternNode` (with rest elements), `MapPatternNode`, `RelationalPatternNode`, `NullCheckPatternNode`, `NullAssertPatternNode`, `CastPatternNode`, `ParenthesizedPatternNode`, `LogicalAndPatternNode` (flattened). Plus switch **expressions** surfaced on variable initializers and return expressions. Plus symbol-aware rename (`renameDeclaredPatternVariableWithReferences`) that rewrites pattern variable references across the case's guard + body via AST walking. 5 new edit ops. | Dart 3 pattern matching is now feature-complete at the structural level. Switch-expression decisions (value-producing multi-way matches) and symbol-aware pattern variable renames are first-class. |
-| M8.1+ | Cross-statement features: statement reordering, broader symbol-aware rename (for non-pattern locals), modeling expression internals (function calls, await, binary ops), modeling switch expressions deeply nested in other expressions, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, adding/removing/reordering pattern elements (list, map entries, logical-or/logical-and operands), `yield`/`break`/`continue`/labels, bare-statement control-flow bodies, adding when guards to guard-less cases. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.1** (shipped 2026-05-15) | Close statement surface. 4 new statement kinds: `YieldStatementNode` (with `yield*` form), `BreakStatementNode`, `ContinueStatementNode`, `LabeledStatementNode` (+ `LabelNode`). Plus `moveStatement(block, fromIndex, toIndex)` — long-deferred reordering op that single-edit replaces the affected sub-range with the reordered content (inter-statement gaps preserved). 4 targeted edit ops: `changeYieldExpression`, `changeBreakLabel`, `changeContinueLabel`, `renameStatementLabel`. | Function-body **statement** surface is now feature-complete. Generators (`sync*`/`async*`) and explicit loop control are first-class; statement reordering closes the basic structural-edit toolkit. |
+| M8.2+ | Modeling expression internals (function calls, await, binary ops, assignment) — the biggest remaining surface in function bodies. Plus broader symbol-aware rename (for non-pattern locals), symbol-aware label rename, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, adding/removing/reordering pattern elements, bare-statement control-flow bodies, adding labels to bare break/continue, modeling switch expressions deeply nested in other expressions. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -446,6 +486,34 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.1 — close statement surface + moveStatement
+**Worked on:** Final structural slice for function-body modeling. Four new statement kinds (yield/break/continue/labeled) plus the long-deferred `moveStatement` reorder op. After this milestone, every Dart statement shape the parser recognizes has a dedicated `StatementNode` subtype — `OpaqueStatementNode` is now only a safety fallback.
+
+**Four new statement nodes — straightforward shapes.** Implementation notes:
+- `YieldStatementNode` carries an optional `starSpan` for the `yield*` delegating form. The expression is captured as raw source (consistent with `return` and `throw` — expression internals are a separate surface).
+- `BreakStatementNode` / `ContinueStatementNode` are nearly identical — keyword + optional label name + label span. The label is a `LabelReference` in the analyzer AST, which has a `Token` `name` field (not a `SimpleIdentifier`); I extract `.lexeme` and the token's offset/length for the span.
+- `LabeledStatementNode` wraps a `StatementNode` with one or more labels. Multiple stacked labels (`a: b: while (...) {...}`) are uncommon but legal — captured in source order. The inner `statement` is itself a full structured `StatementNode`, recursing through `_convertStatement`, so a labeled for-loop produces `LabeledStatementNode { statement: ForStatementNode { ... } }`.
+
+**`moveStatement` — the long-deferred reorder.** All prior milestones used add+remove for reordering. This op produces a single replace-range edit covering only `[earlier_index, later_index]` of the block, with the reordered content. Key implementation choices:
+- Single edit, not multi-edit. Multi-edit (delete-at-from + insert-at-to) would work but creates two non-overlapping edits that `applySourceEdits` then has to handle; a single replace is simpler and forces the reasoning to live in one place.
+- Inter-statement gaps preserved by re-emitting ORIGINAL gap text in the new positions. Visual spacing (blank lines, comments between statements) carries through. The first emitted statement's trailing gap is gap[earlier], the second's is gap[earlier+1], etc. — i.e. gaps stay positionally where they were, the statements move.
+- No-op (from == to) returns a tautological replace edit (offset+length+replacement that re-produces the existing bytes) rather than an empty list, so callers don't have to special-case empty edits.
+
+**Targeted edit ops:** four small spot-rewrite ops for the new statement kinds. `renameStatementLabel` is the only interesting one — it renames the label DECLARATION but explicitly does NOT update break/continue references. Symbol-aware label rename (the analog of M8.0h's pattern-variable rename) is deferred.
+
+**Validation:** 412 tests green (was 395, +17 new). New fixture exercises a `sync*` generator with a labeled for-loop, `continue outer;`, `break outer;`, `yield v;`, and `yield* [...];`.
+
+**Learned:**
+- **`yield*` delegating yield is just a flag.** I considered modeling delegating vs single yield as separate node types, but they share all fields except the `*` token. Single class with `starSpan` (nullable) + `isDelegating` getter is cleaner.
+- **moveStatement's gap-preservation is the visible quality of the op.** First attempts that just emitted "stmt1\nstmt2\nstmt3" with hardcoded `\n` separators worked but lost any non-standard inter-statement whitespace. Re-emitting the ORIGINAL gaps by index keeps the visual style intact even when the user has comments or blank lines between statements.
+- **Label-token API quirk.** `Label.name` returns a `Token`, not a `SimpleIdentifier`. `Token.lexeme` is the string; there's no `.name` getter on `Token`. The fix took a moment to find — analyzer is consistent if you know to look.
+
+**Statement coverage tally:**
+- Modeled (full structural support): variable decl, expression stmt, return, throw, if/else (with else-if chains), for, while, do-while, try/catch/finally, switch (with patterns + expressions in initializers + returns), yield, break, continue, labeled.
+- Opaque catch-all: true safety fallback only — no known Dart statement falls through here.
+
+**Next:** Eric review of M6 + M7 + M8.0a–h + M8.1 series (25 commits total). Function-body statement modeling is now feature-complete at the structural level. M8.2+ pivots to a new surface — most likely expression internals (modeling `print(x)` / `x = 5` / `await f()` as structured expressions instead of opaque source). That's a big new surface but it's the last major piece of function-body modeling. Alternatively, M9 jumps a level up to cross-file modeling (imports/exports/multi-file).
 
 ### [2026-05-15] M8.0h — close pattern surface + switch expressions + symbol-aware rename
 **Worked on:** Big bundle milestone — three landing slices in one commit because they hang together as "complete the Dart 3 pattern story". (1) Pattern surface closes 14/14 with the 8 remaining pattern kinds. (2) Switch expressions surface as structured views on variable initializers and return expressions. (3) Symbol-aware rename rewrites pattern variable references across guard + body via AST walking.

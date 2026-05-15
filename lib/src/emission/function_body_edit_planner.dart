@@ -14,6 +14,7 @@ import 'source_edit.dart';
 ///   * `addStatement` — insert a new statement at a given index.
 ///   * `removeStatement` — delete a statement + trailing whitespace.
 ///   * `replaceStatement` — replace a whole statement's source.
+///   * `moveStatement` (M8.1) — reorder a statement within its block.
 ///
 /// Variable-declaration operations:
 ///   * `renameDeclaredVariable` — change a variable's name token.
@@ -96,6 +97,13 @@ import 'source_edit.dart';
 ///     case's `when` guard and body. Returns a list of `SourceEdit`s
 ///     suitable for `applySourceEdits`. Doesn't touch string literals
 ///     or comments. Caller-responsible for shadowing scenarios.
+///
+/// Yield/break/continue/label operations (M8.1):
+///   * `changeYieldExpression` — replace yield's expression.
+///   * `changeBreakLabel` / `changeContinueLabel` — replace the target
+///     label of a labeled break/continue (throws on bare forms).
+///   * `renameStatementLabel` — rename a `LabelNode` declaration on
+///     a `LabeledStatementNode` (doesn't update break/continue refs).
 ///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
@@ -226,6 +234,129 @@ class FunctionBodyEditPlanner {
       offset: statement.sourceSpan.offset,
       length: statement.sourceSpan.length,
       replacement: newStatementSource,
+    );
+  }
+
+  /// Moves a statement from `fromIndex` to `toIndex` within `block`.
+  ///
+  /// `toIndex` is interpreted as the post-removal target index — same
+  /// convention Dart's `List.insert` uses. So `moveStatement(0, 2)`
+  /// in a 3-statement block produces the order `[1, 2, 0]`.
+  ///
+  /// Emits a single replace-range edit covering the source from the
+  /// earlier-positioned statement's start to the later-positioned
+  /// statement's end (inclusive of trailing newline), with the
+  /// reordered content. This is byte-bounded — only the touched
+  /// region is rewritten.
+  ///
+  /// Indentation of each moved statement is preserved verbatim. The
+  /// edit does NOT reformat the block; if the original source had
+  /// unusual whitespace patterns (e.g. blank lines between statements)
+  /// they're carried through.
+  static SourceEdit moveStatement({
+    required StatementBlock block,
+    required int fromIndex,
+    required int toIndex,
+    required String source,
+  }) {
+    if (fromIndex < 0 || fromIndex >= block.statements.length) {
+      throw ArgumentError(
+        'moveStatement fromIndex $fromIndex out of range '
+        '[0, ${block.statements.length})',
+      );
+    }
+    if (toIndex < 0 || toIndex >= block.statements.length) {
+      throw ArgumentError(
+        'moveStatement toIndex $toIndex out of range '
+        '[0, ${block.statements.length})',
+      );
+    }
+    if (fromIndex == toIndex) {
+      // No-op move — return an empty-replace edit that doesn't change
+      // anything. Using length: 0 + empty replacement at the statement's
+      // start would also be a no-op; but returning a zero-effect edit
+      // can trip applySourceEdits' same-offset checks if combined with
+      // others, so we return a tautological edit instead.
+      final stmt = block.statements[fromIndex];
+      return SourceEdit(
+        offset: stmt.sourceSpan.offset,
+        length: stmt.sourceSpan.length,
+        replacement: source.substring(
+          stmt.sourceSpan.offset,
+          stmt.sourceSpan.offset + stmt.sourceSpan.length,
+        ),
+      );
+    }
+
+    final earlier = fromIndex < toIndex ? fromIndex : toIndex;
+    final later = fromIndex < toIndex ? toIndex : fromIndex;
+
+    // Build the new in-block source by walking the statements in
+    // their new order, joining them with the separators they
+    // originally had (so trailing whitespace patterns are preserved).
+    //
+    // The affected range starts at the earlier statement's offset and
+    // ends at the LATER statement's end-offset. We pull each
+    // statement's verbatim source and the inter-statement filler
+    // (whitespace/newlines/comments between them) and reorder.
+    final regionStart = block.statements[earlier].sourceSpan.offset;
+    final regionEnd = block.statements[later].sourceSpan.offset +
+        block.statements[later].sourceSpan.length;
+
+    // Build the new index ordering.
+    final newOrder = <int>[];
+    for (var i = 0; i < block.statements.length; i++) {
+      newOrder.add(i);
+    }
+    final moved = newOrder.removeAt(fromIndex);
+    newOrder.insert(toIndex, moved);
+
+    // Walk only the [earlier, later] sub-range of newOrder (since the
+    // edit covers only that region). The first statement in the
+    // affected region keeps its position at regionStart; subsequent
+    // statements join via inter-statement filler from the ORIGINAL
+    // source between consecutive ORIGINAL statements.
+    //
+    // Strategy: walk the new order positions corresponding to indices
+    // earlier..later, emit each statement's source. For separators
+    // between them, use the original gap-text between adjacent
+    // statements in the ORIGINAL block, scanned in source order.
+    final originalGaps = <int, String>{};
+    for (var i = earlier; i < later; i++) {
+      final endOfCurrent = block.statements[i].sourceSpan.offset +
+          block.statements[i].sourceSpan.length;
+      final startOfNext = block.statements[i + 1].sourceSpan.offset;
+      originalGaps[i] = source.substring(endOfCurrent, startOfNext);
+    }
+
+    // Map gap-index by source position: gap[i] separates statements
+    // i and i+1 in the ORIGINAL ordering. When rebuilding, we use the
+    // gap that originally sat AFTER the same SOURCE position — i.e.
+    // we walk the new ordering but pick gaps by their original
+    // position in the sequence. This preserves the visual spacing
+    // pattern as much as possible: the first emitted statement's
+    // trailing gap is gap[earlier], the second's is gap[earlier+1],
+    // etc.
+    final buf = StringBuffer();
+    for (var pos = earlier; pos <= later; pos++) {
+      final originalIndex = newOrder[pos];
+      final stmt = block.statements[originalIndex];
+      buf.write(source.substring(
+        stmt.sourceSpan.offset,
+        stmt.sourceSpan.offset + stmt.sourceSpan.length,
+      ));
+      if (pos < later) {
+        // The gap between this output position and the next: use
+        // the original gap that sat at position `pos` (i.e. between
+        // original statements at indices `pos` and `pos+1`).
+        buf.write(originalGaps[pos] ?? '\n');
+      }
+    }
+
+    return SourceEdit(
+      offset: regionStart,
+      length: regionEnd - regionStart,
+      replacement: buf.toString(),
     );
   }
 
@@ -668,6 +799,78 @@ class FunctionBodyEditPlanner {
         replacement: newName,
       ));
     }
+  }
+
+  // ----------------------- Yield/break/continue ops (M8.1) -------
+
+  /// Replaces the expression of a `yield` or `yield*` statement with
+  /// `newExpressionSource`. The optional `*` is preserved verbatim.
+  static SourceEdit changeYieldExpression({
+    required YieldStatementNode statement,
+    required String newExpressionSource,
+  }) {
+    return SourceEdit(
+      offset: statement.expressionSpan.offset,
+      length: statement.expressionSpan.length,
+      replacement: newExpressionSource,
+    );
+  }
+
+  /// Replaces the target label of a `break label;` statement. Throws
+  /// on a bare `break;` (adding a label is deferred — it would require
+  /// inserting whitespace + identifier between `break` and `;`).
+  static SourceEdit changeBreakLabel({
+    required BreakStatementNode statement,
+    required String newLabel,
+  }) {
+    final span = statement.labelSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Break statement has no label to replace. Adding a label '
+        'to a bare `break;` is not yet supported.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newLabel,
+    );
+  }
+
+  /// Replaces the target label of a `continue label;` statement.
+  /// Throws on a bare `continue;`.
+  static SourceEdit changeContinueLabel({
+    required ContinueStatementNode statement,
+    required String newLabel,
+  }) {
+    final span = statement.labelSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Continue statement has no label to replace. Adding a label '
+        'to a bare `continue;` is not yet supported.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newLabel,
+    );
+  }
+
+  /// Renames a label declaration on a `LabeledStatementNode` — e.g.
+  /// `outer: while (...)` → `mainLoop: while (...)`. Does NOT update
+  /// `break outer;` / `continue outer;` references in the body —
+  /// those are caller-responsible (or future work for a symbol-aware
+  /// label rename op).
+  static SourceEdit renameStatementLabel({
+    required LabelNode label,
+    required String newName,
+  }) {
+    return SourceEdit(
+      offset: label.nameSpan.offset,
+      length: label.nameSpan.length,
+      replacement: newName,
+    );
   }
 
   // ----------------------- Throw-statement ops (M8.0d) -----------
