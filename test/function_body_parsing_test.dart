@@ -1401,8 +1401,7 @@ void f(int x) {
       expect(init, isA<MethodInvocationExpressionNode>());
     });
 
-    test('property access without invocation IS PropertyAccessExpressionNode',
-        () {
+    test('n.runtimeType is PrefixedIdentifierExpressionNode (M8.4)', () {
       const source = '''
 void f() {
   final n = 5;
@@ -1414,19 +1413,13 @@ void print(Object o) {}
       final body = parseFunctionBody(source);
       final v = body.statements[1] as VariableDeclarationStatementNode;
       final init = v.variables.first.initializerExpression!;
-      // `n.runtimeType` — runtimeType is a property, no parens.
-      // Analyzer represents this as PrefixedIdentifier rather than
-      // PropertyAccess when the target is a simple identifier. Both
-      // patterns are common in real Dart. Either is acceptable;
-      // PrefixedIdentifier falls to OpaqueExpressionNode in M8.3 since
-      // we only modeled PropertyAccess. Document the expectation:
-      expect(
-        init,
-        anyOf(
-          isA<PropertyAccessExpressionNode>(),
-          isA<OpaqueExpressionNode>(),
-        ),
-      );
+      // Analyzer represents `n.runtimeType` (simple identifier target)
+      // as PrefixedIdentifier — M8.4 promoted this to
+      // PrefixedIdentifierExpressionNode.
+      expect(init, isA<PrefixedIdentifierExpressionNode>());
+      final pi = init as PrefixedIdentifierExpressionNode;
+      expect(pi.prefix, equals('n'));
+      expect(pi.identifier, equals('runtimeType'));
     });
 
     test('throw inside if has structured thrownExpression', () {
@@ -1457,6 +1450,94 @@ Stream<int> walk() async* {
       final y1 = body.statements[1] as YieldStatementNode;
       // yield* with a list literal — list literal isn't modeled, opaque.
       expect(y1.yieldedExpression, isA<OpaqueExpressionNode>());
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_more_expression_kinds.dart '
+      '(M8.4)', () {
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/function_body_with_more_expression_kinds.dart')
+              .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('m[key] is IndexExpressionExpressionNode', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<IndexExpressionExpressionNode>());
+      final ix = init as IndexExpressionExpressionNode;
+      expect(ix.target, isA<IdentifierExpressionNode>());
+      expect(ix.index, isA<LiteralExpressionNode>());
+    });
+
+    test('List<int>.filled(3, 0) is InstanceCreationExpressionNode', () {
+      final v = body.statements[1] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<InstanceCreationExpressionNode>());
+      final ic = init as InstanceCreationExpressionNode;
+      expect(ic.constructorNameSource, equals('List<int>.filled'));
+      expect(ic.argumentsSource, equals('(3, 0)'));
+    });
+
+    test('Math.pi is PrefixedIdentifierExpressionNode', () {
+      final v = body.statements[2] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<PrefixedIdentifierExpressionNode>());
+      final pi = init as PrefixedIdentifierExpressionNode;
+      expect(pi.prefix, equals('Math'));
+      expect(pi.identifier, equals('pi'));
+    });
+
+    test('value as int is AsExpressionNode', () {
+      final v = body.statements[3] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<AsExpressionNode>());
+      final cast = init as AsExpressionNode;
+      expect(cast.typeSource, equals('int'));
+      expect(cast.expression, isA<IdentifierExpressionNode>());
+    });
+
+    test('value is num is IsExpressionNode (positive)', () {
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<IsExpressionNode>());
+      final isE = init as IsExpressionNode;
+      expect(isE.typeSource, equals('num'));
+      expect(isE.isNegated, isFalse);
+    });
+
+    test('value is! String is IsExpressionNode with isNegated=true', () {
+      final v = body.statements[5] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      final isE = init as IsExpressionNode;
+      expect(isE.typeSource, equals('String'));
+      expect(isE.isNegated, isTrue);
+      expect(isE.notKeywordSpan, isNotNull);
+    });
+
+    test('const InstanceCreation captures keyword span', () {
+      const source = '''
+void f() {
+  final p = const Box(1, 2);
+  use(p);
+}
+class Box {
+  final int a;
+  final int b;
+  const Box(this.a, this.b);
+}
+void use(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      final ic = init as InstanceCreationExpressionNode;
+      expect(ic.keywordSpan, isNotNull);
+      expect(ic.constructorNameSource, equals('Box'));
     });
   });
 

@@ -1585,6 +1585,109 @@ ExpressionNode _convertExpression(Expression expr, String source) {
     );
   }
 
+  if (expr is PrefixedIdentifier) {
+    return PrefixedIdentifierExpressionNode(
+      prefix: expr.prefix.name,
+      prefixSpan:
+          SourceSpan(offset: expr.prefix.offset, length: expr.prefix.length),
+      periodSpan: SourceSpan(
+        offset: expr.period.offset,
+        length: expr.period.length,
+      ),
+      identifier: expr.identifier.name,
+      identifierSpan: SourceSpan(
+        offset: expr.identifier.offset,
+        length: expr.identifier.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is IndexExpression) {
+    final target = expr.target;
+    return IndexExpressionExpressionNode(
+      target: target == null ? null : _convertExpression(target, source),
+      questionSpan: expr.question == null
+          ? null
+          : SourceSpan(
+              offset: expr.question!.offset,
+              length: expr.question!.length,
+            ),
+      leftBracketSpan: SourceSpan(
+        offset: expr.leftBracket.offset,
+        length: expr.leftBracket.length,
+      ),
+      index: _convertExpression(expr.index, source),
+      rightBracketSpan: SourceSpan(
+        offset: expr.rightBracket.offset,
+        length: expr.rightBracket.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is InstanceCreationExpression) {
+    final ctorName = expr.constructorName;
+    final args = expr.argumentList;
+    return InstanceCreationExpressionNode(
+      keywordSpan: expr.keyword == null
+          ? null
+          : SourceSpan(
+              offset: expr.keyword!.offset,
+              length: expr.keyword!.length,
+            ),
+      constructorNameSource: source.substring(
+        ctorName.offset,
+        ctorName.offset + ctorName.length,
+      ),
+      constructorNameSpan: SourceSpan(
+        offset: ctorName.offset,
+        length: ctorName.length,
+      ),
+      argumentsSource: source.substring(args.offset, args.offset + args.length),
+      argumentsSpan: SourceSpan(offset: args.offset, length: args.length),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is AsExpression) {
+    return AsExpressionNode(
+      expression: _convertExpression(expr.expression, source),
+      asKeywordSpan: SourceSpan(
+        offset: expr.asOperator.offset,
+        length: expr.asOperator.length,
+      ),
+      typeSource: source.substring(
+        expr.type.offset,
+        expr.type.offset + expr.type.length,
+      ),
+      typeSpan: SourceSpan(offset: expr.type.offset, length: expr.type.length),
+      sourceSpan: span,
+    );
+  }
+
+  if (expr is IsExpression) {
+    return IsExpressionNode(
+      expression: _convertExpression(expr.expression, source),
+      isKeywordSpan: SourceSpan(
+        offset: expr.isOperator.offset,
+        length: expr.isOperator.length,
+      ),
+      notKeywordSpan: expr.notOperator == null
+          ? null
+          : SourceSpan(
+              offset: expr.notOperator!.offset,
+              length: expr.notOperator!.length,
+            ),
+      typeSource: source.substring(
+        expr.type.offset,
+        expr.type.offset + expr.type.length,
+      ),
+      typeSpan: SourceSpan(offset: expr.type.offset, length: expr.type.length),
+      sourceSpan: span,
+    );
+  }
+
   return OpaqueExpressionNode(sourceText: raw, sourceSpan: span);
 }
 

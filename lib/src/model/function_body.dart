@@ -2130,6 +2130,160 @@ class PropertyAccessExpressionNode extends ExpressionNode {
       : 'PropertyAccessExpressionNode($target$operator$propertyName)';
 }
 
+/// A prefixed identifier — `prefix.name`, where `prefix` is a simple
+/// identifier. The analyzer uses this shape (not `PropertyAccess`)
+/// when the target is a bare identifier — e.g. `Math.pi`, `lib.foo`,
+/// `myObj.field`. Common.
+class PrefixedIdentifierExpressionNode extends ExpressionNode {
+  const PrefixedIdentifierExpressionNode({
+    required this.prefix,
+    required this.prefixSpan,
+    required this.periodSpan,
+    required this.identifier,
+    required this.identifierSpan,
+    required this.sourceSpan,
+  });
+
+  /// The prefix identifier (e.g. `lib` in `lib.foo`).
+  final String prefix;
+  final SourceSpan prefixSpan;
+
+  /// Span of the `.` separator.
+  final SourceSpan periodSpan;
+
+  /// The identifier after the prefix (e.g. `foo` in `lib.foo`).
+  final String identifier;
+  final SourceSpan identifierSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'PrefixedIdentifierExpressionNode($prefix.$identifier)';
+}
+
+/// An index expression — `a[b]`, `map['key']`, `nullable?[k]`. The
+/// target and index are recursive expressions.
+class IndexExpressionExpressionNode extends ExpressionNode {
+  const IndexExpressionExpressionNode({
+    required this.target,
+    required this.questionSpan,
+    required this.leftBracketSpan,
+    required this.index,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  });
+
+  /// The indexed target. May be null in rare cascade contexts.
+  final ExpressionNode? target;
+
+  /// Span of the `?` for null-aware index (`a?[b]`); null otherwise.
+  final SourceSpan? questionSpan;
+
+  final SourceSpan leftBracketSpan;
+  final ExpressionNode index;
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => target == null
+      ? 'IndexExpressionExpressionNode([$index])'
+      : 'IndexExpressionExpressionNode($target[$index])';
+}
+
+/// An instance creation — `Foo(args)`, `const Foo()`, `new Foo()`,
+/// `Foo.named(args)`, `prefix.Foo<T>.named(args)`. Captures the
+/// optional `const`/`new` keyword, the constructor name (raw source —
+/// includes prefix, type args, and named-ctor segment), and the
+/// argument list (raw source including parens).
+class InstanceCreationExpressionNode extends ExpressionNode {
+  const InstanceCreationExpressionNode({
+    required this.keywordSpan,
+    required this.constructorNameSource,
+    required this.constructorNameSpan,
+    required this.argumentsSource,
+    required this.argumentsSpan,
+    required this.sourceSpan,
+  });
+
+  /// Span of the leading `const` or `new` keyword when present.
+  final SourceSpan? keywordSpan;
+
+  /// Raw source of the constructor name (e.g. `Foo`, `Foo<int>`,
+  /// `prefix.Foo.named`, `Result<int>.success`).
+  final String constructorNameSource;
+  final SourceSpan constructorNameSpan;
+
+  /// Raw source of the argument list including the surrounding parens.
+  final String argumentsSource;
+  final SourceSpan argumentsSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() =>
+      'InstanceCreationExpressionNode($constructorNameSource$argumentsSource)';
+}
+
+/// An `as` cast expression — `x as int`, `value as MyType`.
+class AsExpressionNode extends ExpressionNode {
+  const AsExpressionNode({
+    required this.expression,
+    required this.asKeywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode expression;
+  final SourceSpan asKeywordSpan;
+
+  /// Raw source of the type (e.g. `int`, `List<String>`).
+  final String typeSource;
+  final SourceSpan typeSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'AsExpressionNode($expression as $typeSource)';
+}
+
+/// An `is` type-check expression — `x is int`, `x is! String`. The
+/// optional `!` operator (`is!`) negates the check.
+class IsExpressionNode extends ExpressionNode {
+  const IsExpressionNode({
+    required this.expression,
+    required this.isKeywordSpan,
+    required this.notKeywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.sourceSpan,
+  });
+
+  final ExpressionNode expression;
+  final SourceSpan isKeywordSpan;
+
+  /// Span of the `!` in `is!` form; null for plain `is`.
+  final SourceSpan? notKeywordSpan;
+
+  final String typeSource;
+  final SourceSpan typeSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  /// True when this is `is!` (negated check).
+  bool get isNegated => notKeywordSpan != null;
+
+  @override
+  String toString() =>
+      'IsExpressionNode($expression is${isNegated ? '!' : ''} $typeSource)';
+}
+
 /// An expression kind not yet modeled. Preserves the raw source.
 /// Future milestones can promote individual kinds.
 class OpaqueExpressionNode extends ExpressionNode {

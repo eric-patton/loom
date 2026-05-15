@@ -1523,6 +1523,129 @@ int f(int x) {
     });
   });
 
+  group('M8.4 — 5 more expression kinds', () {
+    test('idempotence on function_body_with_more_expression_kinds.dart', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('renamePrefixedIdentifierName: Math.pi -> Math.e', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[2] as VariableDeclarationStatementNode;
+      final pi = v.variables.first.initializerExpression!
+          as PrefixedIdentifierExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.renamePrefixedIdentifierName(
+        expression: pi,
+        newName: 'e',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('Math.e'));
+    });
+
+    test('renamePrefixedIdentifierPrefix: Math.pi -> Calc.pi', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[2] as VariableDeclarationStatementNode;
+      final pi = v.variables.first.initializerExpression!
+          as PrefixedIdentifierExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.renamePrefixedIdentifierPrefix(
+        expression: pi,
+        newPrefix: 'Calc',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('Calc.pi'));
+    });
+
+    test('changeAsExpressionType: int -> num', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[3] as VariableDeclarationStatementNode;
+      final cast = v.variables.first.initializerExpression! as AsExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeAsExpressionType(
+        expression: cast,
+        newTypeSource: 'num',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('value as num'));
+    });
+
+    test('changeIsExpressionType: num -> int', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[4] as VariableDeclarationStatementNode;
+      final isE = v.variables.first.initializerExpression! as IsExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeIsExpressionType(
+        expression: isE,
+        newTypeSource: 'int',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('value is int'));
+    });
+
+    test('changeInstanceCreationConstructorName', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[1] as VariableDeclarationStatementNode;
+      final ic = v.variables.first.initializerExpression!
+          as InstanceCreationExpressionNode;
+
+      final edit =
+          FunctionBodyEditPlanner.changeInstanceCreationConstructorName(
+        expression: ic,
+        newConstructorNameSource: 'List<num>.generate',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('List<num>.generate(3, 0)'));
+    });
+
+    test(
+        'changeInstanceCreationArguments: List<int>.filled(3, 0) -> '
+        '(5, 1)', () {
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      // statements[1] is the List<int>.filled(3, 0) — definitively
+      // an InstanceCreationExpression because of `T<args>.named` shape.
+      // Bare `Box(1, 2)` would parse as MethodInvocation under
+      // unresolved parseString (no type info).
+      final v = body.statements[1] as VariableDeclarationStatementNode;
+      final ic = v.variables.first.initializerExpression!
+          as InstanceCreationExpressionNode;
+
+      final edit = FunctionBodyEditPlanner.changeInstanceCreationArguments(
+        expression: ic,
+        newArgumentsSource: '(5, 1)',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('List<int>.filled(5, 1)'));
+    });
+
+    test('bare Box(1, 2) parses as MethodInvocation (no resolution)', () {
+      // Document analyzer behavior: parseString doesn't resolve types,
+      // so `Box(1, 2)` is indistinguishable from a function call and
+      // parses as MethodInvocationExpressionNode. Use `const Foo()`
+      // or `Foo<T>.named()` shapes to definitively get instance
+      // creation under unresolved parsing.
+      final source =
+          _loadFixture('function_body_with_more_expression_kinds.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[6] as VariableDeclarationStatementNode;
+      final init = v.variables.first.initializerExpression!;
+      expect(init, isA<MethodInvocationExpressionNode>());
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =

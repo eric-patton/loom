@@ -1043,6 +1043,89 @@ class FunctionBodyEditPlanner {
     );
   }
 
+  // ----------------------- More expression ops (M8.4) -------------
+
+  /// Renames the prefix of a `PrefixedIdentifierExpressionNode` —
+  /// e.g. `lib.foo` → `core.foo`.
+  static SourceEdit renamePrefixedIdentifierPrefix({
+    required PrefixedIdentifierExpressionNode expression,
+    required String newPrefix,
+  }) {
+    return SourceEdit(
+      offset: expression.prefixSpan.offset,
+      length: expression.prefixSpan.length,
+      replacement: newPrefix,
+    );
+  }
+
+  /// Renames the trailing identifier of a `PrefixedIdentifierExpressionNode`
+  /// — e.g. `lib.foo` → `lib.bar`.
+  static SourceEdit renamePrefixedIdentifierName({
+    required PrefixedIdentifierExpressionNode expression,
+    required String newName,
+  }) {
+    return SourceEdit(
+      offset: expression.identifierSpan.offset,
+      length: expression.identifierSpan.length,
+      replacement: newName,
+    );
+  }
+
+  /// Changes the constructor name of an `InstanceCreationExpressionNode`
+  /// — e.g. `Foo()` → `Bar()`, `Foo<int>.named()` → `Baz<int>.named()`.
+  /// The new source replaces the entire constructor-name expression
+  /// (which may include type args and named-ctor segments).
+  static SourceEdit changeInstanceCreationConstructorName({
+    required InstanceCreationExpressionNode expression,
+    required String newConstructorNameSource,
+  }) {
+    return SourceEdit(
+      offset: expression.constructorNameSpan.offset,
+      length: expression.constructorNameSpan.length,
+      replacement: newConstructorNameSource,
+    );
+  }
+
+  /// Replaces the argument list of an `InstanceCreationExpressionNode`
+  /// — e.g. `Foo(x)` → `Foo(x, y)`. The new source MUST include
+  /// the surrounding parens.
+  static SourceEdit changeInstanceCreationArguments({
+    required InstanceCreationExpressionNode expression,
+    required String newArgumentsSource,
+  }) {
+    return SourceEdit(
+      offset: expression.argumentsSpan.offset,
+      length: expression.argumentsSpan.length,
+      replacement: newArgumentsSource,
+    );
+  }
+
+  /// Changes the type of an `AsExpressionNode` — e.g. `x as int` →
+  /// `x as num`.
+  static SourceEdit changeAsExpressionType({
+    required AsExpressionNode expression,
+    required String newTypeSource,
+  }) {
+    return SourceEdit(
+      offset: expression.typeSpan.offset,
+      length: expression.typeSpan.length,
+      replacement: newTypeSource,
+    );
+  }
+
+  /// Changes the type of an `IsExpressionNode` — e.g. `x is int` →
+  /// `x is num`. The `is` / `is!` operator is preserved.
+  static SourceEdit changeIsExpressionType({
+    required IsExpressionNode expression,
+    required String newTypeSource,
+  }) {
+    return SourceEdit(
+      offset: expression.typeSpan.offset,
+      length: expression.typeSpan.length,
+      replacement: newTypeSource,
+    );
+  }
+
   // ----------------------- Yield/break/continue ops (M8.1) -------
 
   /// Replaces the expression of a `yield` or `yield*` statement with
