@@ -671,7 +671,7 @@ String f(Object o) {
       expect(p.keywordSpan, isNull);
     });
 
-    test('list pattern is OpaquePatternNode (deferred to M8.0h+)', () {
+    test('list pattern is now modeled (M8.0h)', () {
       const source = '''
 String f(List<int> xs) {
   switch (xs) {
@@ -685,7 +685,7 @@ String f(List<int> xs) {
       final body = parseFunctionBody(source);
       final sw = body.statements.first as SwitchStatementNode;
       final c0 = sw.members[0] as SwitchCaseNode;
-      expect(c0.pattern, isA<OpaquePatternNode>());
+      expect(c0.pattern, isA<ListPatternNode>());
     });
   });
 
@@ -825,6 +825,189 @@ class Empty {
     });
   });
 
+  group(
+      'parseFunctionBody on function_body_with_remaining_patterns.dart '
+      '(M8.0h)', () {
+    late FunctionBodyModel body;
+    late SwitchStatementNode sw;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/function_body_with_remaining_patterns.dart')
+              .readAsStringSync();
+      body = parseFunctionBody(source);
+      sw = body.statements.first as SwitchStatementNode;
+    });
+
+    test('switch has 12 members (11 cases + default)', () {
+      expect(sw.members, hasLength(12));
+      expect(sw.members.last, isA<SwitchDefaultNode>());
+    });
+
+    test('[int a, int b] is a ListPatternNode with 2 pattern elements', () {
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final lp = c0.pattern as ListPatternNode;
+      expect(lp.elements, hasLength(2));
+      expect(lp.elements[0], isA<ListPatternPatternElement>());
+      final p0 = (lp.elements[0] as ListPatternPatternElement).pattern
+          as DeclaredVariablePatternNode;
+      expect(p0.typeSource, equals('int'));
+      expect(p0.name, equals('a'));
+    });
+
+    test('[int first, ...] has a bare rest element', () {
+      final c1 = sw.members[1] as SwitchCaseNode;
+      final lp = c1.pattern as ListPatternNode;
+      expect(lp.elements, hasLength(2));
+      expect(lp.elements[1], isA<ListPatternRestElement>());
+      final rest = lp.elements[1] as ListPatternRestElement;
+      expect(rest.subPattern, isNull);
+    });
+
+    test('[int head, ...List<int> tail] has a sub-patterned rest', () {
+      final c2 = sw.members[2] as SwitchCaseNode;
+      final lp = c2.pattern as ListPatternNode;
+      final rest = lp.elements[1] as ListPatternRestElement;
+      expect(rest.subPattern, isNotNull);
+      final inner = rest.subPattern! as DeclaredVariablePatternNode;
+      expect(inner.typeSource, equals('List<int>'));
+      expect(inner.name, equals('tail'));
+    });
+
+    test("{'name': String name} is a MapPatternNode with one entry", () {
+      final c3 = sw.members[3] as SwitchCaseNode;
+      final mp = c3.pattern as MapPatternNode;
+      expect(mp.elements, hasLength(1));
+      final entry = mp.elements[0] as MapPatternEntryNode;
+      expect(entry.keyExpressionSource, equals("'name'"));
+      final inner = entry.pattern as DeclaredVariablePatternNode;
+      expect(inner.name, equals('name'));
+    });
+
+    test('> 100 is a RelationalPatternNode', () {
+      final c4 = sw.members[4] as SwitchCaseNode;
+      final rp = c4.pattern as RelationalPatternNode;
+      expect(rp.operator, equals('>'));
+      expect(rp.operandSource, equals('100'));
+    });
+
+    test("== 'zero' is a RelationalPatternNode with operator ==", () {
+      final c5 = sw.members[5] as SwitchCaseNode;
+      final rp = c5.pattern as RelationalPatternNode;
+      expect(rp.operator, equals('=='));
+      expect(rp.operandSource, equals("'zero'"));
+    });
+
+    test('var x? is a NullCheckPatternNode wrapping a declared variable', () {
+      final c6 = sw.members[6] as SwitchCaseNode;
+      final nc = c6.pattern as NullCheckPatternNode;
+      final inner = nc.innerPattern as DeclaredVariablePatternNode;
+      expect(inner.name, equals('x'));
+    });
+
+    test('var y! is a NullAssertPatternNode', () {
+      final c7 = sw.members[7] as SwitchCaseNode;
+      final na = c7.pattern as NullAssertPatternNode;
+      final inner = na.innerPattern as DeclaredVariablePatternNode;
+      expect(inner.name, equals('y'));
+    });
+
+    test('var z as int is a CastPatternNode', () {
+      final c8 = sw.members[8] as SwitchCaseNode;
+      final cast = c8.pattern as CastPatternNode;
+      expect(cast.typeSource, equals('int'));
+      final inner = cast.innerPattern as DeclaredVariablePatternNode;
+      expect(inner.name, equals('z'));
+    });
+
+    test('(1 || 2 || 3) is a ParenthesizedPatternNode wrapping a LogicalOr',
+        () {
+      final c9 = sw.members[9] as SwitchCaseNode;
+      final pp = c9.pattern as ParenthesizedPatternNode;
+      final or = pp.innerPattern as LogicalOrPatternNode;
+      expect(or.operands, hasLength(3));
+    });
+
+    test('int n && > 0 is a LogicalAndPatternNode flattened to 2 operands', () {
+      final c10 = sw.members[10] as SwitchCaseNode;
+      final and = c10.pattern as LogicalAndPatternNode;
+      expect(and.operands, hasLength(2));
+      expect(and.operatorSpans, hasLength(1));
+      expect(and.operands[0], isA<DeclaredVariablePatternNode>());
+      expect(and.operands[1], isA<RelationalPatternNode>());
+    });
+  });
+
+  group(
+      'parseFunctionBody on function_body_with_switch_expressions.dart '
+      '(M8.0h)', () {
+    late String source;
+    late FunctionBodyModel body;
+
+    setUpAll(() {
+      source = File('test/fixtures/function_body_with_switch_expressions.dart')
+          .readAsStringSync();
+      body = parseFunctionBody(source);
+    });
+
+    test('variable initializer surfaces a SwitchExpressionNode', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final declared = v.variables.first;
+      expect(declared.initializerSwitchExpression, isNotNull);
+      final sx = declared.initializerSwitchExpression!;
+      expect(sx.subjectSource, equals('x'));
+      expect(sx.cases, hasLength(4));
+    });
+
+    test('first case has constant pattern, last is wildcard', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      expect(sx.cases[0].pattern, isA<ConstantPatternNode>());
+      expect(sx.cases[3].pattern, isA<WildcardPatternNode>());
+    });
+
+    test('logical-or case in switch expression is structured', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      expect(sx.cases[1].pattern, isA<LogicalOrPatternNode>());
+      final or = sx.cases[1].pattern as LogicalOrPatternNode;
+      expect(or.operands, hasLength(3));
+    });
+
+    test('guarded case carries when guard source', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      expect(sx.cases[2].whenGuardSource, equals('n > 100'));
+    });
+
+    test('result expressions captured per arm', () {
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      expect(sx.cases[0].resultExpressionSource, equals("'zero'"));
+      expect(sx.cases[1].resultExpressionSource, equals("'small'"));
+    });
+
+    test('return statement surfaces a SwitchExpressionNode', () {
+      // describeReturn is the second function in the fixture — we need to
+      // locate it explicitly via its body span.
+      final marker = source.indexOf('describeReturn');
+      final braceOpen = source.indexOf('{', marker);
+      final braceClose = _matchingBrace(source, braceOpen);
+      final body = parseFunctionBody(
+        source,
+        bodySpan: SourceSpan(
+          offset: braceOpen,
+          length: braceClose - braceOpen + 1,
+        ),
+      );
+      final ret = body.statements.first as ReturnStatementNode;
+      expect(ret.switchExpression, isNotNull);
+      expect(ret.switchExpression!.cases, hasLength(3));
+      expect(
+          ret.switchExpression!.cases[0].pattern, isA<RelationalPatternNode>());
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';
@@ -845,4 +1028,23 @@ class Empty {
       );
     });
   });
+}
+
+/// Finds the matching `}` for the `{` at [open], handling nested
+/// braces. Used in M8.0h tests to locate the second function's body
+/// span in a multi-function fixture.
+int _matchingBrace(String source, int open) {
+  assert(source[open] == '{');
+  var depth = 1;
+  var i = open + 1;
+  while (i < source.length) {
+    final ch = source[i];
+    if (ch == '{') depth++;
+    if (ch == '}') {
+      depth--;
+      if (depth == 0) return i;
+    }
+    i++;
+  }
+  throw StateError('unbalanced braces');
 }

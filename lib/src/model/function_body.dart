@@ -167,12 +167,18 @@ class DeclaredVariable {
     required this.nameSpan,
     required this.initializerSource,
     required this.initializerSpan,
+    this.initializerSwitchExpression,
   });
 
   final String name;
   final SourceSpan nameSpan;
   final String? initializerSource;
   final SourceSpan? initializerSpan;
+
+  /// Structured view when the initializer IS a top-level switch
+  /// expression. Null otherwise. The raw `initializerSource` is always
+  /// present; this field is an optional structured overlay (M8.0h).
+  final SwitchExpressionNode? initializerSwitchExpression;
 
   @override
   String toString() => 'DeclaredVariable($name'
@@ -188,6 +194,7 @@ class ExpressionStatementNode extends StatementNode {
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    this.switchExpression,
   });
 
   /// Raw source text of the expression (no trailing `;`).
@@ -199,6 +206,10 @@ class ExpressionStatementNode extends StatementNode {
   /// Span of the full statement including the trailing `;`.
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured view when the expression IS a top-level switch
+  /// expression. Null otherwise. (M8.0h)
+  final SwitchExpressionNode? switchExpression;
 
   @override
   String toString() {
@@ -217,6 +228,7 @@ class ReturnStatementNode extends StatementNode {
     required this.expressionSource,
     required this.expressionSpan,
     required this.sourceSpan,
+    this.switchExpression,
   });
 
   /// Returned expression as raw source, or null for bare `return;`.
@@ -226,6 +238,10 @@ class ReturnStatementNode extends StatementNode {
   /// Span of the full statement including `return` and `;`.
   @override
   final SourceSpan sourceSpan;
+
+  /// Structured view when the returned expression IS a top-level
+  /// switch expression. Null otherwise. (M8.0h)
+  final SwitchExpressionNode? switchExpression;
 
   @override
   String toString() => 'ReturnStatementNode('
@@ -588,15 +604,14 @@ class ThrowStatementNode extends StatementNode {
 /// NOT statements — they stay opaque inside the host expression's
 /// source (no separate node).
 ///
-/// **Pattern surface (M8.0g scope):** six pattern kinds are modeled
-/// structurally — `ConstantPatternNode`, `DeclaredVariablePatternNode`,
-/// `WildcardPatternNode`, `LogicalOrPatternNode`, `ObjectPatternNode`,
-/// `RecordPatternNode`. List / map / logical-and / relational / null-
-/// check / null-assert / cast / parenthesized patterns fall through to
-/// `OpaquePatternNode`. Each `SwitchCaseNode` carries BOTH the raw
-/// `patternSource` string (M8.0e, for callers that just want the
-/// verbatim text) AND a structured `pattern: PatternNode` (M8.0f/g,
-/// for callers that want to walk or edit pattern internals).
+/// **Pattern surface (M8.0h scope):** all 14 Dart 3 pattern kinds are
+/// modeled structurally — constant, declared variable, wildcard,
+/// logical-or, object, record, list, map, relational, null-check,
+/// null-assert, cast, parenthesized, logical-and. `OpaquePatternNode`
+/// is now only a safety fallback for unrecognized analyzer shapes.
+/// Each `SwitchCaseNode` carries BOTH the raw `patternSource` string
+/// (M8.0e, for callers that just want the verbatim text) AND a
+/// structured `pattern: PatternNode` for pattern-aware editing.
 class SwitchStatementNode extends StatementNode {
   SwitchStatementNode({
     required this.switchKeywordSpan,
@@ -1057,10 +1072,294 @@ class PatternField {
   }
 }
 
-/// A pattern kind not yet modeled — list, map, logical-and, relational,
-/// null-check, null-assert, cast, parenthesized. Preserves the source
-/// verbatim. Future milestones (M8.0h+) can promote individual kinds as
-/// concrete edit needs demand.
+/// A list pattern — `case [a, b]:`, `case [first, ...rest]:`,
+/// `case <int>[1, 2, 3]:`. Captures optional type arguments source,
+/// bracket spans, and an ordered list of elements (regular patterns
+/// or `...` rest elements).
+class ListPatternNode extends PatternNode {
+  ListPatternNode({
+    required this.typeArgumentsSource,
+    required this.typeArgumentsSpan,
+    required this.leftBracketSpan,
+    required List<ListPatternElement> elements,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  }) : elements = List.unmodifiable(elements);
+
+  /// Raw source of the type arguments (e.g. `<int>`), or null when no
+  /// type arguments are written.
+  final String? typeArgumentsSource;
+  final SourceSpan? typeArgumentsSpan;
+
+  final SourceSpan leftBracketSpan;
+  final List<ListPatternElement> elements;
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ListPatternNode(${elements.length} element(s))';
+}
+
+/// Element of a list pattern. Either a regular pattern or a rest
+/// element (`...` / `...rest`).
+abstract class ListPatternElement {
+  SourceSpan get sourceSpan;
+}
+
+/// A regular `PatternNode`-bearing list element.
+class ListPatternPatternElement implements ListPatternElement {
+  const ListPatternPatternElement({
+    required this.pattern,
+    required this.sourceSpan,
+  });
+  final PatternNode pattern;
+  @override
+  final SourceSpan sourceSpan;
+  @override
+  String toString() => 'ListPatternPatternElement($pattern)';
+}
+
+/// A `...` or `...subPattern` rest element inside a list pattern.
+/// The sub-pattern is optional — bare `...` matches without binding.
+class ListPatternRestElement implements ListPatternElement {
+  const ListPatternRestElement({
+    required this.operatorSpan,
+    required this.subPattern,
+    required this.sourceSpan,
+  });
+  final SourceSpan operatorSpan;
+  final PatternNode? subPattern;
+  @override
+  final SourceSpan sourceSpan;
+  @override
+  String toString() => subPattern == null
+      ? 'ListPatternRestElement(...)'
+      : 'ListPatternRestElement(...$subPattern)';
+}
+
+/// A map pattern — `case {'k': v, 'k2': _}:`,
+/// `case <String, int>{'a': 1}:`. Entries map a key expression
+/// (opaque source) to a `PatternNode` value.
+class MapPatternNode extends PatternNode {
+  MapPatternNode({
+    required this.typeArgumentsSource,
+    required this.typeArgumentsSpan,
+    required this.leftBracketSpan,
+    required List<MapPatternElement> elements,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  }) : elements = List.unmodifiable(elements);
+
+  final String? typeArgumentsSource;
+  final SourceSpan? typeArgumentsSpan;
+  final SourceSpan leftBracketSpan;
+  final List<MapPatternElement> elements;
+  final SourceSpan rightBracketSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'MapPatternNode(${elements.length} element(s))';
+}
+
+/// Element of a map pattern. Either a key-value entry or a rest
+/// element (rare; same `...` shape as in list patterns).
+abstract class MapPatternElement {
+  SourceSpan get sourceSpan;
+}
+
+/// A `key: pattern` entry inside a map pattern.
+class MapPatternEntryNode implements MapPatternElement {
+  const MapPatternEntryNode({
+    required this.keyExpressionSource,
+    required this.keyExpressionSpan,
+    required this.colonSpan,
+    required this.pattern,
+    required this.sourceSpan,
+  });
+
+  /// Raw source of the key expression (e.g. `'foo'`, `0`, `MyEnum.a`).
+  final String keyExpressionSource;
+  final SourceSpan keyExpressionSpan;
+
+  /// Span of the `:` separator.
+  final SourceSpan colonSpan;
+
+  /// The value sub-pattern.
+  final PatternNode pattern;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'MapPatternEntryNode($keyExpressionSource: $pattern)';
+}
+
+/// A `...` rest element inside a map pattern.
+class MapPatternRestElement implements MapPatternElement {
+  const MapPatternRestElement({
+    required this.operatorSpan,
+    required this.subPattern,
+    required this.sourceSpan,
+  });
+  final SourceSpan operatorSpan;
+  final PatternNode? subPattern;
+  @override
+  final SourceSpan sourceSpan;
+  @override
+  String toString() => 'MapPatternRestElement()';
+}
+
+/// A relational pattern — `case > 100:`, `case == foo:`, `case <= 5:`.
+/// Matches values where `value <op> operand` is true.
+class RelationalPatternNode extends PatternNode {
+  const RelationalPatternNode({
+    required this.operator,
+    required this.operatorSpan,
+    required this.operandSource,
+    required this.operandSpan,
+    required this.sourceSpan,
+  });
+
+  /// The operator token's lexeme — `==`, `!=`, `<`, `<=`, `>`, `>=`.
+  final String operator;
+  final SourceSpan operatorSpan;
+
+  /// Raw source of the operand expression.
+  final String operandSource;
+  final SourceSpan operandSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'RelationalPatternNode($operator $operandSource)';
+}
+
+/// A null-check pattern — `case var x?:`, `case Foo()?:`. Matches
+/// non-null values; bare `case _?:` rejects null without binding.
+class NullCheckPatternNode extends PatternNode {
+  const NullCheckPatternNode({
+    required this.innerPattern,
+    required this.operatorSpan,
+    required this.sourceSpan,
+  });
+
+  final PatternNode innerPattern;
+
+  /// Span of the trailing `?` token.
+  final SourceSpan operatorSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'NullCheckPatternNode($innerPattern?)';
+}
+
+/// A null-assert pattern — `case var x!:`, `case Foo()!:`. Asserts
+/// the value is non-null and matches the inner pattern (throws if null).
+class NullAssertPatternNode extends PatternNode {
+  const NullAssertPatternNode({
+    required this.innerPattern,
+    required this.operatorSpan,
+    required this.sourceSpan,
+  });
+
+  final PatternNode innerPattern;
+  final SourceSpan operatorSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'NullAssertPatternNode($innerPattern!)';
+}
+
+/// A cast pattern — `case var x as int:`, `case (a, b) as Pair:`.
+/// Casts the value to a specific type and then matches the inner
+/// pattern.
+class CastPatternNode extends PatternNode {
+  const CastPatternNode({
+    required this.innerPattern,
+    required this.asKeywordSpan,
+    required this.typeSource,
+    required this.typeSpan,
+    required this.sourceSpan,
+  });
+
+  final PatternNode innerPattern;
+  final SourceSpan asKeywordSpan;
+  final String typeSource;
+  final SourceSpan typeSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'CastPatternNode($innerPattern as $typeSource)';
+}
+
+/// A parenthesized pattern — `case (1 || 2):`. Wraps an inner pattern
+/// for grouping; doesn't change matching semantics.
+class ParenthesizedPatternNode extends PatternNode {
+  const ParenthesizedPatternNode({
+    required this.leftParenSpan,
+    required this.innerPattern,
+    required this.rightParenSpan,
+    required this.sourceSpan,
+  });
+
+  final SourceSpan leftParenSpan;
+  final PatternNode innerPattern;
+  final SourceSpan rightParenSpan;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ParenthesizedPatternNode(($innerPattern))';
+}
+
+/// A logical-and pattern — `case int n && > 0:`. Matches when ALL
+/// operands match. Like `LogicalOrPatternNode`, the analyzer's binary
+/// tree is flattened into an ordered operand list.
+class LogicalAndPatternNode extends PatternNode {
+  LogicalAndPatternNode({
+    required List<PatternNode> operands,
+    required List<SourceSpan> operatorSpans,
+    required this.sourceSpan,
+  })  : operands = List.unmodifiable(operands),
+        operatorSpans = List.unmodifiable(operatorSpans),
+        assert(
+          operands.length >= 2,
+          'LogicalAndPatternNode must have at least 2 operands',
+        ),
+        assert(
+          operatorSpans.length == operands.length - 1,
+          'operatorSpans.length must equal operands.length - 1',
+        );
+
+  /// Flattened operands in source order. Length >= 2.
+  final List<PatternNode> operands;
+
+  /// Spans of the `&&` tokens between adjacent operands.
+  final List<SourceSpan> operatorSpans;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'LogicalAndPatternNode(${operands.length} operand(s))';
+}
+
+/// A pattern kind not yet modeled. With M8.0h, every Dart 3 pattern
+/// kind has structural modeling — `OpaquePatternNode` is now only used
+/// when the parser encounters an unexpected pattern shape (e.g. from a
+/// future analyzer release).
 class OpaquePatternNode extends PatternNode {
   const OpaquePatternNode({
     required this.sourceText,
@@ -1080,4 +1379,96 @@ class OpaquePatternNode extends PatternNode {
         : sourceText.replaceAll('\n', '\\n');
     return 'OpaquePatternNode("$preview")';
   }
+}
+
+// ===========================================================================
+// Switch expressions (M8.0h)
+// ===========================================================================
+
+/// A modeled switch **expression** — `switch (x) { 1 => 'one', _ =>
+/// 'other' }`. Unlike `SwitchStatementNode`, switch expressions
+/// produce a value and are USED inside other expressions (variable
+/// initializers, return expressions, function arguments, etc.).
+///
+/// **Where they appear in the model.** The parser surfaces a
+/// `SwitchExpressionNode` view at three positions:
+///   * `DeclaredVariable.initializerSwitchExpression` — when a
+///     variable declaration's initializer is itself a switch
+///     expression: `final r = switch (x) { ... };`.
+///   * `ReturnStatementNode.switchExpression` — when a return's
+///     expression is a switch: `return switch (x) { ... };`.
+///   * `ExpressionStatementNode.switchExpression` — when an expression
+///     statement IS a switch expression (rare — typically a switch
+///     expression's value is discarded only in tests).
+///
+/// Switch expressions deeply nested inside other expressions
+/// (e.g. `f(switch (x) { ... })`) are NOT surfaced — they stay opaque
+/// inside the host expression's source. Surfacing them would require
+/// modeling expression-internal structure, a separate large surface.
+class SwitchExpressionNode {
+  SwitchExpressionNode({
+    required this.switchKeywordSpan,
+    required this.subjectSource,
+    required this.subjectSpan,
+    required this.leftBracketSpan,
+    required List<SwitchExpressionCaseNode> cases,
+    required this.rightBracketSpan,
+    required this.sourceSpan,
+  }) : cases = List.unmodifiable(cases);
+
+  /// Span of the `switch` keyword.
+  final SourceSpan switchKeywordSpan;
+
+  /// Raw source of the switched expression (no surrounding parens).
+  final String subjectSource;
+  final SourceSpan subjectSpan;
+
+  final SourceSpan leftBracketSpan;
+  final List<SwitchExpressionCaseNode> cases;
+  final SourceSpan rightBracketSpan;
+
+  /// Span of the full switch expression in source.
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'SwitchExpressionNode('
+      'on=$subjectSource, ${cases.length} case(s))';
+}
+
+/// A single `pattern [when guard] => resultExpression` case in a
+/// switch expression. Unlike `SwitchCaseNode` (which has a body of
+/// statements), each case here has a single result expression.
+class SwitchExpressionCaseNode {
+  const SwitchExpressionCaseNode({
+    required this.pattern,
+    required this.whenKeywordSpan,
+    required this.whenGuardSource,
+    required this.whenGuardSpan,
+    required this.arrowSpan,
+    required this.resultExpressionSource,
+    required this.resultExpressionSpan,
+    required this.sourceSpan,
+  });
+
+  /// Structured pattern. Recursive — any `PatternNode` kind.
+  final PatternNode pattern;
+
+  /// Span of the `when` keyword when a guard is present; null otherwise.
+  final SourceSpan? whenKeywordSpan;
+  final String? whenGuardSource;
+  final SourceSpan? whenGuardSpan;
+
+  /// Span of the `=>` arrow token.
+  final SourceSpan arrowSpan;
+
+  /// Raw source of the result expression (no trailing comma).
+  final String resultExpressionSource;
+  final SourceSpan resultExpressionSpan;
+
+  /// Full span of this case from its pattern through the result.
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'SwitchExpressionCaseNode('
+      '$pattern => $resultExpressionSource)';
 }

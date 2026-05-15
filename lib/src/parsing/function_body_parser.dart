@@ -1,9 +1,10 @@
 import 'package:analyzer/dart/analysis/utilities.dart';
-// Hide analyzer's `ClassMember` (clashes with the loom-side sealed
-// type) and `PatternField` (clashes with the loom-side compound-pattern
-// field class — we still need the analyzer's via a prefixed import).
-import 'package:analyzer/dart/ast/ast.dart' hide ClassMember, PatternField;
-import 'package:analyzer/dart/ast/ast.dart' as ast show PatternField;
+// Hide analyzer types that clash with the kernel's domain names.
+// We still need the analyzer types via prefixed aliases.
+import 'package:analyzer/dart/ast/ast.dart'
+    hide ClassMember, PatternField, ListPatternElement, MapPatternElement;
+import 'package:analyzer/dart/ast/ast.dart' as ast
+    show PatternField, ListPatternElement, MapPatternElement;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
@@ -114,6 +115,9 @@ StatementNode _convertStatement(Statement stmt, String source) {
       ),
       expressionSpan: exprSpan,
       sourceSpan: span,
+      switchExpression: expr is SwitchExpression
+          ? _convertSwitchExpression(expr, source)
+          : null,
     );
   }
   if (stmt is ReturnStatement) {
@@ -132,6 +136,9 @@ StatementNode _convertStatement(Statement stmt, String source) {
       ),
       expressionSpan: SourceSpan(offset: expr.offset, length: expr.length),
       sourceSpan: span,
+      switchExpression: expr is SwitchExpression
+          ? _convertSwitchExpression(expr, source)
+          : null,
     );
   }
   if (stmt is IfStatement) {
@@ -635,6 +642,10 @@ VariableDeclarationStatementNode _convertVariableDeclarationStatement(
                 offset: v.initializer!.offset,
                 length: v.initializer!.length,
               ),
+        initializerSwitchExpression: v.initializer is SwitchExpression
+            ? _convertSwitchExpression(
+                v.initializer! as SwitchExpression, source)
+            : null,
       ),
   ];
 
@@ -778,14 +789,246 @@ PatternNode _convertPattern(DartPattern pattern, String source) {
     );
   }
 
-  // List / map / logical-and / relational / null-check / null-assert /
-  // cast / parenthesized — all opaque for M8.0g. Future milestones can
-  // promote individual kinds as concrete edits demand.
+  if (pattern is ListPattern) {
+    final typeArgs = pattern.typeArguments;
+    return ListPatternNode(
+      typeArgumentsSource: typeArgs == null
+          ? null
+          : source.substring(
+              typeArgs.offset,
+              typeArgs.offset + typeArgs.length,
+            ),
+      typeArgumentsSpan: typeArgs == null
+          ? null
+          : SourceSpan(offset: typeArgs.offset, length: typeArgs.length),
+      leftBracketSpan: SourceSpan(
+        offset: pattern.leftBracket.offset,
+        length: pattern.leftBracket.length,
+      ),
+      elements: [
+        for (final e in pattern.elements) _convertListPatternElement(e, source),
+      ],
+      rightBracketSpan: SourceSpan(
+        offset: pattern.rightBracket.offset,
+        length: pattern.rightBracket.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is MapPattern) {
+    final typeArgs = pattern.typeArguments;
+    return MapPatternNode(
+      typeArgumentsSource: typeArgs == null
+          ? null
+          : source.substring(
+              typeArgs.offset,
+              typeArgs.offset + typeArgs.length,
+            ),
+      typeArgumentsSpan: typeArgs == null
+          ? null
+          : SourceSpan(offset: typeArgs.offset, length: typeArgs.length),
+      leftBracketSpan: SourceSpan(
+        offset: pattern.leftBracket.offset,
+        length: pattern.leftBracket.length,
+      ),
+      elements: [
+        for (final e in pattern.elements) _convertMapPatternElement(e, source),
+      ],
+      rightBracketSpan: SourceSpan(
+        offset: pattern.rightBracket.offset,
+        length: pattern.rightBracket.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is RelationalPattern) {
+    return RelationalPatternNode(
+      operator: pattern.operator.lexeme,
+      operatorSpan: SourceSpan(
+        offset: pattern.operator.offset,
+        length: pattern.operator.length,
+      ),
+      operandSource: source.substring(
+        pattern.operand.offset,
+        pattern.operand.offset + pattern.operand.length,
+      ),
+      operandSpan: SourceSpan(
+        offset: pattern.operand.offset,
+        length: pattern.operand.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is NullCheckPattern) {
+    return NullCheckPatternNode(
+      innerPattern: _convertPattern(pattern.pattern, source),
+      operatorSpan: SourceSpan(
+        offset: pattern.operator.offset,
+        length: pattern.operator.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is NullAssertPattern) {
+    return NullAssertPatternNode(
+      innerPattern: _convertPattern(pattern.pattern, source),
+      operatorSpan: SourceSpan(
+        offset: pattern.operator.offset,
+        length: pattern.operator.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is CastPattern) {
+    return CastPatternNode(
+      innerPattern: _convertPattern(pattern.pattern, source),
+      asKeywordSpan: SourceSpan(
+        offset: pattern.asToken.offset,
+        length: pattern.asToken.length,
+      ),
+      typeSource: source.substring(
+        pattern.type.offset,
+        pattern.type.offset + pattern.type.length,
+      ),
+      typeSpan: SourceSpan(
+        offset: pattern.type.offset,
+        length: pattern.type.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is ParenthesizedPattern) {
+    return ParenthesizedPatternNode(
+      leftParenSpan: SourceSpan(
+        offset: pattern.leftParenthesis.offset,
+        length: pattern.leftParenthesis.length,
+      ),
+      innerPattern: _convertPattern(pattern.pattern, source),
+      rightParenSpan: SourceSpan(
+        offset: pattern.rightParenthesis.offset,
+        length: pattern.rightParenthesis.length,
+      ),
+      sourceSpan: span,
+    );
+  }
+
+  if (pattern is LogicalAndPattern) {
+    final operands = <PatternNode>[];
+    final operatorSpans = <SourceSpan>[];
+    _flattenLogicalAnd(pattern, source, operands, operatorSpans);
+    return LogicalAndPatternNode(
+      operands: operands,
+      operatorSpans: operatorSpans,
+      sourceSpan: span,
+    );
+  }
+
+  // Safety fallback — every Dart 3 pattern kind known to analyzer 13
+  // is handled above. This catches any new pattern shape introduced
+  // by a future analyzer release.
   return OpaquePatternNode(
     sourceText:
         source.substring(pattern.offset, pattern.offset + pattern.length),
     sourceSpan: span,
   );
+}
+
+/// Recursively flattens a left-associative binary `LogicalAndPattern`
+/// tree into a flat operand list. Same shape as `_flattenLogicalOr`.
+void _flattenLogicalAnd(
+  LogicalAndPattern node,
+  String source,
+  List<PatternNode> operands,
+  List<SourceSpan> operatorSpans,
+) {
+  final left = node.leftOperand;
+  if (left is LogicalAndPattern) {
+    _flattenLogicalAnd(left, source, operands, operatorSpans);
+  } else {
+    operands.add(_convertPattern(left, source));
+  }
+  operatorSpans.add(SourceSpan(
+    offset: node.operator.offset,
+    length: node.operator.length,
+  ));
+  final right = node.rightOperand;
+  if (right is LogicalAndPattern) {
+    _flattenLogicalAnd(right, source, operands, operatorSpans);
+  } else {
+    operands.add(_convertPattern(right, source));
+  }
+}
+
+ListPatternElement _convertListPatternElement(
+  ast.ListPatternElement element,
+  String source,
+) {
+  final span = SourceSpan(offset: element.offset, length: element.length);
+  if (element is RestPatternElement) {
+    return ListPatternRestElement(
+      operatorSpan: SourceSpan(
+        offset: element.operator.offset,
+        length: element.operator.length,
+      ),
+      subPattern: element.pattern == null
+          ? null
+          : _convertPattern(element.pattern!, source),
+      sourceSpan: span,
+    );
+  }
+  if (element is DartPattern) {
+    return ListPatternPatternElement(
+      pattern: _convertPattern(element, source),
+      sourceSpan: span,
+    );
+  }
+  throw StateError('Unexpected list-pattern element type: '
+      '${element.runtimeType}');
+}
+
+MapPatternElement _convertMapPatternElement(
+  ast.MapPatternElement element,
+  String source,
+) {
+  final span = SourceSpan(offset: element.offset, length: element.length);
+  if (element is RestPatternElement) {
+    return MapPatternRestElement(
+      operatorSpan: SourceSpan(
+        offset: element.operator.offset,
+        length: element.operator.length,
+      ),
+      subPattern: element.pattern == null
+          ? null
+          : _convertPattern(element.pattern!, source),
+      sourceSpan: span,
+    );
+  }
+  if (element is MapPatternEntry) {
+    return MapPatternEntryNode(
+      keyExpressionSource: source.substring(
+        element.key.offset,
+        element.key.offset + element.key.length,
+      ),
+      keyExpressionSpan: SourceSpan(
+        offset: element.key.offset,
+        length: element.key.length,
+      ),
+      colonSpan: SourceSpan(
+        offset: element.separator.offset,
+        length: element.separator.length,
+      ),
+      pattern: _convertPattern(element.value, source),
+      sourceSpan: span,
+    );
+  }
+  throw StateError('Unexpected map-pattern element type: '
+      '${element.runtimeType}');
 }
 
 /// Converts an analyzer `PatternField` into a kernel `PatternField`.
@@ -866,6 +1109,75 @@ void _flattenLogicalOr(
   } else {
     operands.add(_convertPattern(right, source));
   }
+}
+
+/// Converts an analyzer `SwitchExpression` into a kernel
+/// `SwitchExpressionNode`. Each case's guarded pattern is structured
+/// via `_convertPattern`, and the result expression on the right of
+/// `=>` is captured as opaque source (expression internals are not
+/// modeled in M8.0h).
+SwitchExpressionNode _convertSwitchExpression(
+  SwitchExpression expr,
+  String source,
+) {
+  final cases = <SwitchExpressionCaseNode>[];
+  for (final c in expr.cases) {
+    final guarded = c.guardedPattern;
+    final pattern = guarded.pattern;
+    final whenClause = guarded.whenClause;
+    final result = c.expression;
+    cases.add(SwitchExpressionCaseNode(
+      pattern: _convertPattern(pattern, source),
+      whenKeywordSpan: whenClause == null
+          ? null
+          : SourceSpan(
+              offset: whenClause.whenKeyword.offset,
+              length: whenClause.whenKeyword.length,
+            ),
+      whenGuardSource: whenClause == null
+          ? null
+          : source.substring(
+              whenClause.expression.offset,
+              whenClause.expression.offset + whenClause.expression.length,
+            ),
+      whenGuardSpan: whenClause == null
+          ? null
+          : SourceSpan(
+              offset: whenClause.expression.offset,
+              length: whenClause.expression.length,
+            ),
+      arrowSpan: SourceSpan(offset: c.arrow.offset, length: c.arrow.length),
+      resultExpressionSource: source.substring(
+        result.offset,
+        result.offset + result.length,
+      ),
+      resultExpressionSpan:
+          SourceSpan(offset: result.offset, length: result.length),
+      sourceSpan: SourceSpan(offset: c.offset, length: c.length),
+    ));
+  }
+  return SwitchExpressionNode(
+    switchKeywordSpan: SourceSpan(
+      offset: expr.switchKeyword.offset,
+      length: expr.switchKeyword.length,
+    ),
+    subjectSource: source.substring(
+      expr.expression.offset,
+      expr.expression.offset + expr.expression.length,
+    ),
+    subjectSpan: SourceSpan(
+        offset: expr.expression.offset, length: expr.expression.length),
+    leftBracketSpan: SourceSpan(
+      offset: expr.leftBracket.offset,
+      length: expr.leftBracket.length,
+    ),
+    cases: cases,
+    rightBracketSpan: SourceSpan(
+      offset: expr.rightBracket.offset,
+      length: expr.rightBracket.length,
+    ),
+    sourceSpan: SourceSpan(offset: expr.offset, length: expr.length),
+  );
 }
 
 /// AST visitor that locates the first (or matching) block function body

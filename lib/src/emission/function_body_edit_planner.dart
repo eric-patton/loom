@@ -1,3 +1,9 @@
+import 'package:analyzer/dart/analysis/utilities.dart';
+// Hide analyzer's `PatternField` so the kernel-side `PatternField`
+// (from function_body.dart) wins.
+import 'package:analyzer/dart/ast/ast.dart' hide PatternField;
+import 'package:analyzer/dart/ast/visitor.dart';
+
 import '../model/function_body.dart';
 import 'source_edit.dart';
 
@@ -74,6 +80,22 @@ import 'source_edit.dart';
 ///     (`changeConstantPatternExpression`, `renameDeclaredPatternVariable`,
 ///     etc.) also work on nested patterns inside object/record fields
 ///     without needing dedicated ops.
+///
+/// Remaining-pattern operations (M8.0h — closes pattern surface 14/14):
+///   * `changeRelationalPatternOperator` / `changeRelationalPatternOperand`
+///     — edit `case > 100:` style patterns.
+///   * `changeCastPatternType` — edit the type in `case x as int:`.
+///   * `changeMapPatternEntryKey` — edit the key in `{'name': v}`.
+///   * No new ops needed for null-check / null-assert / parenthesized /
+///     logical-and — edits propagate through the recursive inner-pattern
+///     structure using existing ops.
+///
+/// Symbol-aware rename (M8.0h):
+///   * `renameDeclaredPatternVariableWithReferences` — renames a pattern
+///     variable AND all `SimpleIdentifier` references to it in the
+///     case's `when` guard and body. Returns a list of `SourceEdit`s
+///     suitable for `applySourceEdits`. Doesn't touch string literals
+///     or comments. Caller-responsible for shadowing scenarios.
 ///
 /// Deliberately deferred (M8.1+):
 ///   * Bare-statement control-flow bodies (`if (cond) doIt();`,
@@ -490,6 +512,164 @@ class FunctionBodyEditPlanner {
     );
   }
 
+  // ----------------------- Remaining-pattern ops (M8.0h) ---------
+
+  /// Changes the operator of a `RelationalPatternNode` — e.g.
+  /// `case > 100:` → `case >= 100:`.
+  static SourceEdit changeRelationalPatternOperator({
+    required RelationalPatternNode pattern,
+    required String newOperator,
+  }) {
+    return SourceEdit(
+      offset: pattern.operatorSpan.offset,
+      length: pattern.operatorSpan.length,
+      replacement: newOperator,
+    );
+  }
+
+  /// Changes the operand expression of a `RelationalPatternNode` —
+  /// e.g. `case > 100:` → `case > 200:`.
+  static SourceEdit changeRelationalPatternOperand({
+    required RelationalPatternNode pattern,
+    required String newOperandSource,
+  }) {
+    return SourceEdit(
+      offset: pattern.operandSpan.offset,
+      length: pattern.operandSpan.length,
+      replacement: newOperandSource,
+    );
+  }
+
+  /// Changes the type of a `CastPatternNode` — e.g. `case x as int:` →
+  /// `case x as num:`.
+  static SourceEdit changeCastPatternType({
+    required CastPatternNode pattern,
+    required String newTypeSource,
+  }) {
+    return SourceEdit(
+      offset: pattern.typeSpan.offset,
+      length: pattern.typeSpan.length,
+      replacement: newTypeSource,
+    );
+  }
+
+  /// Changes the key expression of a `MapPatternEntryNode` — e.g.
+  /// `{'name': v}` → `{'username': v}`.
+  static SourceEdit changeMapPatternEntryKey({
+    required MapPatternEntryNode entry,
+    required String newKeyExpressionSource,
+  }) {
+    return SourceEdit(
+      offset: entry.keyExpressionSpan.offset,
+      length: entry.keyExpressionSpan.length,
+      replacement: newKeyExpressionSource,
+    );
+  }
+
+  // ----------------------- Symbol-aware rename (M8.0h) -----------
+
+  /// Renames the bound variable of a `DeclaredVariablePatternNode`
+  /// AND updates all references to that variable within the case's
+  /// `when` guard and body statements.
+  ///
+  /// The kernel re-parses the case region with the analyzer, walks
+  /// the AST for `SimpleIdentifier` nodes matching `oldName`, and
+  /// produces a `SourceEdit` for each. The returned list is in
+  /// source order (sorted by offset) so that `applySourceEdits` can
+  /// apply them without offset shifts.
+  ///
+  /// Unlike `renameDeclaredPatternVariable`, this op operates on the
+  /// whole case scope. The `pattern` argument identifies which
+  /// declared variable to rename; the `caseMember` argument is the
+  /// enclosing case (needed to scope the search to its guard + body).
+  ///
+  /// Limitations:
+  ///   * String literals containing the identifier text are NOT
+  ///     edited (they're not identifier references).
+  ///   * Comments containing the name are NOT edited.
+  ///   * If the case body declares another local with the same name
+  ///     (shadowing), this op renames the outer pattern variable but
+  ///     leaves the inner shadow alone — actually wait, it WILL also
+  ///     rename `n` references inside the shadow's scope, which is
+  ///     wrong. The kernel doesn't track lexical scope; callers who
+  ///     have shadowing should prefer the simpler
+  ///     `renameDeclaredPatternVariable` and rewrite references
+  ///     manually.
+  static List<SourceEdit> renameDeclaredPatternVariableWithReferences({
+    required SwitchCaseNode caseMember,
+    required DeclaredVariablePatternNode pattern,
+    required String newName,
+    required String source,
+  }) {
+    final oldName = pattern.name;
+    final edits = <SourceEdit>[];
+
+    // 1. The pattern's name span itself.
+    edits.add(SourceEdit(
+      offset: pattern.nameSpan.offset,
+      length: pattern.nameSpan.length,
+      replacement: newName,
+    ));
+
+    // 2. Walk the guard expression (if any).
+    final guardSpan = caseMember.whenGuardSpan;
+    if (guardSpan != null) {
+      _collectIdentifierEdits(
+        source: source,
+        regionOffset: guardSpan.offset,
+        regionLength: guardSpan.length,
+        oldName: oldName,
+        newName: newName,
+        out: edits,
+      );
+    }
+
+    // 3. Walk each statement in the case body.
+    for (final stmt in caseMember.body.statements) {
+      _collectIdentifierEdits(
+        source: source,
+        regionOffset: stmt.sourceSpan.offset,
+        regionLength: stmt.sourceSpan.length,
+        oldName: oldName,
+        newName: newName,
+        out: edits,
+      );
+    }
+
+    // Sort by offset so applySourceEdits can apply them cleanly.
+    // The first edit (pattern name) is in front of the case region;
+    // body/guard edits all come after. Sorting is just defensive.
+    edits.sort((a, b) => a.offset.compareTo(b.offset));
+    return edits;
+  }
+
+  /// Re-parses [source] (full file) and walks the subtree inside
+  /// `[regionOffset, regionOffset + regionLength)` for `SimpleIdentifier`
+  /// nodes whose `name` equals `oldName`. Adds a rename edit for each.
+  static void _collectIdentifierEdits({
+    required String source,
+    required int regionOffset,
+    required int regionLength,
+    required String oldName,
+    required String newName,
+    required List<SourceEdit> out,
+  }) {
+    final result = parseString(content: source, throwIfDiagnostics: false);
+    final visitor = _IdentifierCollector(
+      regionStart: regionOffset,
+      regionEnd: regionOffset + regionLength,
+      target: oldName,
+    );
+    result.unit.accept(visitor);
+    for (final id in visitor.matches) {
+      out.add(SourceEdit(
+        offset: id.offset,
+        length: id.length,
+        replacement: newName,
+      ));
+    }
+  }
+
   // ----------------------- Throw-statement ops (M8.0d) -----------
 
   /// Replaces the expression of a `throw expr;` statement.
@@ -548,5 +728,38 @@ class FunctionBodyEditPlanner {
       }
     }
     return source.substring(lineStart, i);
+  }
+}
+
+/// AST visitor that collects `SimpleIdentifier` nodes whose `name`
+/// equals [target], restricted to identifiers whose offset falls
+/// within `[regionStart, regionEnd)`. Used by
+/// `renameDeclaredPatternVariableWithReferences` to find references
+/// inside a switch case's guard and body.
+///
+/// String literals and comments contain text that may LOOK like an
+/// identifier reference but aren't AST `SimpleIdentifier` nodes —
+/// they don't get matched. That's the right behavior for renaming a
+/// local variable.
+class _IdentifierCollector extends RecursiveAstVisitor<void> {
+  _IdentifierCollector({
+    required this.regionStart,
+    required this.regionEnd,
+    required this.target,
+  });
+
+  final int regionStart;
+  final int regionEnd;
+  final String target;
+  final List<SimpleIdentifier> matches = [];
+
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    if (node.offset >= regionStart &&
+        node.offset + node.length <= regionEnd &&
+        node.name == target) {
+      matches.add(node);
+    }
+    super.visitSimpleIdentifier(node);
   }
 }

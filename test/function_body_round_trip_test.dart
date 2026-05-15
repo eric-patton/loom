@@ -975,4 +975,251 @@ String f(Object o) {
       );
     });
   });
+
+  group('remaining pattern edits (M8.0h)', () {
+    test('idempotence on function_body_with_remaining_patterns.dart', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      expect(body.statements, hasLength(1));
+    });
+
+    test('changeRelationalPatternOperator > -> >=', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c4 = sw.members[4] as SwitchCaseNode;
+      final rp = c4.pattern as RelationalPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeRelationalPatternOperator(
+        pattern: rp,
+        newOperator: '>=',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedRp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[4] as SwitchCaseNode)
+          .pattern as RelationalPatternNode;
+      expect(reparsedRp.operator, equals('>='));
+      expect(reparsedRp.operandSource, equals('100'));
+    });
+
+    test('changeRelationalPatternOperand 100 -> 200', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c4 = sw.members[4] as SwitchCaseNode;
+      final rp = c4.pattern as RelationalPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeRelationalPatternOperand(
+        pattern: rp,
+        newOperandSource: '200',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedRp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[4] as SwitchCaseNode)
+          .pattern as RelationalPatternNode;
+      expect(reparsedRp.operator, equals('>'));
+      expect(reparsedRp.operandSource, equals('200'));
+    });
+
+    test('changeCastPatternType int -> num', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c8 = sw.members[8] as SwitchCaseNode;
+      final cast = c8.pattern as CastPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeCastPatternType(
+        pattern: cast,
+        newTypeSource: 'num',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedCast = ((reparsed.statements.first as SwitchStatementNode)
+              .members[8] as SwitchCaseNode)
+          .pattern as CastPatternNode;
+      expect(reparsedCast.typeSource, equals('num'));
+    });
+
+    test("changeMapPatternEntryKey 'name' -> 'username'", () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c3 = sw.members[3] as SwitchCaseNode;
+      final mp = c3.pattern as MapPatternNode;
+      final entry = mp.elements[0] as MapPatternEntryNode;
+
+      final edit = FunctionBodyEditPlanner.changeMapPatternEntryKey(
+        entry: entry,
+        newKeyExpressionSource: "'username'",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedMp = ((reparsed.statements.first as SwitchStatementNode)
+              .members[3] as SwitchCaseNode)
+          .pattern as MapPatternNode;
+      final reparsedEntry = reparsedMp.elements[0] as MapPatternEntryNode;
+      expect(reparsedEntry.keyExpressionSource, equals("'username'"));
+    });
+
+    test('renameDeclaredPatternVariable inside null-check propagates', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c6 = sw.members[6] as SwitchCaseNode;
+      final nc = c6.pattern as NullCheckPatternNode;
+      final inner = nc.innerPattern as DeclaredVariablePatternNode;
+
+      final edit = FunctionBodyEditPlanner.renameDeclaredPatternVariable(
+        pattern: inner,
+        newName: 'value',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedNc = ((reparsed.statements.first as SwitchStatementNode)
+              .members[6] as SwitchCaseNode)
+          .pattern as NullCheckPatternNode;
+      final reparsedInner =
+          reparsedNc.innerPattern as DeclaredVariablePatternNode;
+      expect(reparsedInner.name, equals('value'));
+    });
+
+    test('changeRelationalPatternOperand deep inside a logical-and', () {
+      final source = _loadFixture('function_body_with_remaining_patterns.dart');
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c10 = sw.members[10] as SwitchCaseNode;
+      final and = c10.pattern as LogicalAndPatternNode;
+      final rel = and.operands[1] as RelationalPatternNode;
+
+      final edit = FunctionBodyEditPlanner.changeRelationalPatternOperand(
+        pattern: rel,
+        newOperandSource: '10',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedAnd = ((reparsed.statements.first as SwitchStatementNode)
+              .members[10] as SwitchCaseNode)
+          .pattern as LogicalAndPatternNode;
+      final reparsedRel = reparsedAnd.operands[1] as RelationalPatternNode;
+      expect(reparsedRel.operandSource, equals('10'));
+    });
+  });
+
+  group('switch expression edits (M8.0h)', () {
+    test('idempotence on function_body_with_switch_expressions.dart', () {
+      final source = _loadFixture('function_body_with_switch_expressions.dart');
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      expect(v.variables.first.initializerSwitchExpression, isNotNull);
+    });
+
+    test('switch expression case patterns are recursively editable', () {
+      final source = _loadFixture('function_body_with_switch_expressions.dart');
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final sx = v.variables.first.initializerSwitchExpression!;
+      final patternN = sx.cases[2].pattern as DeclaredVariablePatternNode;
+
+      final edit = FunctionBodyEditPlanner.renameDeclaredPatternVariable(
+        pattern: patternN,
+        newName: 'value',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedV =
+          reparsed.statements[0] as VariableDeclarationStatementNode;
+      final reparsedSx = reparsedV.variables.first.initializerSwitchExpression!;
+      final reparsedPattern =
+          reparsedSx.cases[2].pattern as DeclaredVariablePatternNode;
+      expect(reparsedPattern.name, equals('value'));
+    });
+  });
+
+  group('symbol-aware rename (M8.0h)', () {
+    test('renames pattern variable AND its references in guard + body', () {
+      const source = '''
+String tier(int score) {
+  switch (score) {
+    case int n when n > 100:
+      print('big: \$n');
+      return 'big';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final pattern = c0.pattern as DeclaredVariablePatternNode;
+      expect(pattern.name, equals('n'));
+
+      final edits =
+          FunctionBodyEditPlanner.renameDeclaredPatternVariableWithReferences(
+        caseMember: c0,
+        pattern: pattern,
+        newName: 'value',
+        source: source,
+      );
+      // 1 pattern + 1 guard ref + 2 body refs (one in print arg).
+      expect(edits.length, greaterThanOrEqualTo(3));
+
+      final newSource = applySourceEdits(source, edits);
+
+      expect(newSource, contains('case int value when value > 100'));
+      expect(newSource, contains(r"'big: $value'"));
+
+      final reparsed = parseFunctionBody(newSource);
+      final reparsedC0 = (reparsed.statements.first as SwitchStatementNode)
+          .members[0] as SwitchCaseNode;
+      final reparsedPattern = reparsedC0.pattern as DeclaredVariablePatternNode;
+      expect(reparsedPattern.name, equals('value'));
+      expect(reparsedC0.whenGuardSource, equals('value > 100'));
+    });
+
+    test('does NOT rewrite identifiers in string literals', () {
+      const source = '''
+String f(int x) {
+  switch (x) {
+    case int n:
+      final tag = 'literal n';
+      return '\$tag-\$n';
+    default:
+      return 'other';
+  }
+}
+''';
+      final body = parseFunctionBody(source);
+      final sw = body.statements.first as SwitchStatementNode;
+      final c0 = sw.members[0] as SwitchCaseNode;
+      final pattern = c0.pattern as DeclaredVariablePatternNode;
+
+      final edits =
+          FunctionBodyEditPlanner.renameDeclaredPatternVariableWithReferences(
+        caseMember: c0,
+        pattern: pattern,
+        newName: 'val',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, edits);
+
+      // The string literal `'literal n'` is preserved verbatim.
+      expect(newSource, contains("'literal n'"));
+      // The `\$n` interpolation IS edited (n is a SimpleIdentifier).
+      expect(newSource, contains(r'$val'));
+      // Pattern is renamed.
+      expect(newSource, contains('case int val:'));
+    });
+  });
 }

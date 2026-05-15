@@ -8,8 +8,54 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M8.0g — pattern internals: object + record patterns
-**Last touched:** 2026-05-15 — extended the `PatternNode` hierarchy with `ObjectPatternNode` + `RecordPatternNode`, sharing a `PatternField` class that covers positional, explicit-named, and shorthand (`:varX`) field shapes. Three new pattern-internal edit ops. Six of fourteen Dart 3 pattern kinds are now structurally modeled.
+**Active milestone:** M8.0h — close pattern surface (14/14) + switch expressions + symbol-aware rename
+**Last touched:** 2026-05-15 — three landing slices in one milestone: (1) the 8 remaining Dart 3 pattern kinds (list, map, relational, null-check, null-assert, cast, parenthesized, logical-and) — pattern coverage now 14/14; (2) switch expressions surfaced as structured views on variable initializers and return expressions; (3) symbol-aware rename for pattern variables that rewrites references across the case's guard + body via AST walking. **Note:** the M8.0g entry below is preserved.
+
+**M8.0h surface added (just now):**
+
+**Pattern surface closes 14/14.** Eight new pattern nodes:
+- `ListPatternNode` — `case [a, b]:`, `case [first, ...rest]:`, `case <int>[1, 2]:`. Captures optional type arguments source, bracket spans, and an ordered `elements` list. Elements are either `ListPatternPatternElement` (a regular `PatternNode`) or `ListPatternRestElement` (`...` with optional sub-pattern).
+- `MapPatternNode` — `case {'k': v}:`, `case <K, V>{1: a}:`. Entries are `MapPatternEntryNode` (key expression + value pattern); a rare `...` rest is `MapPatternRestElement`.
+- `RelationalPatternNode` — `case > 100:`, `case == foo:`. Operator + operand expression as raw source.
+- `NullCheckPatternNode` — `case var x?:`. Inner pattern + `?` operator span.
+- `NullAssertPatternNode` — `case var y!:`.
+- `CastPatternNode` — `case var z as int:`. Inner pattern + `as` keyword + type source.
+- `ParenthesizedPatternNode` — `case (1 || 2):`. Inner pattern with paren spans.
+- `LogicalAndPatternNode` — `case int n && > 0:`. Flattened from analyzer's binary tree like LogicalOr.
+
+`OpaquePatternNode` is now only a safety fallback for future analyzer shapes.
+
+**Switch expressions.** `SwitchExpressionNode` + `SwitchExpressionCaseNode` model the `switch (x) { 1 => 'a', _ => 'b' }` expression form. Three integration points where the parser surfaces a structured view alongside raw source:
+- `DeclaredVariable.initializerSwitchExpression` — `final r = switch (x) {...};`.
+- `ReturnStatementNode.switchExpression` — `return switch (x) {...};`.
+- `ExpressionStatementNode.switchExpression` — top-level switch-expression statement (rare).
+
+Switch expressions deeply nested inside other expressions (`f(switch (x) {...})`) stay opaque inside the host expression's source — surfacing them would require general expression-internal modeling.
+
+**Symbol-aware rename.** `renameDeclaredPatternVariableWithReferences` returns `List<SourceEdit>` covering: the pattern's name span, plus every `SimpleIdentifier` reference matching the old name within the case's `when` guard and body. Implementation re-parses the file, walks the AST with a `RecursiveAstVisitor` looking for matching identifiers in the case region, and produces an offset-sorted edit list. String literals and comments are preserved verbatim because they're not `SimpleIdentifier` nodes in the AST.
+
+**New edit ops (M8.0h):**
+- `changeRelationalPatternOperator`, `changeRelationalPatternOperand` — edit `case > 100:` style patterns.
+- `changeCastPatternType` — edit type in `case x as int:`.
+- `changeMapPatternEntryKey` — edit map entry keys.
+- `renameDeclaredPatternVariableWithReferences` — symbol-aware rename op.
+- No new ops needed for null-check / null-assert / parenthesized / logical-and — edits compose through their recursive inner patterns using existing ops.
+
+**Validation:** 395 tests green (was 366, +29 new). `dart analyze` clean. `dart format` clean. Two new fixtures: `function_body_with_remaining_patterns.dart` (12-member switch exercising all 8 new pattern kinds) and `function_body_with_switch_expressions.dart` (variable-initializer + return-statement switch expressions).
+
+**Deliberately deferred (M8.1+):**
+- Modeling switch expressions deeply nested inside other expressions (e.g. `f(switch (x) { ... })`) — requires general expression-internal modeling.
+- Adding/removing/reordering pattern elements (list, map entries, logical-or/logical-and operands, switch members, catch clauses).
+- Modeling the c-style/for-each/pattern-for structure inside `ForStatementNode.headerSource`.
+- `yield` / `break` / `continue` / labeled statements.
+- Adding a `when` guard to a guard-less case.
+- Expression-internal structure inside `ExpressionStatementNode` (general, not just switch expressions).
+- Symbol-aware rename for OTHER variable declarations (locals declared with `var x = ...` outside of patterns).
+- Bare-statement control-flow bodies.
+- Statement reordering (use add + remove for now).
+
+**Blockers:** none
+**Next action:** Eric review of M6 + M7 + M8.0a–h series (24 commits total). Dart 3 pattern matching is now feature-complete at the structural level. The control-flow + pattern story is done; M8.1+ can pivot to cross-statement features (reordering, broader symbol-aware rename) or to higher-level concerns (function-signature editing, cross-file modeling, etc.).
 
 **M8.0g surface added (just now):** extends M8.0f. Two new pattern nodes + one supporting `PatternField` class + three new edit ops.
 
@@ -316,7 +362,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M8.0e** (shipped 2026-05-15) | `switch` statements (procedural form). `SwitchStatementNode` + sealed `SwitchMemberNode` (`SwitchCaseNode` + `SwitchDefaultNode`). Covers legacy `case expr:`, Dart 3 `case pattern [when guard]:`, multi-case fall-through, and `default:`. Pattern + `when` guard captured as opaque source. `StatementBlock.hasBraces` flag added — switch-case bodies are brace-less and `addStatement` handles that. Three new edit ops: `changeSwitchExpression`, `changeSwitchCasePattern`, `changeSwitchCaseGuard`. | Multi-way decisions — the OutSystems-relevant control-flow shape. Procedural switch statements are now feature-complete at the structural level (modulo pattern internals, which are a separate large surface). |
 | **M8.0f** (shipped 2026-05-15) | Pattern internals. Sealed `PatternNode` with 4 structured kinds (constant, declared variable, wildcard, logical-or) + `OpaquePatternNode` catch-all. `SwitchCaseNode.pattern` now exposes structured patterns alongside `patternSource`. Three pattern-internal edit ops: `renameDeclaredPatternVariable`, `changeDeclaredPatternType`, `changeConstantPatternExpression`. Logical-or operand-level edits work (e.g. rewriting `2` in `case 1 \|\| 2 \|\| 3:`). | Pattern-aware editing — the substructure inside switch cases. Most common pattern shapes (constants, type-test bindings, alternatives, wildcards) are now first-class. |
 | **M8.0g** (shipped 2026-05-15) | Object + record patterns. `ObjectPatternNode` (`case Foo(x: 1, y: var n):`) + `RecordPatternNode` (`case (1, 2):`) sharing a `PatternField` class that handles positional / explicit-named / shorthand-named (`:varX`) shapes. Three new ops: `changeObjectPatternType`, `renamePatternFieldName`, `replacePatternFieldPattern`. Existing pattern-internal ops work recursively inside fields. Pattern coverage now 6/14. | OutSystems-style decomposition — matching record/value shapes with field-level destructuring. Compound patterns are now first-class. |
-| M8.0h+ | Promote the remaining pattern kinds out of `OpaquePatternNode` (list, map, logical-and, relational, null-check, null-assert, cast, parenthesized) as fixtures demand. Plus `yield`/`break`/`continue`/labels, switch **expressions**, expression-internal structure, qualifier editing for local vars, statement reordering, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, add/remove/reorder catch clauses + switch cases + logical-or operands + pattern fields, editing catch-clause parameters, and symbol-aware rename across pattern + guard + body. | Round out function-body modeling toward full procedural-Dart coverage. |
+| **M8.0h** (shipped 2026-05-15) | Close pattern surface (14/14). 8 new pattern kinds: `ListPatternNode` (with rest elements), `MapPatternNode`, `RelationalPatternNode`, `NullCheckPatternNode`, `NullAssertPatternNode`, `CastPatternNode`, `ParenthesizedPatternNode`, `LogicalAndPatternNode` (flattened). Plus switch **expressions** surfaced on variable initializers and return expressions. Plus symbol-aware rename (`renameDeclaredPatternVariableWithReferences`) that rewrites pattern variable references across the case's guard + body via AST walking. 5 new edit ops. | Dart 3 pattern matching is now feature-complete at the structural level. Switch-expression decisions (value-producing multi-way matches) and symbol-aware pattern variable renames are first-class. |
+| M8.1+ | Cross-statement features: statement reordering, broader symbol-aware rename (for non-pattern locals), modeling expression internals (function calls, await, binary ops), modeling switch expressions deeply nested in other expressions, modeling the c-style/for-each shape inside `ForStatementNode.headerSource`, adding/removing/reordering pattern elements (list, map entries, logical-or/logical-and operands), `yield`/`break`/`continue`/labels, bare-statement control-flow bodies, adding when guards to guard-less cases. | Round out function-body modeling toward full procedural-Dart coverage. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
 
@@ -399,6 +446,49 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M8.0h — close pattern surface + switch expressions + symbol-aware rename
+**Worked on:** Big bundle milestone — three landing slices in one commit because they hang together as "complete the Dart 3 pattern story". (1) Pattern surface closes 14/14 with the 8 remaining pattern kinds. (2) Switch expressions surface as structured views on variable initializers and return expressions. (3) Symbol-aware rename rewrites pattern variable references across guard + body via AST walking.
+
+**Eight new pattern nodes — pattern coverage 14/14.** All Dart 3 pattern kinds now have structural modeling. The opaque catch-all is reduced to a safety fallback for future analyzer shapes the current code doesn't recognize.
+
+Implementation notes per kind:
+- **List patterns** — `ListPatternNode` with elements that are either `ListPatternPatternElement` (regular `PatternNode`) or `ListPatternRestElement` (`...` with optional sub-pattern). The rest element handles all three rest forms: bare `...`, `...rest`, and `...List<int> tail`. Type arguments captured as raw source.
+- **Map patterns** — `MapPatternNode` with `MapPatternEntryNode` (key expression source + value pattern) and `MapPatternRestElement` (rare). Key expressions are opaque source — they can be literals, enum refs, qualified names, etc.
+- **Relational patterns** — `RelationalPatternNode` captures the operator token's lexeme as a string + operand expression as raw source. Useful for `case > 100:` / `case == foo:`.
+- **Null-check / null-assert** — `NullCheckPatternNode` / `NullAssertPatternNode` wrap an inner pattern + a `?` or `!` operator span. Recursive — the inner can be any pattern.
+- **Cast** — `CastPatternNode` carries inner pattern + `as` keyword + type source.
+- **Parenthesized** — `ParenthesizedPatternNode` is a simple wrapper around an inner pattern with paren spans. Doesn't change matching semantics; modeling it lets callers see grouping for display purposes.
+- **Logical-and** — `LogicalAndPatternNode` with flattened operands list, parallel to `LogicalOrPatternNode`. Same `_flattenLogicalAnd` recursive unfold as logical-or.
+
+Two analyzer types had to be aliased: `ListPatternElement` and `MapPatternElement` clashed with the kernel's `ListPatternElement` / `MapPatternElement` abstract base classes. Added to the existing `hide` + `show ... as ast` import dance.
+
+**Switch expressions.** Modeled as `SwitchExpressionNode` + `SwitchExpressionCaseNode`. They appear ONLY at three positions: variable initializers (`final r = switch(x) {...}`), return expressions (`return switch(x) {...};`), and as top-level expression statements (rare). At each of those positions, the parser surfaces a structured view alongside the existing raw source — same backward-compat pattern as `pattern: PatternNode` alongside `patternSource: String` in M8.0f.
+
+Switch expressions buried inside other expressions (e.g. `f(switch (x) {...})`) stay opaque. Surfacing them would require general expression-internal modeling — a separate, much larger surface.
+
+**Symbol-aware rename.** `renameDeclaredPatternVariableWithReferences` is the kernel's first multi-edit op. Implementation:
+1. Re-parse the file via the analyzer.
+2. Walk the AST with a `RecursiveAstVisitor` collecting `SimpleIdentifier` nodes whose `name` matches the old name AND whose offset falls within the case's guard or body region.
+3. Combine the pattern's name span + each found reference into an offset-sorted `List<SourceEdit>`.
+
+The kernel's prior stance was "produce simple edits"; this op breaks that by walking AST internally. Justification: rename-with-references is a fundamental visual-editor capability, and the alternative (caller re-implements AST walking themselves) duplicates work the kernel already has analyzer machinery for.
+
+String literals and comments are preserved verbatim — they contain text that may look like identifiers but aren't `SimpleIdentifier` AST nodes. The op specifically targets identifier references via AST inspection. Shadowing isn't tracked: if the case body declares another `n` (locally shadowing the pattern variable `n`), the op renames BOTH because both produce matching `SimpleIdentifier` nodes within the region. Documented as a caller-responsible limitation.
+
+**Validation:** 395 tests green (was 366, +29 new). Two new fixtures.
+
+**Learned:**
+- **AST aliasing accumulates predictably.** Three milestones now hide-and-alias analyzer types: M8.0g hides `PatternField`, M8.0h adds `ListPatternElement` and `MapPatternElement`. The pattern is becoming a recipe — when the kernel domain wants a name the analyzer already uses, hide-and-alias is the cleanest fix.
+- **Rest elements share shape across list and map.** Both `ListPatternRestElement` and `MapPatternRestElement` have identical structure (operator span + optional sub-pattern). Two separate classes was cleaner than trying to share via Dart's sealed-class rules.
+- **AST walking inside the planner is a stance shift.** Up until now the planner has been "given X, produce SourceEdit" — pure source-span math. Symbol-aware rename needs an AST walk to find references. This expands the kernel's role slightly but the alternative (every caller re-implements AST walking) is worse.
+- **Switch expressions need three integration points.** They live inside variable initializers, return expressions, and expression statements. Adding a `switchExpression` overlay to each statement type keeps the M8.0a-c structured-vs-raw API consistent — same backward-compat play as `patternSource` + `pattern` in M8.0f.
+
+**Pattern coverage final tally:**
+- Modeled (14): constant, declared variable, wildcard, logical-or, object, record, list, map, relational, null-check, null-assert, cast, parenthesized, logical-and.
+- Opaque: none (the `OpaquePatternNode` catch-all is now just a safety fallback for unrecognized future shapes).
+
+**Next:** Eric review of M6 + M7 + M8.0a–h series (24 commits total). Pattern matching is feature-complete. M8.1+ pivots away from pattern internals to broader function-body concerns: expression-internal modeling, statement reordering, broader symbol-aware rename, cross-file modeling, function signatures, etc.
 
 ### [2026-05-15] M8.0g — pattern internals: object + record patterns
 **Worked on:** Second pattern slice, extending M8.0f's `PatternNode` hierarchy with the two compound pattern kinds — `ObjectPatternNode` (class-prefixed) and `RecordPatternNode` (anonymous). Both share a `PatternField` class that collapses three field shapes (positional, explicit named, shorthand) into one nullable-field class. Three new edit ops; existing pattern-internal ops Just Work recursively inside fields.
