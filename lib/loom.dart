@@ -23,6 +23,7 @@ export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
 export 'src/model/class_structure.dart';
 export 'src/model/directives.dart';
+export 'src/model/file_symbols.dart';
 export 'src/model/function_body.dart';
 export 'src/model/list_slot_style.dart';
 // node.dart hosts the full sealed hierarchy: ModelNode + WidgetNode +
@@ -37,6 +38,7 @@ export 'src/model/source_span.dart';
 export 'src/model/style_hints.dart';
 export 'src/parsing/class_structure_parser.dart';
 export 'src/parsing/directives_parser.dart';
+export 'src/parsing/file_symbols_parser.dart';
 export 'src/parsing/function_body_parser.dart';
 export 'src/parsing/pipeline_tree_parser.dart';
 export 'src/parsing/route_tree_parser.dart';
