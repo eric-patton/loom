@@ -293,12 +293,13 @@ ModelNode _withPropertyOnModelNode(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
     case RouteNode():
-      // M6.1: ModelNode is now sealed across widget and route trees.
-      // node_path's navigation is widget-tree-scoped today; route-tree
-      // navigation would mirror this scaffolding but with RouteNode in
-      // place of WidgetNode. Deferred until a downstream consumer asks.
+    case PipelineNode():
+      // M6.1+: ModelNode is sealed across all domain catalogs. node_path's
+      // navigation is widget-tree-scoped today; non-widget-tree navigation
+      // would mirror this scaffolding with the relevant node type.
+      // Deferred until a downstream consumer asks.
       throw ArgumentError(
-        'NodePath navigation does not support RouteNode (widget-tree only)',
+        'NodePath navigation does not support non-widget nodes',
       );
   }
 }
@@ -408,8 +409,9 @@ ModelNode _modifySlotOnModelNode(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
     case RouteNode():
+    case PipelineNode():
       throw ArgumentError(
-        'NodePath navigation does not support RouteNode (widget-tree only)',
+        'NodePath navigation does not support non-widget nodes',
       );
   }
 }
@@ -435,11 +437,12 @@ void _walk(
       // Leaf.
       break;
     case RouteNode():
-      // M6.1 unified the hierarchy but `_walk` is widget-tree-scoped today.
-      // A route tree's walk would mirror this scaffolding using the route
-      // catalog's slot map. Deferred until a downstream consumer asks.
+    case PipelineNode():
+      // M6.1+: `_walk` is widget-tree-scoped today. A non-widget-tree walk
+      // would mirror this scaffolding using the relevant catalog's slot
+      // map. Deferred until a downstream consumer asks.
       throw ArgumentError(
-        'NodePath walk does not support RouteNode (widget-tree only)',
+        'NodePath walk does not support non-widget nodes',
       );
   }
 }

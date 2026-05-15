@@ -12,26 +12,30 @@ const String kPositionalOpaqueKeyPrefix = '__positional';
 
 /// A node in the visual model.
 ///
-/// Sealed: every node is one of `WidgetNode` (a modeled Flutter widget
-/// constructor call), `RouteNode` (a modeled route DSL constructor call,
-/// added in M6.0), `OpaqueNode` (verbatim source range the kernel does
-/// not model — closures, ternaries, helper-method calls, comprehensions,
-/// etc.), or `MethodReferenceNode` (an in-class helper-method reference
-/// resolved to its returned expression). M6.1 unified the previously
-/// parallel widget-side and route-side hierarchies under this single
-/// sealed base.
+/// Sealed: every node is one of:
+///   * `WidgetNode` — a modeled Flutter widget constructor call (M1+)
+///   * `RouteNode` — a modeled route DSL constructor call (M6.0+)
+///   * `PipelineNode` — a modeled pipeline / workflow DSL call (M6.2+)
+///   * `OpaqueNode` — verbatim source range the kernel does not model
+///     (closures, ternaries, comprehensions, etc.) (M4+)
+///   * `MethodReferenceNode` — an in-class helper-method reference resolved
+///     to its returned expression (M5+)
+///
+/// M6.1 unified the previously parallel widget-side and route-side
+/// hierarchies under this single sealed base. M6.2 added `PipelineNode`
+/// as a third domain consumer to validate the kernel's reusability.
 ///
 /// All `ModelNode`s carry a `sourceSpan`. Subtypes diverge in what else
 /// they carry and in whether the kernel exposes mutation on them:
-/// `WidgetNode` and `RouteNode` are editable; `OpaqueNode`'s content is
-/// byte-preserved and any path that descends into one throws at edit time;
-/// `MethodReferenceNode` is a wrapper around a resolved body whose edits
-/// target the helper's own source range.
+/// modeled-call subtypes (`WidgetNode` / `RouteNode` / `PipelineNode`) are
+/// editable; `OpaqueNode`'s content is byte-preserved and any path that
+/// descends into one throws at edit time; `MethodReferenceNode` wraps a
+/// resolved body whose edits target the helper's own source range.
 ///
-/// Domain enforcement is by visitor contract, not type: the widget visitor
-/// never produces a `RouteNode`, and vice-versa. `WidgetTreeModel.root`
-/// and `RouteTreeModel.root` are both typed `ModelNode` for uniformity;
-/// downstream consumers can pattern-match exhaustively.
+/// Domain enforcement is by visitor contract, not type: each visitor only
+/// produces its domain's modeled-call subtype plus shared opaque/method-ref
+/// variants. `WidgetTreeModel.root`, `RouteTreeModel.root`, and
+/// `PipelineTreeModel.root` are all typed `ModelNode` for uniformity.
 sealed class ModelNode {
   const ModelNode();
   SourceSpan get sourceSpan;
@@ -307,5 +311,77 @@ class RouteTreeModel {
 
   @override
   String toString() => 'RouteTreeModel(rootType=${root.runtimeType}'
+      '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
+}
+
+/// A modeled pipeline-DSL constructor call — `Pipeline(...)`, `Branch(...)`,
+/// `ValidateInput(...)`, etc.
+///
+/// M6.2 introduced this as the third domain consumer of the unified kernel
+/// (after widgets and routes), proving that the M6.1 scaffolding actually
+/// plugs in a non-Flutter DSL. The pipeline catalog is a synthetic
+/// data-pipeline / workflow DSL — invented for the demo, but representative
+/// of where the OutSystems-style trajectory leads (business-logic flows
+/// expressed as declarative constructor trees).
+///
+/// Same internal shape as `WidgetNode` and `RouteNode`. The proliferation
+/// of near-identical concrete classes is intentional for now (M6.2 first
+/// slice): if the per-domain typing turns out to be more friction than
+/// value, a future milestone can collapse them into a single
+/// `ConstructorCallNode(domain: ...)`. For now, separate types keep the
+/// invariant "a widget tree contains no PipelineNodes" expressible.
+class PipelineNode extends ModelNode {
+  PipelineNode({
+    required this.className,
+    required Map<String, PropertyValue> properties,
+    required Map<String, List<ModelNode>> childSlots,
+    required this.sourceSpan,
+    required this.styleHints,
+    Map<String, ListSlotStyle> childSlotStyles =
+        const <String, ListSlotStyle>{},
+  })  : properties = Map.unmodifiable(properties),
+        childSlots = Map.unmodifiable({
+          for (final entry in childSlots.entries)
+            entry.key: List<ModelNode>.unmodifiable(entry.value),
+        }),
+        childSlotStyles = Map.unmodifiable(childSlotStyles);
+
+  /// Class name of the constructor invoked — e.g. `'Pipeline'`, `'Branch'`.
+  final String className;
+
+  final Map<String, PropertyValue> properties;
+  final Map<String, List<ModelNode>> childSlots;
+  final Map<String, ListSlotStyle> childSlotStyles;
+
+  @override
+  final SourceSpan sourceSpan;
+
+  final StyleHints styleHints;
+
+  @override
+  String toString() {
+    final totalChildren = childSlots.values.fold<int>(
+      0,
+      (sum, list) => sum + list.length,
+    );
+    return 'PipelineNode($className @${sourceSpan.offset}+${sourceSpan.length}, '
+        '${properties.length} prop(s), ${childSlots.length} slot(s), '
+        '$totalChildren child(ren))';
+  }
+}
+
+/// Public root of the pipeline-tree visual model. Same role as
+/// `WidgetTreeModel` / `RouteTreeModel` for the pipeline DSL.
+class PipelineTreeModel {
+  const PipelineTreeModel({
+    required this.root,
+    this.diagnostics = const <ParseDiagnostic>[],
+  });
+
+  final ModelNode root;
+  final List<ParseDiagnostic> diagnostics;
+
+  @override
+  String toString() => 'PipelineTreeModel(rootType=${root.runtimeType}'
       '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
 }

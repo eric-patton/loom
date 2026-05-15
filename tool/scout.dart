@@ -37,6 +37,8 @@ void main(List<String> args) {
   var parsedWidgetDiagnostics = 0;
   var parsedRouteClean = 0;
   var parsedRouteDiagnostics = 0;
+  var parsedPipelineClean = 0;
+  var parsedPipelineDiagnostics = 0;
   var noTreeFound = 0;
   var threwOther = 0;
   var idempotenceFailed = 0;
@@ -45,6 +47,7 @@ void main(List<String> args) {
   final diagnosticFiles = <String>[];
   final widgetSamples = <String>[];
   final routeSamples = <String>[];
+  final pipelineSamples = <String>[];
 
   for (final entity in root.listSync(recursive: true)) {
     if (entity is! File) {
@@ -62,13 +65,13 @@ void main(List<String> args) {
       continue;
     }
 
-    // Try both parsers independently — a single file commonly has both
-    // a build() method (widget tree) AND a top-level GoRouter declaration
-    // (route tree). Counting them separately lets the scout reflect what
-    // the file actually contains rather than picking one and masking the
-    // other.
+    // Try all three parsers independently — a single file commonly carries
+    // multiple tree kinds (e.g., a widget tree alongside a top-level
+    // GoRouter). Count them separately rather than picking one and masking
+    // the others.
     var widgetParsed = false;
     var routeParsed = false;
+    var pipelineParsed = false;
     var crashed = false;
 
     try {
@@ -83,6 +86,7 @@ void main(List<String> args) {
               'MethodReferenceNode(${m.methodName})',
             OpaqueNode _ => 'OpaqueNode',
             final RouteNode r => 'RouteNode(${r.className})',
+            final PipelineNode p => 'PipelineNode(${p.className})',
           };
           widgetSamples.add('${entity.path} -> $rootDesc');
         }
@@ -112,6 +116,7 @@ void main(List<String> args) {
                 'MethodReferenceNode(${m.methodName})',
               OpaqueNode _ => 'OpaqueNode',
               final WidgetNode w => 'WidgetNode(${w.className})',
+              final PipelineNode p => 'PipelineNode(${p.className})',
             };
             routeSamples.add('${entity.path} -> $rootDesc');
           }
@@ -129,11 +134,44 @@ void main(List<String> args) {
       }
     }
 
-    if (!crashed && !widgetParsed && !routeParsed) {
+    if (!crashed) {
+      try {
+        final pipelineModel = parsePipelineTree(source);
+        pipelineParsed = true;
+        if (pipelineModel.diagnostics.isEmpty) {
+          parsedPipelineClean++;
+          if (pipelineSamples.length < 5) {
+            final rootDesc = switch (pipelineModel.root) {
+              final PipelineNode p => 'PipelineNode(${p.className})',
+              final MethodReferenceNode m =>
+                'MethodReferenceNode(${m.methodName})',
+              OpaqueNode _ => 'OpaqueNode',
+              final WidgetNode w => 'WidgetNode(${w.className})',
+              final RouteNode r => 'RouteNode(${r.className})',
+            };
+            pipelineSamples.add('${entity.path} -> $rootDesc');
+          }
+        } else {
+          parsedPipelineDiagnostics++;
+          diagnosticFiles.add(
+            '${entity.path} [pipeline] '
+            '(${pipelineModel.diagnostics.length})',
+          );
+        }
+      } on ParseException {
+        // No pipeline tree.
+      } on Object catch (e, st) {
+        threwOther++;
+        crashes.add(_Crash(entity.path, e, st));
+        crashed = true;
+      }
+    }
+
+    if (!crashed && !widgetParsed && !routeParsed && !pipelineParsed) {
       noTreeFound++;
     }
 
-    if (widgetParsed || routeParsed) {
+    if (widgetParsed || routeParsed || pipelineParsed) {
       final result = applySourceEdits(source, const <SourceEdit>[]);
       if (result != source) {
         idempotenceFailed++;
@@ -149,6 +187,10 @@ void main(List<String> args) {
       .writeln('  Parsed widget with diagnostics:   $parsedWidgetDiagnostics');
   stdout.writeln('  Parsed route clean:               $parsedRouteClean');
   stdout.writeln('  Parsed route with diagnostics:    $parsedRouteDiagnostics');
+  stdout.writeln('  Parsed pipeline clean:            $parsedPipelineClean');
+  stdout.writeln(
+    '  Parsed pipeline with diagnostics: $parsedPipelineDiagnostics',
+  );
   stdout.writeln('  No tree found:                    $noTreeFound');
   stdout.writeln('  Other exception (CRASH):          $threwOther');
   stdout.writeln('  Idempotence failed:               $idempotenceFailed');
@@ -193,6 +235,13 @@ void main(List<String> args) {
     stdout.writeln('');
     stdout.writeln('Route clean-parse samples (first 5):');
     for (final entry in routeSamples) {
+      stdout.writeln('  $entry');
+    }
+  }
+  if (pipelineSamples.isNotEmpty) {
+    stdout.writeln('');
+    stdout.writeln('Pipeline clean-parse samples (first 5):');
+    for (final entry in pipelineSamples) {
       stdout.writeln('  $entry');
     }
   }

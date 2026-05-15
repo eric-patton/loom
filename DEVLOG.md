@@ -8,15 +8,20 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M6.1 — extract loom_core (deduplication of widget/route scaffolding)
-**Last touched:** 2026-05-14 — landed the three-phase M6.1 refactor on the seam M6.0 build-alongside revealed:
-- **Phase 1 (47647c1):** unified `ModelNode` hierarchy. Sealed `ModelNode = WidgetNode | RouteNode | OpaqueNode | MethodReferenceNode`. `RouteTreeNode` / `RouteOpaqueNode` / `RouteMethodReferenceNode` deleted; all four concrete types live in `lib/src/model/node.dart` (renamed from `widget_node.dart`).
-- **Phase 2 (63b64fe):** extracted `BaseVisitor` scaffold to `lib/src/parsing/base_visitor.dart`. `WidgetVisitor` and `RouteVisitor` are now thin shims (~110 and ~45 lines respectively, down from ~470 and ~330). Three domain hooks: `specFor`, `buildModeledNode`, `customConstructorPropertyValue`. Shared `CallInfo`, `ParseException`, `extractMethodReturnExpression` live in base_visitor.dart. `CatalogSpec` extracted as the shared spec type; `WidgetSpec` and `RouteSpec` are typedefs.
-- **Phase 3 (04e4f22):** extracted `ListEditHelpers` (byte-level list-edit math, no node-type dependency) and promoted the inlined route serializer into a standalone `RouteSerializer` sibling of `WidgetSerializer`. `EditPlanner` and `RouteEditPlanner` are now thin per-domain glue (~95 lines each, down from ~414 and ~445).
+**Active milestone:** M6.2 — third domain catalog (synthetic Pipeline DSL)
+**Last touched:** 2026-05-14 — added a third domain consumer of the unified kernel: a synthetic data-pipeline / workflow DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, but representative of OutSystems-style declarative workflows. Concretely validates that M6.1's scaffolding plugs in a third domain — each non-shared piece is genuinely thin:
+- `PipelineNode` (~50 lines, parallel to `WidgetNode` / `RouteNode`)
+- `PipelineCatalog` (~20 lines, 8 spec entries)
+- `PipelineVisitor` (~30 lines, two `BaseVisitor` hooks)
+- `PipelineSerializer` (~30 lines, delegates to extracted `ConstructorCallSerializer`)
+- `PipelineEditPlanner` (~80 lines, thin glue over `ListEditHelpers`)
+- `parsePipelineTree` (~110 lines, mirrors `parseRouteTree`'s three entry-point shapes)
 
-Cumulative M6.1 diff: roughly **+1,500 / −2,200 lines** across ~15 files. Net code reduction ~700 lines, and every duplicated visitor / edit-planner section between widget- and route-side is now a single shared implementation. 147 tests still pass, `dart analyze` and `dart format` clean throughout. Scout against flutter/packages/go_router (117 files): identical numbers to M6.0.1 — 0 crashes, 0 idempotence failures, 30 route clean parses.
+Adding the third domain revealed a previously-hidden duplication: the per-domain `_serializeWidget` / `_serializeRouteNode` were structurally identical (the ~100-line constructor-call serialization). Extracted as `ConstructorCallSerializer` (rule of three). `WidgetSerializer` and `RouteSerializer` thinned to ~25 lines each. Now any new domain serializer is ~30 lines.
+
+**Validation:** 163 tests green (147 + 16 new pipeline tests across parsing + round-trip). 2 hand-crafted fixtures. Scout regression-free: flutter/packages/go_router (117 files) identical to M6.1 numbers — 0 crashes, 0 idempotence failures. CLI `loom parse` now three-way auto-detects (widget / route / pipeline) and prints all that succeed.
 **Blockers:** none
-**Next action:** **Eric review gate for M6.0 + M6.0.1 + M6.1.** Then either M6.2 (more constructor-tree DSL catalogs to stress-test the shared scaffolding — test framework `group`/`test`, MaterialApp config trees, possibly Shelf cascades) or M7 (class-structure modeling — fields/methods as a flat list, very different shape from constructor trees).
+**Next action:** **Eric review gate for M6.0 + M6.0.1 + M6.1 + M6.2.** Then likely M7 — class-structure modeling (fields/methods as a flat list of members, not a tree). This is the genuinely different shape M6.x's tree-based catalogs haven't pressured yet. Alternative: M6.3 could add one more constructor-tree catalog (test framework with statement walking, or fl_chart) before pivoting to M7.
 
 ---
 
@@ -181,7 +186,7 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 |---|---|---|
 | **M6.0** (shipped 2026-05-14) | First non-widget catalog: route DSL (GoRouter-shaped). Same constructor-tree shape as widgets. | Forcing function: a second consumer of the kernel. |
 | **M6.1** (shipped 2026-05-14) | Extracted shared scaffolding in three phases: (1) unified sealed `ModelNode` hierarchy (Route node types collapsed into shared `OpaqueNode` / `MethodReferenceNode`); (2) `BaseVisitor` abstract class with three domain hooks; (3) `ListEditHelpers` for byte-level slot edits + `RouteSerializer` sibling of `WidgetSerializer`. Each visitor / edit-planner now ~50–100 lines instead of ~300–450. | Made the kernel genuinely reusable for a third domain — M6.2's next catalog needs ~50 lines, not a copy of the scaffolding. |
-| M6.2 | Add 2–3 more constructor-tree DSL catalogs to stress-test generality: `test` framework (`group`/`test` blocks), `MaterialApp` / `CupertinoApp` config trees, possibly Shelf `Router()` cascade (different shape — may pressure the kernel). | Catches generality assumptions a single second-user might not. |
+| **M6.2** (shipped 2026-05-14) | Third domain catalog: synthetic Pipeline DSL (Pipeline / Branch / ValidateInput / Transform / SaveToDatabase / SendEmail / LogError / LogInfo). Invented for the demo, representative of OutSystems-style declarative workflows. Adding the third domain revealed a hidden duplication in the per-domain serializers (the constructor-call serialization was ~100 lines of identical code in two places); extracted as `ConstructorCallSerializer`. | Validated M6.1's scaffolding actually plugs in a third domain — non-shared per-domain code is ~250 LOC total. The literal M6.2 options from the original plan (test framework, MaterialApp configs, Shelf cascades) turned out to be poor fits for "constructor-tree catalog" (test bodies live in function literals, MaterialApp is already a widget, Shelf is a cascade — different shape). Pipeline DSL is the cleanest demonstration of the OutSystems trajectory. |
 | **M7** | Class-structure modeling — fields, methods, constructor declarations as a *flat list of members*, not a tree. Different shape from widgets. | OutSystems-style entity modeling: Drift tables, Freezed unions, json_serializable classes. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
@@ -218,6 +223,15 @@ The pinned 20-file corpus that gates "kernel ships." Add files here as they're a
 | `test/fixtures/real_world_text_input.dart` | flutter/website @ `e927ec21`, `examples/cookbook/forms/text_input/lib/main.dart` | 50 | MaterialApp → Scaffold → opaque MyCustomForm; second class MyCustomForm uses Column with multiple Paddings around opaque TextField/TextFormField |
 | `test/fixtures/real_world_long_lists.dart` | flutter/website @ `e927ec21`, `examples/cookbook/lists/long_lists/lib/main.dart` | 32 | MyApp with non-const constructor and `final List<String> items` field; MaterialApp → Scaffold → opaque ListView.builder with closures |
 
+### Pipeline fixtures (M6.2)
+
+Synthetic data-pipeline / workflow DSL — invented for the demo. Validates the kernel's third-domain reusability after the M6.1 scaffolding extraction.
+
+| File | Source | Lines | Exercises |
+|---|---|---|---|
+| `test/fixtures/pipeline_simple.dart` | hand-crafted | 11 | Top-level `final pipeline = Pipeline(name, steps: [ValidateInput, Transform, SaveToDatabase])`. Bool property (`required: true`). |
+| `test/fixtures/pipeline_with_branch.dart` | hand-crafted | 21 | Branch node with two list slots (`onTrue` / `onFalse`); demonstrates a node with multiple list-shaped child slots. |
+
 ### Route fixtures (M6.0 / M6.0.1)
 
 A separate corpus for the route-DSL upper layer. Each exercises the route parser + visitor + edit planner.
@@ -246,6 +260,38 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M6.2 — third domain catalog (synthetic Pipeline DSL)
+**Worked on:** Eric picked M6.2 (more catalogs to stress-test M6.1's scaffolding) over M7 (class-structure modeling). Added a synthetic data-pipeline / workflow DSL as the third domain consumer of the unified kernel, validating that the M6.1 abstractions actually let a third domain plug in.
+
+**The catalog:** Pipeline(name, steps: [...]) → contains Branch(condition, onTrue: [...], onFalse: [...]), ValidateInput(field, required), Transform(name), SaveToDatabase(table), SendEmail(template), LogError(level, message), LogInfo(message). 8 catalog entries, mix of leaf types and one type (Branch) with two list slots. Invented for the demo — not a real package — but representative of where the OutSystems-style trajectory leads.
+
+**Plan deviation worth noting:** the original M6.2 plan in DEVLOG named "test framework (group/test), MaterialApp config trees, Shelf cascades" as candidate catalogs. On closer inspection, none of these actually fit "constructor-tree catalog":
+- test framework children live inside function-literal bodies, not in named arguments — requires visitor extensions (M7-shaped work).
+- MaterialApp is already in `WidgetCatalog`; not a separate domain.
+- Shelf uses cascade method chains, not constructor trees.
+
+Pure-Dart non-Flutter constructor-tree DSLs in real packages are genuinely rare. The synthetic Pipeline DSL is the cleanest demonstration of the kernel's reusability for arbitrary user-provided DSLs, which is the actual point of M6.2.
+
+**Rule-of-three extraction:** writing `PipelineSerializer` revealed that the per-domain `_serializeXxxNode` private method (the ~100-line constructor-call serialization in `WidgetSerializer` and `RouteSerializer`) was identical except for catalog and node-class names. Extracted as `lib/src/emission/constructor_call_serializer.dart`. `WidgetSerializer` / `RouteSerializer` / `PipelineSerializer` are now ~25–30 lines each — domain dispatch + catalog lookup + delegation to the shared helper.
+
+**Sealed hierarchy extended:** `ModelNode` is now sealed with FIVE variants (`WidgetNode | RouteNode | PipelineNode | OpaqueNode | MethodReferenceNode`). Existing pattern-match sites across `bin/loom.dart` (2 printers × 2 switches each), `widget_serializer.dart`, `route_serializer.dart`, `node_path.dart` (3 switches), and `tool/scout.dart` (2 switches) all gained a `PipelineNode` case — most are cross-domain invariant guards that throw on unreachable shapes. The exhaustiveness tax is ~11 lines added across the codebase per new domain; acceptable.
+
+**Validation:**
+- 163 tests green (147 + 16 new pipeline tests across parsing + round-trip).
+- `dart analyze` and `dart format` clean.
+- CLI `loom parse` prints widget, route, and pipeline trees independently if all three are present; gracefully reports if none match.
+- Scout against flutter/packages/go_router (117 files): identical to M6.1 — 0 crashes, 0 idempotence failures.
+- Scout against loom-repo itself: 68 files, 22 widget / 6 route / 2 pipeline / 40 no-tree / 0 crashes.
+
+**Total non-shared cost of the third domain:** ~250 LOC (node class + catalog + visitor + parser + serializer + edit planner). The M6.1 commit's claim that "a third domain would be ~50 lines" was wrong by ~5x — but the bulk (~150 LOC) is the new node class + edit planner glue, which IS mostly mechanical. The visitor (30 lines) and serializer (30 lines after ConstructorCallSerializer extraction) are genuinely tiny.
+
+**Learned:**
+- **"Constructor-tree DSL" is a narrower category than the M6.2 plan assumed.** Most real-world Dart DSLs use other shapes — cascade chains, annotations, top-level decl sequences, function-literal callbacks. Pure constructor-tree DSLs are mostly UI-shaped (widgets and routes). Validates that the kernel as-built is well-suited to UI-shaped work and points toward what's *not* yet ready (function bodies, cascades, class structure).
+- **The rule of three is real.** I shipped M6.1 Phase 3 without extracting `ConstructorCallSerializer` because at two copies I judged it premature. The third copy forced the decision and confirmed the right shape — turns out `recurse: ModelNode → String` as a parameter is exactly what's needed to let each domain delegate cleanly. Premature parameterization at two copies might have picked a different (worse) abstraction.
+- **Sealed-hierarchy exhaustiveness tax is small per-domain.** ~10 lines of "case X: throw" guards across the codebase, mostly mechanical. Considered re-thinking the sealed design but the compile-time guarantees from exhaustive matching are worth it.
+
+**Next:** Eric reviews M6.0 + M6.0.1 + M6.1 + M6.2. Then likely M7 — class-structure modeling. Constructor-tree catalogs as a shape are well-covered (three working consumers); the next genuine pressure on the kernel is non-tree shapes.
 
 ### [2026-05-14] M6.1 — extract loom_core (three-phase refactor)
 **Worked on:** Closed the planned M6.1 deduplication of widget- and route-side scaffolding that M6.0 build-alongside intentionally shipped. Split into three commits for reviewability.
