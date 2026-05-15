@@ -8,7 +8,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M7.2.1 — parameter add/remove operations
+**Active milestone:** M7.3 — annotation edit operations
 **Last touched:** 2026-05-14 — deepened class-structure further by modeling individual parameters within method/constructor parameter lists, and by capturing annotations on class members + classes themselves.
 
 **Parameter modeling** — replaces M7.1's `parametersSource: String` blob:
@@ -33,22 +33,24 @@ Parameter add/remove are deliberately deferred — they require placement logic 
 
 CLI updated: `loom parse` on class-structure files now prints class-level annotations + member-level annotations inline.
 
-**M7.2.1 surface added (just now):**
-- `ParameterSection` enum: `positionalRequired` | `positionalOptional` | `named`.
-- `appendParameter(parent, newParameterSource, section, source)` — appends to existing non-empty section. For `positionalRequired`, also handles empty list `()` and empty section with following named/optional brackets. Throws on empty `named` / `positionalOptional` (section creation deferred to M7.2.2).
-- `removeParameter(parameter, source)` — handles intra-section deletion. Walks backward for preceding `,` if not first; forward through `,` + whitespace if first. Stops at section openers (`[`/`{`) so brackets stay intact. Empty section's brackets are LEFT behind (removing them is M7.2.2).
+**M7.3 surface added (just now):**
+- `addClassAnnotation(parent, annotationSource, source)` — prepend annotation before class declaration, on its own line with class indent.
+- `addMemberAnnotation(member, annotationSource, source)` — prepend annotation before any class member, on its own line with member indent.
+- `addParameterAnnotation(parameter, annotationSource)` — inline annotation before parameter, space-separated (most common Dart style).
+- `removeAnnotation(annotation, source)` — delete annotation + trailing horizontal whitespace + up to one newline (collapses line cleanly).
+- `replaceAnnotationArguments(annotation, newArgumentsSource)` — replace `(...)` portion of an annotation. Requires existing arguments list; adding parens to a bare annotation is deferred.
 
-Separator detection looks at the gap between adjacent params; falls back to `', '` single-line or `,\n<indent>` multi-line. Handles trailing-comma styles correctly.
+Combined with M7.2 annotation capture, the kernel now has a complete add/inspect/edit/remove story for annotations on classes, members, and parameters — the surface entity-modeling tools need most.
 
-**Still deferred:**
-- Section creation: appending to empty `named` / `positionalOptional` requires inserting `{...}` / `[...]` brackets + `, ` separator. M7.2.2 if real fixtures demand.
+**Still deferred (smaller surface remaining):**
+- Section creation: appending to empty `named` / `positionalOptional` requires inserting `{...}` / `[...]` brackets + `, ` separator. M7.4 if real fixtures demand.
 - Removing empty section brackets after a section drains to empty.
-- Annotation editing (add / remove / replace) — M7.3 next.
+- Adding `(...)` arguments to a bare annotation (only edit type missing).
 - Qualifier editing (final/var/late/static/const/factory/async).
 - Renaming named constructors.
 - Multi-variable field declarations beyond best-effort.
 **Blockers:** none
-**Next action:** M7.3 — annotation edit operations (next commit in this session). Then Eric review gate for M6 series + M7.0 + M7.1 + M7.2 + M7.2.1 + M7.3.
+**Next action:** **Eric review gate for the full M6 + M7 series.** Then M8 (function-body / statement modeling — genuinely new shape) or fill in remaining M7 gaps (qualifier editing, section creation, ctor renaming) per real-world needs.
 
 ---
 
@@ -218,7 +220,8 @@ The user explicitly asked the M6 plan to capture "everything we would need to bu
 | **M7.1** (shipped 2026-05-14) | Method signatures + constructors. Sealed `ClassMember = ClassFieldNode | ClassMethodNode | ClassConstructorNode | OpaqueClassMember`. Edit ops added: renameMethod, changeMethodReturnType, removeMember (polymorphic), addMember (polymorphic). Backward-compat `fields` / `opaqueMemberSpans` getters keep M7.0 callers working. | Methods + constructors are the rest of "class shape" — together with M7.0's fields, this covers virtually all real-world class members. |
 | **M7.2** (shipped 2026-05-14) | Parameter modeling + annotation capture. `ClassParameterNode` (name / type / default / kind flags) replaces M7.1's `parametersSource` blob. `AnnotationNode` attached to members, parameters, and `ClassStructureNode` itself. Edit ops added: renameParameter, changeParameterType, changeParameterDefault. New fixture `class_freezed_like.dart` exercises the Freezed/json_serializable shape. | Unlocks Freezed-style entity editing where "fields" are actually factory-constructor parameters. Captures the annotations that codegen pipelines key off. |
 | **M7.2.1** (shipped 2026-05-14) | Parameter add/remove. `appendParameter` to existing section (creates within empty `positionalRequired` if other sections exist; throws on empty `named`/`positionalOptional` for now). `removeParameter` handles intra-section deletion with separator cleanup, leaves empty brackets behind. | The "add a field" / "remove a field" operations for Freezed-style entities where fields-as-params is the modeling layer. |
-| M7.3+ | Annotation editing, qualifier editing, section creation (M7.2.2), renaming named constructors, multi-variable field declarations. | Round out the surface for Drift / Freezed / json_serializable / Riverpod codegen targets. |
+| **M7.3** (shipped 2026-05-14) | Annotation editing. `addClassAnnotation`, `addMemberAnnotation`, `addParameterAnnotation` (each with appropriate formatting — newline for class/member, inline for parameter). `removeAnnotation` cleans up trailing whitespace/newline. `replaceAnnotationArguments` swaps the `(...)` portion. | Codegen-driven entity classes (Freezed / json_serializable / Drift) live and die by their annotations. This makes them first-class editable. |
+| M7.4+ | Qualifier editing, section creation, ctor renaming, multi-variable field declarations. | Round out the M7 surface for full Drift / Freezed / json_serializable / Riverpod codegen coverage. |
 | **M8** | Function-body / statement modeling — variable decls, assignments, calls, control flow inside a method. Dozens of statement kinds; probably multi-milestone. | OutSystems-style business logic: visual workflows that compile to Dart functions. |
 | M9 | Cross-file modeling — imports / exports, multi-file project view. | Required for "see the whole app" visual editing. |
 | M10+ | Reference / type analysis, codegen-aware editing (`json_serializable` annotations, Drift schema → table classes, etc.). | Resolves named symbols across files; understands codegen output. |
@@ -302,6 +305,35 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-14] M7.3 — annotation edit operations
+**Worked on:** Completed the annotation surface — M7.2 captured them; M7.3 makes them editable. Together this closes the loop on entity-modeling needs: codegen-driven classes (Freezed / json_serializable / Drift) can now be inspected AND modified through the kernel without raw source manipulation.
+
+**Five new operations:**
+- `addClassAnnotation(parent, annotationSource, source)` — prepend before class decl, newline + class indent.
+- `addMemberAnnotation(member, annotationSource, source)` — prepend before any class member, newline + member indent.
+- `addParameterAnnotation(parameter, annotationSource)` — inline before parameter, single-space separator (most common Dart style; multi-line parameter annotations can use `addParameterAnnotation` then manual reformat).
+- `removeAnnotation(annotation, source)` — delete annotation source + trailing horizontal whitespace + up to one newline. Same line-collapse pattern as `removeMember`.
+- `replaceAnnotationArguments(annotation, newArgumentsSource)` — replace just the `(...)` portion. Requires existing arguments list (adding parens to a bare annotation needs insertion logic deferred to a future milestone).
+
+**Three placement strategies for `add*Annotation`:**
+| Target | Style | Reason |
+|---|---|---|
+| Class | `@Anno\n<indent>` | Annotations on their own line is the universal class convention |
+| Member | `@Anno\n<indent>` | Same — `@override\n  String foo()` |
+| Parameter | `@Anno ` | Inline is the most common parameter-annotation style (`@JsonKey() String name`) — multi-line parameter annotations exist but are rarer |
+
+**Validation:**
+- 225 tests green (was 218, +7 new annotation tests).
+- `dart analyze` and `dart format` clean.
+- Scout against `flutter/packages/go_router` (117 files): unchanged — 0 crashes, 0 idempotence failures, 78 class clean parses.
+
+**Learned:**
+- **Annotation edits are mostly span replacements.** All five operations end up being plain `SourceEdit` calls with computed offsets — no scaffolding, no helpers needed. The interesting work is positioning (where to insert before what, with what surrounding whitespace).
+- **Indentation inference works the same way for any "prepend before declaration" operation.** Reusing the `_lineIndentBefore` helper that started in M7.0's `addField` works fine for class-level and member-level annotations. Three current users of that helper inside `ClassStructureEditPlanner` and one in `ListEditHelpers` — the "rule of three" extraction trigger from M7.1's DEVLOG note has now fired but the helper is still duplicated across files. Worth doing as a small cleanup in a future commit.
+- **The OutSystems-for-Dart trajectory now has a clear "entity modeling" working surface.** M7.0 + M7.1 + M7.2 + M7.2.1 + M7.3 together let a downstream tool fully manage a Freezed-shaped class — add/remove/rename/retype fields (via factory params), edit annotations, manage method signatures, manage constructors. The same machinery works for json_serializable, Drift columns (as getter-methods), and similar codegen targets.
+
+**Next:** Eric review of the full M6 + M7 series (10 commits since the last review gate). Then M8 (function-body / statement modeling — the next genuinely new shape after constructor trees and class member lists) or fill in remaining M7 gaps as concrete fixtures demand.
 
 ### [2026-05-14] M7.2.1 — parameter add/remove
 **Worked on:** Completed the parameter editing surface started in M7.2. Add and remove operations handle the cases the M7.2 commit deferred: section-aware insertion at end of an existing section, deletion with separator + (some) bracket awareness.

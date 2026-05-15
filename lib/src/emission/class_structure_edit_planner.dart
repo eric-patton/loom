@@ -43,17 +43,29 @@ enum ParameterSection { positionalRequired, positionalOptional, named }
 ///   * `changeParameterDefault` — replace a parameter's default value
 ///     (requires existing default)
 ///
-/// Deliberately omitted (incremental — ship in M7.2.x+ as fixtures
-/// demand):
-///   * Adding/removing parameters (requires placement logic for
-///     positional vs `[optional]` vs `{named}` sections, comma + bracket
-///     handling)
+/// M7.2.1 surface additions (parameter add/remove):
+///   * `appendParameter` — append to existing section of parameter list
+///   * `removeParameter` — delete + separator cleanup, preserves
+///     surrounding section brackets
+///
+/// M7.3 surface additions (annotation editing):
+///   * `addClassAnnotation` — prepend annotation before class decl
+///   * `addMemberAnnotation` — prepend annotation before member
+///   * `addParameterAnnotation` — inline annotation before parameter
+///   * `removeAnnotation` — delete annotation + adjacent whitespace/newline
+///   * `replaceAnnotationArguments` — replace `(...)` portion (requires
+///     existing args list)
+///
+/// Deliberately omitted (incremental — ship in M7.2.2 / M7.4+ as
+/// fixtures demand):
+///   * Section creation (appending to empty `named`/`positionalOptional`)
+///   * Empty-section bracket cleanup after `removeParameter` drains a section
 ///   * Edits to parameter qualifiers (final / const / required)
 ///   * Adding a type annotation to an untyped field or parameter
 ///   * Adding an initializer to a bare field
 ///   * Adding a default to a parameter without one
+///   * Adding `(...)` to a bare annotation
 ///   * Renaming a constructor (named ctor segment editing)
-///   * Annotation editing (add / remove / replace annotations)
 ///   * Edits to qualifiers (final/var/late/static/const/factory)
 ///   * Reordering members
 class ClassStructureEditPlanner {
@@ -351,6 +363,111 @@ class ClassStructureEditPlanner {
       offset: start,
       length: end - start,
       replacement: '',
+    );
+  }
+
+  // ----------------------- Annotation operations (M7.3) ---------
+
+  /// Prepends `annotationSource` (e.g. `'@override'`, `'@JsonKey(name: \"x\")'`)
+  /// before a class declaration. The new annotation lands on its own line
+  /// with the same indent as the class declaration.
+  static SourceEdit addClassAnnotation({
+    required ClassStructureNode parent,
+    required String annotationSource,
+    required String source,
+  }) {
+    final indent = _lineIndentBefore(parent.classSpan.offset, source);
+    return SourceEdit(
+      offset: parent.classSpan.offset,
+      length: 0,
+      replacement: '$annotationSource\n$indent',
+    );
+  }
+
+  /// Prepends `annotationSource` before a class member (field / method /
+  /// constructor). The new annotation lands on its own line with the
+  /// same indent as the member.
+  static SourceEdit addMemberAnnotation({
+    required ClassMember member,
+    required String annotationSource,
+    required String source,
+  }) {
+    final indent = _lineIndentBefore(member.sourceSpan.offset, source);
+    return SourceEdit(
+      offset: member.sourceSpan.offset,
+      length: 0,
+      replacement: '$annotationSource\n$indent',
+    );
+  }
+
+  /// Prepends `annotationSource` before a parameter. The new annotation
+  /// is placed on the same line as the parameter, separated by a single
+  /// space (most common Dart style for inline parameter annotations).
+  static SourceEdit addParameterAnnotation({
+    required ClassParameterNode parameter,
+    required String annotationSource,
+  }) {
+    return SourceEdit(
+      offset: parameter.sourceSpan.offset,
+      length: 0,
+      replacement: '$annotationSource ',
+    );
+  }
+
+  /// Removes an annotation. Deletes the annotation source plus any
+  /// trailing whitespace through (and including) the next newline if
+  /// present — collapsing the line so removed annotations don't leave
+  /// blank lines behind.
+  ///
+  /// Works for class-level, member-level, and parameter-level
+  /// annotations. For inline parameter annotations (no trailing
+  /// newline), deletes through trailing horizontal whitespace instead.
+  static SourceEdit removeAnnotation({
+    required AnnotationNode annotation,
+    required String source,
+  }) {
+    final start = annotation.sourceSpan.offset;
+    var end = annotation.sourceSpan.end;
+    // Extend over trailing horizontal whitespace + at most one newline.
+    while (end < source.length) {
+      final ch = source.codeUnitAt(end);
+      if (ch == 0x20 || ch == 0x09 || ch == 0x0D) {
+        end++;
+      } else if (ch == 0x0A) {
+        end++;
+        break;
+      } else {
+        break;
+      }
+    }
+    return SourceEdit(
+      offset: start,
+      length: end - start,
+      replacement: '',
+    );
+  }
+
+  /// Replaces an annotation's arguments with `newArgumentsSource`. The
+  /// new source should include the surrounding parentheses
+  /// (`'(name: \"foo\")'`). Requires the annotation to already have an
+  /// arguments list; throws otherwise (adding parens to a bare
+  /// annotation is deferred to a future milestone).
+  static SourceEdit replaceAnnotationArguments({
+    required AnnotationNode annotation,
+    required String newArgumentsSource,
+  }) {
+    final span = annotation.argumentsSpan;
+    if (span == null) {
+      throw ArgumentError(
+        'Annotation @${annotation.name} has no arguments list to replace. '
+        'Adding `(...)` to a bare annotation is deferred to a future '
+        'milestone.',
+      );
+    }
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newArgumentsSource,
     );
   }
 

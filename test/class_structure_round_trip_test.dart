@@ -492,6 +492,157 @@ void main() {
     });
   });
 
+  group('annotation edits (M7.3)', () {
+    test('addClassAnnotation prepends a class-level annotation', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      // User has no annotations to start.
+      expect(model.root.annotations, isEmpty);
+
+      final edit = ClassStructureEditPlanner.addClassAnnotation(
+        parent: model.root,
+        annotationSource: '@JsonSerializable()',
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      expect(reparsed.root.annotations, hasLength(1));
+      expect(reparsed.root.annotations.first.name, equals('JsonSerializable'));
+      expect(
+        reparsed.root.annotations.first.argumentsSource,
+        equals('()'),
+      );
+    });
+
+    test('addMemberAnnotation prepends an annotation before a field', () {
+      final source = _loadFixture('class_simple.dart');
+      final model = parseClassStructure(source);
+      final name = model.root.members.whereType<ClassFieldNode>().firstWhere(
+            (f) => f.name == 'name',
+          );
+      expect(name.annotations, isEmpty);
+
+      final edit = ClassStructureEditPlanner.addMemberAnnotation(
+        member: name,
+        annotationSource: "@JsonKey(name: 'full_name')",
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final updated = reparsed.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'name');
+      expect(updated.annotations, hasLength(1));
+      expect(updated.annotations.first.name, equals('JsonKey'));
+    });
+
+    test('addParameterAnnotation inlines an annotation before a param', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final ctor = model.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null);
+      final age = ctor.parameters.firstWhere((p) => p.name == 'age');
+      expect(age.annotations, isEmpty);
+
+      final edit = ClassStructureEditPlanner.addParameterAnnotation(
+        parameter: age,
+        annotationSource: '@Deprecated()',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedAge = reparsed.root.members
+          .whereType<ClassConstructorNode>()
+          .firstWhere((c) => c.namedConstructorName == null)
+          .parameters
+          .firstWhere((p) => p.name == 'age');
+      expect(reparsedAge.annotations, hasLength(1));
+      expect(reparsedAge.annotations.first.name, equals('Deprecated'));
+    });
+
+    test('removeAnnotation removes a member annotation cleanly', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final firstName = model.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'firstName');
+      expect(firstName.annotations, hasLength(1));
+
+      final edit = ClassStructureEditPlanner.removeAnnotation(
+        annotation: firstName.annotations.first,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final updatedFirst = reparsed.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'firstName');
+      expect(updatedFirst.annotations, isEmpty);
+    });
+
+    test('removeAnnotation works on the class-level @freezed', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      expect(model.root.annotations, hasLength(1));
+
+      final edit = ClassStructureEditPlanner.removeAnnotation(
+        annotation: model.root.annotations.first,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      expect(reparsed.root.annotations, isEmpty);
+    });
+
+    test('replaceAnnotationArguments updates JsonKey name', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      final firstName = model.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'firstName');
+      final annotation = firstName.annotations.first;
+      expect(annotation.argumentsSource, equals("(name: 'first_name')"));
+
+      final edit = ClassStructureEditPlanner.replaceAnnotationArguments(
+        annotation: annotation,
+        newArgumentsSource: "(name: 'given_name', defaultValue: '')",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+
+      final reparsed = parseClassStructure(newSource);
+      final reparsedAnnotation = reparsed.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'firstName')
+          .annotations
+          .first;
+      expect(
+        reparsedAnnotation.argumentsSource,
+        equals("(name: 'given_name', defaultValue: '')"),
+      );
+    });
+
+    test('replaceAnnotationArguments throws on bare annotation', () {
+      final source = _loadFixture('class_freezed_like.dart');
+      final model = parseClassStructure(source);
+      // The class-level @freezed is bare (no args).
+      final freezed = model.root.annotations.first;
+      expect(freezed.argumentsSource, isNull);
+
+      expect(
+        () => ClassStructureEditPlanner.replaceAnnotationArguments(
+          annotation: freezed,
+          newArgumentsSource: '()',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+
   group('addField', () {
     test('appends new field to a class with existing fields', () {
       final source = _loadFixture('class_simple.dart');
