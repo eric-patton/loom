@@ -24,6 +24,7 @@ export 'src/emission/widget_serializer.dart';
 export 'src/equivalence/model_equivalence.dart';
 export 'src/model/annotation.dart';
 export 'src/model/class_structure.dart';
+export 'src/model/codegen_views.dart';
 export 'src/model/directives.dart';
 export 'src/model/file_symbols.dart';
 export 'src/model/function_body.dart';
