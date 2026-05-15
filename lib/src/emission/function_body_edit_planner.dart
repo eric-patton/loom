@@ -1000,6 +1000,33 @@ class FunctionBodyEditPlanner {
     );
   }
 
+  /// Renames a `NamedArgumentNode`'s name — e.g. `f(name: x)` →
+  /// `f(label: x)`. The colon and argument expression are preserved.
+  static SourceEdit renameNamedArgument({
+    required NamedArgumentNode argument,
+    required String newName,
+  }) {
+    return SourceEdit(
+      offset: argument.nameSpan.offset,
+      length: argument.nameSpan.length,
+      replacement: newName,
+    );
+  }
+
+  /// Replaces an argument's expression — works for both positional
+  /// and named arguments. The argument's name (if named) is preserved.
+  static SourceEdit replaceArgumentExpression({
+    required ArgumentNode argument,
+    required String newExpressionSource,
+  }) {
+    final span = argument.expression.sourceSpan;
+    return SourceEdit(
+      offset: span.offset,
+      length: span.length,
+      replacement: newExpressionSource,
+    );
+  }
+
   // ----------------------- Expression ops (M8.3) -----------------
 
   /// Changes the operator of an `AssignmentExpressionNode` — e.g.

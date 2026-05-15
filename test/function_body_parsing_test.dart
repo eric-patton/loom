@@ -1750,6 +1750,74 @@ int f(int n) {
     });
   });
 
+  group('M8.8 — argument list internals', () {
+    test('positional arguments captured as PositionalArgumentNode', () {
+      const source = '''
+void f() {
+  print(1, 2, 3);
+}
+void print(Object a, Object b, Object c) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      expect(m.arguments.arguments, hasLength(3));
+      for (final a in m.arguments.arguments) {
+        expect(a, isA<PositionalArgumentNode>());
+      }
+    });
+
+    test('named arguments captured as NamedArgumentNode', () {
+      const source = '''
+void f() {
+  use(name: 'x', value: 42);
+}
+void use({String? name, int? value}) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      expect(m.arguments.arguments, hasLength(2));
+      final n0 = m.arguments.arguments[0] as NamedArgumentNode;
+      expect(n0.name, equals('name'));
+      expect((n0.expression as LiteralExpressionNode).source, equals("'x'"));
+      final n1 = m.arguments.arguments[1] as NamedArgumentNode;
+      expect(n1.name, equals('value'));
+    });
+
+    test('mixed positional + named in order', () {
+      const source = '''
+void f() {
+  blend(1, 2, color: 'red');
+}
+void blend(int a, int b, {String? color}) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      expect(m.arguments.arguments, hasLength(3));
+      expect(m.arguments.arguments[0], isA<PositionalArgumentNode>());
+      expect(m.arguments.arguments[1], isA<PositionalArgumentNode>());
+      expect(m.arguments.arguments[2], isA<NamedArgumentNode>());
+    });
+
+    test('instance creation arguments are also structured', () {
+      const source = '''
+void f() {
+  final r = List<int>.filled(3, 0);
+  use(r);
+}
+void use(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final v = body.statements[0] as VariableDeclarationStatementNode;
+      final ic = v.variables.first.initializerExpression!
+          as InstanceCreationExpressionNode;
+      expect(ic.arguments.arguments, hasLength(2));
+      expect(ic.arguments.arguments[0], isA<PositionalArgumentNode>());
+    });
+  });
+
   group('parseFunctionBody rejection', () {
     test('throws on a source with no function bodies', () {
       const source = 'class Empty {}\n';

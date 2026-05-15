@@ -1955,6 +1955,7 @@ class MethodInvocationExpressionNode extends ExpressionNode {
     required this.methodNameSpan,
     required this.argumentsSource,
     required this.argumentsSpan,
+    required this.arguments,
     required this.sourceSpan,
   });
 
@@ -1972,6 +1973,9 @@ class MethodInvocationExpressionNode extends ExpressionNode {
   /// Raw source of the argument list INCLUDING the surrounding parens.
   final String argumentsSource;
   final SourceSpan argumentsSpan;
+
+  /// Structured view of the argument list (M8.8).
+  final ArgumentListNode arguments;
 
   @override
   final SourceSpan sourceSpan;
@@ -2244,6 +2248,7 @@ class InstanceCreationExpressionNode extends ExpressionNode {
     required this.constructorNameSpan,
     required this.argumentsSource,
     required this.argumentsSpan,
+    required this.arguments,
     required this.sourceSpan,
   });
 
@@ -2258,6 +2263,9 @@ class InstanceCreationExpressionNode extends ExpressionNode {
   /// Raw source of the argument list including the surrounding parens.
   final String argumentsSource;
   final SourceSpan argumentsSpan;
+
+  /// Structured view of the argument list (M8.8).
+  final ArgumentListNode arguments;
 
   @override
   final SourceSpan sourceSpan;
@@ -2497,6 +2505,75 @@ class CascadeExpressionNode extends ExpressionNode {
 
   @override
   String toString() => 'CascadeExpressionNode($target${sectionSources.join()})';
+}
+
+/// A modeled argument list — `(x, y, name: z)`. Used by
+/// `MethodInvocationExpressionNode` and
+/// `InstanceCreationExpressionNode` alongside the raw `argumentsSource`.
+///
+/// Arguments may be positional (`PositionalArgumentNode`) or named
+/// (`NamedArgumentNode`). Order is source order — positional and
+/// named may intermix per Dart 3 (named-arguments-anywhere feature).
+class ArgumentListNode {
+  ArgumentListNode({
+    required this.leftParenSpan,
+    required List<ArgumentNode> arguments,
+    required this.rightParenSpan,
+    required this.sourceSpan,
+  }) : arguments = List.unmodifiable(arguments);
+
+  final SourceSpan leftParenSpan;
+  final List<ArgumentNode> arguments;
+  final SourceSpan rightParenSpan;
+
+  /// Full span including the surrounding parens.
+  final SourceSpan sourceSpan;
+
+  @override
+  String toString() => 'ArgumentListNode(${arguments.length} arg(s))';
+}
+
+/// Base type for a single argument inside an `ArgumentListNode`.
+/// Sealed across positional and named subtypes.
+sealed class ArgumentNode {
+  const ArgumentNode();
+  SourceSpan get sourceSpan;
+  ExpressionNode get expression;
+}
+
+/// A positional argument — `f(x, y)` has two positional args.
+class PositionalArgumentNode extends ArgumentNode {
+  const PositionalArgumentNode({
+    required this.expression,
+    required this.sourceSpan,
+  });
+  @override
+  final ExpressionNode expression;
+  @override
+  final SourceSpan sourceSpan;
+  @override
+  String toString() => 'PositionalArgumentNode($expression)';
+}
+
+/// A named argument — `f(name: value)`. Captures the name token,
+/// the `:` separator span, and the argument's expression.
+class NamedArgumentNode extends ArgumentNode {
+  const NamedArgumentNode({
+    required this.name,
+    required this.nameSpan,
+    required this.colonSpan,
+    required this.expression,
+    required this.sourceSpan,
+  });
+  final String name;
+  final SourceSpan nameSpan;
+  final SourceSpan colonSpan;
+  @override
+  final ExpressionNode expression;
+  @override
+  final SourceSpan sourceSpan;
+  @override
+  String toString() => 'NamedArgumentNode($name: $expression)';
 }
 
 /// An expression kind not yet modeled. Preserves the raw source.

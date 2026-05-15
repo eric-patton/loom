@@ -1432,6 +1432,51 @@ SwitchExpressionNode _convertSwitchExpression(
   );
 }
 
+/// Converts an analyzer `ArgumentList` to a kernel `ArgumentListNode`
+/// (M8.8). Each argument becomes a `PositionalArgumentNode` or a
+/// `NamedArgumentNode`.
+ArgumentListNode _convertArgumentList(ArgumentList args, String source) {
+  final out = <ArgumentNode>[];
+  for (final arg in args.arguments) {
+    final span = SourceSpan(offset: arg.offset, length: arg.length);
+    if (arg is NamedArgument) {
+      // NamedArgument has name (Token) + colon (Token) + argumentExpression.
+      out.add(NamedArgumentNode(
+        name: arg.name.lexeme,
+        nameSpan: SourceSpan(
+          offset: arg.name.offset,
+          length: arg.name.length,
+        ),
+        colonSpan: SourceSpan(
+          offset: arg.colon.offset,
+          length: arg.colon.length,
+        ),
+        expression: _convertExpression(arg.argumentExpression, source),
+        sourceSpan: span,
+      ));
+    } else {
+      // Positional — arg is itself an Expression (via the ArgumentImpl
+      // mixin applied to Expression nodes).
+      out.add(PositionalArgumentNode(
+        expression: _convertExpression(arg as Expression, source),
+        sourceSpan: span,
+      ));
+    }
+  }
+  return ArgumentListNode(
+    leftParenSpan: SourceSpan(
+      offset: args.leftParenthesis.offset,
+      length: args.leftParenthesis.length,
+    ),
+    arguments: out,
+    rightParenSpan: SourceSpan(
+      offset: args.rightParenthesis.offset,
+      length: args.rightParenthesis.length,
+    ),
+    sourceSpan: SourceSpan(offset: args.offset, length: args.length),
+  );
+}
+
 /// Converts an analyzer `Expression` into a kernel `ExpressionNode`.
 /// Total: returns `OpaqueExpressionNode` for kinds not modeled in
 /// M8.2/M8.3.
@@ -1500,6 +1545,7 @@ ExpressionNode _convertExpression(Expression expr, String source) {
         args.offset + args.length,
       ),
       argumentsSpan: SourceSpan(offset: args.offset, length: args.length),
+      arguments: _convertArgumentList(args, source),
       sourceSpan: span,
     );
   }
@@ -1661,6 +1707,7 @@ ExpressionNode _convertExpression(Expression expr, String source) {
       ),
       argumentsSource: source.substring(args.offset, args.offset + args.length),
       argumentsSpan: SourceSpan(offset: args.offset, length: args.length),
+      arguments: _convertArgumentList(args, source),
       sourceSpan: span,
     );
   }

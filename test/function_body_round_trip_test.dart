@@ -1737,6 +1737,68 @@ int f(int x) {
     });
   });
 
+  group('M8.8 — argument-list edits', () {
+    test('renameNamedArgument: name -> label', () {
+      const source = '''
+void f() {
+  use(name: 'x');
+}
+void use({String? name}) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      final na = m.arguments.arguments[0] as NamedArgumentNode;
+
+      final edit = FunctionBodyEditPlanner.renameNamedArgument(
+        argument: na,
+        newName: 'label',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains("label: 'x'"));
+    });
+
+    test('replaceArgumentExpression on positional', () {
+      const source = '''
+void f() {
+  print(42);
+}
+void print(Object o) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      final arg = m.arguments.arguments[0];
+
+      final edit = FunctionBodyEditPlanner.replaceArgumentExpression(
+        argument: arg,
+        newExpressionSource: 'value + 1',
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains('print(value + 1)'));
+    });
+
+    test('replaceArgumentExpression on named preserves the name', () {
+      const source = '''
+void f() {
+  use(name: 'x');
+}
+void use({String? name}) {}
+''';
+      final body = parseFunctionBody(source);
+      final stmt = body.statements[0] as ExpressionStatementNode;
+      final m = stmt.expression as MethodInvocationExpressionNode;
+      final na = m.arguments.arguments[0] as NamedArgumentNode;
+
+      final edit = FunctionBodyEditPlanner.replaceArgumentExpression(
+        argument: na,
+        newExpressionSource: "'y'",
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(newSource, contains("name: 'y'"));
+    });
+  });
+
   group('yield/break/continue/labeled edits (M8.1)', () {
     test('idempotence on function_body_with_yield_break_continue.dart', () {
       final source =
