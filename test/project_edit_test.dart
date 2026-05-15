@@ -130,6 +130,173 @@ void main() {
     });
   });
 
+  group('M9.4 — renameTopLevelDeclaration', () {
+    test('renames declaration + references in importing file', () {
+      final sources = {
+        'lib/api.dart': '''
+class Foo {}
+''',
+        'lib/main.dart': '''
+import 'api.dart';
+void main() {
+  final x = Foo();
+  print(x);
+}
+void print(Object o) {}
+''',
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Bar',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      // Declaration renamed.
+      expect(result['lib/api.dart'], contains('class Bar {}'));
+      expect(result['lib/api.dart'], isNot(contains('class Foo {}')));
+      // Reference in main.dart renamed.
+      expect(result['lib/main.dart'], contains('Bar();'));
+      expect(result['lib/main.dart'], isNot(contains('Foo();')));
+    });
+
+    test('renames internal references in the declaration file', () {
+      final sources = {
+        'lib/api.dart': '''
+class Foo {}
+Foo create() => Foo();
+''',
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Bar',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      // Both internal uses renamed.
+      expect(result['lib/api.dart'], contains('class Bar {}'));
+      expect(result['lib/api.dart'], contains('Bar create() => Bar();'));
+      expect(result['lib/api.dart'], isNot(contains('Foo')));
+    });
+
+    test('updates show combinator referencing the renamed name', () {
+      final sources = {
+        'lib/api.dart': 'class Foo {}\nclass Bar {}\n',
+        'lib/main.dart': "import 'api.dart' show Foo;\n",
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Renamed',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      expect(result['lib/api.dart'], contains('class Renamed {}'));
+      expect(result['lib/main.dart'], contains('show Renamed'));
+    });
+
+    test('updates hide combinator', () {
+      final sources = {
+        'lib/api.dart': 'class Foo {}\nclass Bar {}\n',
+        'lib/main.dart': "import 'api.dart' hide Foo;\n",
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Renamed',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      expect(result['lib/main.dart'], contains('hide Renamed'));
+    });
+
+    test('does NOT touch files that have no relationship to the symbol', () {
+      final sources = {
+        'lib/api.dart': 'class Foo {}\n',
+        'lib/main.dart': "import 'api.dart';\nvoid main() { Foo(); }\n",
+        'lib/unrelated.dart': "class Other {}\n",
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Bar',
+      );
+
+      // unrelated.dart is not in the edit map.
+      expect(edits, isNot(contains('lib/unrelated.dart')));
+    });
+
+    test('handles re-export chain: rename propagates through api.dart', () {
+      final sources = {
+        'lib/src/util.dart': 'class Foo {}\n',
+        'lib/api.dart': "export 'src/util.dart';\n",
+        'lib/main.dart': "import 'api.dart';\nvoid main() { Foo(); }\n",
+      };
+      final project = ProjectModel.fromSources(sources);
+      // resolveSymbol from main.dart finds Foo in src/util.dart
+      // (through api.dart's re-export).
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/main.dart')!;
+      expect(loc.filePath, equals('lib/src/util.dart'));
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Bar',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      expect(result['lib/src/util.dart'], contains('class Bar {}'));
+      expect(result['lib/main.dart'], contains('Bar();'));
+      // api.dart's export doesn't have a show clause naming Foo, so
+      // it doesn't need any edits.
+    });
+
+    test('preserves string literals that happen to contain the name', () {
+      final sources = {
+        'lib/api.dart': 'class Foo {}\n',
+        'lib/main.dart': '''
+import 'api.dart';
+void main() {
+  final tag = 'Foo';
+  Foo();
+  print(tag);
+}
+void print(Object o) {}
+''',
+      };
+      final project = ProjectModel.fromSources(sources);
+      final loc = project.resolveSymbol('Foo', fromFile: 'lib/api.dart')!;
+
+      final edits = ProjectEditPlanner.renameTopLevelDeclaration(
+        project: project,
+        symbol: loc,
+        newName: 'Bar',
+      );
+      final result = applyProjectEdits(sources, edits);
+
+      // The string literal 'Foo' is preserved.
+      expect(result['lib/main.dart'], contains("'Foo'"));
+      // But the identifier reference is renamed.
+      expect(result['lib/main.dart'], contains('Bar();'));
+    });
+  });
+
   group('merge', () {
     test('combines two non-overlapping edit maps', () {
       final a = {

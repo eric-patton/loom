@@ -8,7 +8,42 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M9.0a — directives modeling (imports/exports/parts)
+**Active milestone:** M9 complete — cross-file modeling shipped
+**Last touched:** 2026-05-15 — closed the M9 series with M9.0a through M9.4. The kernel now models multi-file projects: directives, the import graph, package URI resolution, cross-file symbol resolution, and project-wide rename.
+
+**Summary of M9 (this session):**
+
+- **M9.0a** — directives modeling: `CompilationUnitDirectives` + sealed `DirectiveNode` (5 subtypes) + sealed `CombinatorNode` (show/hide). `parseDirectives` + `DirectivesEditPlanner` with 7 ops.
+- **M9.0b** — `ProjectModel` multi-file container: holds N files, builds the import graph, queries `importersOf` / `importsFrom`.
+- **M9.1** — cross-file broadcast ops: `addImportEverywhere`, `removeImportEverywhere`, `renameImportUri`, `applyProjectEdits`, `merge`. `ProjectEdits = Map<String, List<SourceEdit>>` typedef.
+- **M9.2** — `PackageConfig` + URI resolution: pure Dart (caller provides config); `ProjectModel.resolveImportUri` handles `dart:*`, `package:*`, relative, absolute URIs.
+- **M9.3** — cross-file symbol resolution: `FileSymbols` per file (lazy-parsed top-level declarations); `ProjectModel.exportedNamesOf` walks export chains cycle-safely with combinator filtering; `resolveSymbol(name, fromFile) → SymbolLocation` traces imports through re-exports to the original declaration.
+- **M9.4** — project-wide rename (capstone): `renameTopLevelDeclaration(project, symbol, newName)` produces `ProjectEdits` covering: the declaration site, all internal references in the declaration file, all references in files that reach the symbol, and show/hide combinator names. Visitor handles both `SimpleIdentifier` and `NamedType.name` (type references in declarations/parameters/extends).
+
+**Total M9 surface:**
+- 3 new model files: `directives.dart`, `package_config.dart`, `project.dart`, `file_symbols.dart`
+- 2 new parsers: `directives_parser.dart`, `file_symbols_parser.dart`
+- 2 new planners: `directives_edit_planner.dart`, `project_edit_planner.dart`
+- 4 new test files: `directives_parsing_test.dart`, `directives_round_trip_test.dart`, `project_model_test.dart`, `project_edit_test.dart`, `package_config_test.dart`, `symbol_resolution_test.dart` (6 actually)
+- ~15 new edit ops
+- 595 tests green (was 521 at end of M8, +74 new across the M9 series)
+
+**Limitations (documented):**
+- Symbol resolution doesn't handle `dart:*` SDK symbols (kernel doesn't know SDK contents).
+- Symbol resolution skips packages whose roots aren't in `packageConfig` AND whose files aren't in `project.files`.
+- Rename doesn't track local-scope shadowing — caller-responsible if a project has same-named locals.
+- Rename matches identifiers by name only — false positives possible in projects with name collisions.
+
+**Blockers:** none
+**Next action:** Eric review of the M9 series (8 new commits). Ready for M10 — reference + type analysis, codegen-aware editing (json_serializable annotations, Drift schema → table classes, Freezed factory expansion, etc.). Or pivot to building a real UI consumer on top of the kernel.
+
+**Prior summary block (M8 complete — preserved):**
+
+**M8 complete (M8.0a–M8.10).** Function-body modeling is feature-complete: 17 statement kinds, 14 pattern kinds, 20+ expression kinds, ~80 edit ops, 521 tests. The M-series (M6+M7+M8) covers kernel generalization, class structure, and function body. M9 builds the cross-file layer on top.
+
+---
+
+### Prior in-progress entry: M9.0a — directives modeling (imports/exports/parts)
 **Last touched:** 2026-05-15 — first slice of cross-file modeling. `CompilationUnitDirectives` model with sealed `DirectiveNode` (5 subtypes) and `CombinatorNode` (show/hide). `parseDirectives` + `DirectivesEditPlanner`.
 
 **M9.0a surface added:** new `lib/src/model/directives.dart`, `lib/src/parsing/directives_parser.dart`, `lib/src/emission/directives_edit_planner.dart`. First top-level model that's about a file's relationship to OTHER files.
