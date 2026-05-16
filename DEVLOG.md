@@ -8,6 +8,38 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** M10.5 — workspace conversion. Monorepo restructure laying groundwork for the UI consumer (M11 → M16).
+**Last touched:** 2026-05-15 — repo restructured into a melos-orchestrated two-package monorepo. Kernel moved to `packages/loom/` (lib + bin + test + tool + analysis_options + pubspec, all relocated via `git mv` so history is preserved). New `packages/loom_app/` scaffolded as a Flutter desktop app (Windows / macOS / Linux targets) with a placeholder `LoomApp`. Root holds `pubspec.yaml` (alias only — no shared resolution), `melos.yaml` (orchestrator), DEVLOG / PROJECT_SPEC / README, and `.gitignore`.
+
+**Why a melos monorepo, not Dart workspaces:** tried Dart workspaces first; shared resolution forced Flutter SDK's pins (`meta 1.17`, `matcher 0.12.19`, `test_api 0.7.10`) onto the kernel side, breaking analyzer 13. Dropped `resolution: workspace` from both packages; each has its own `pubspec.lock`. Melos 6.3+ orchestrates without requiring workspaces (melos 7 requires them, so we're pinned to ^6.3.0).
+
+**Hard-won workarounds:**
+- `dependency_overrides: meta: ^1.18.0` in `packages/loom_app/pubspec.yaml` — bridges the Flutter SDK's pin to analyzer 13's minimum. Flutter still runs with meta 1.18.
+- `lints` bumped to `^6.0.0` in kernel pubspec (was `^5.0.0`) — `flutter_lints ^6.0.0` brought in by the app made the constraint clash unavoidable.
+- Replaced the scaffolded `main.dart` (used Dart 3.10+ `dot-shorthands` syntax that requires a non-default language flag) with a minimal `LoomApp` placeholder.
+- Melos scripts use the `cd packages/<pkg> && <cmd>` form instead of `melos exec`, because `melos` isn't on PATH — we invoke it via `dart run melos`, and `melos exec` triggers a nested `melos` lookup that then fails.
+- File-picker plugin's symlink processing on Windows requires Developer Mode for `flutter run` — non-blocker for tests; the user enables this when they want to launch the actual app.
+
+**Verification:** `dart run melos run test:kernel` reports **710 tests passed** (unchanged from Phase 5; the move did not break anything). `analyze:kernel`, `analyze:app`, `format:check:kernel`, `format:check:app` all clean. Placeholder `widget_test.dart` in loom_app passes.
+
+**Repo shape now:**
+```
+loom/
+├── pubspec.yaml          (root alias; melos as dev dep)
+├── melos.yaml            (orchestrator scripts)
+├── DEVLOG.md  PROJECT_SPEC.md  README.md
+└── packages/
+    ├── loom/             (kernel — was the root; now lives here)
+    │   ├── pubspec.yaml  bin/  lib/  test/  tool/  analysis_options.yaml
+    └── loom_app/         (Flutter desktop editor — M11 begins here)
+        ├── pubspec.yaml  lib/main.dart  test/widget_test.dart
+        └── windows/  macos/  linux/
+```
+
+**Next:** start M11 — shell + project loader + widget-tree outline + property inspector. Plan lives in the user's plans folder (`you-re-picking-up-work-validated-liskov.md`). M10.5 is a one-shot structural change; M11 is the first milestone of real editor work and will define the kernel's first non-CLI consumer.
+
+**Prior summary block (Phase 5 — cross-file widget discovery — preserved):**
+
 **Active milestone:** Cross-file widget discovery — `ProjectWidgetIndex` closes the last remaining gap
 **Last touched:** 2026-05-15 — Phase 5 of the opaque-root attack. With intra-file (Phase 1), slot inference (Phase 2), framework catalog expansion (Phase 3), and named-constructor support (Phase 4) shipped, the only remaining structural gap was widgets declared in one file and referenced from another.
 
@@ -18,16 +50,6 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 - **`loom.dart`** now exports `WidgetCatalog` / `WidgetSpec` / `CatalogSpec` / `ChildSlotShape` and the new index — needed for tool authors and downstream consumers to construct widget catalogs themselves.
 - **Widget-base allowlist extended**: a real-world finding from `BookstoreAuthScope extends InheritedNotifier<BookstoreAuth>` — `InheritedNotifier` doesn't end in `"Widget"` despite being a widget base. Added a small allowlist of framework widget bases that violate the suffix convention: `InheritedNotifier`, `InheritedTheme`, `InheritedModel`. Transitive recognition (chasing extends chains within the project) is still deferred.
 
-**Tests:** 710 green (was 696, +14 new — 13 in `test/project_widget_index_test.dart` covering build, visibility, combinators, transitive re-export, cycles, intra-file precedence, round-trip; +1 in the intra-file test for the new allowlist).
-
-**Real-world measurement:** ran the new `tool/project_opaque_root_diagnostic.dart` on several multi-file flutter-packages examples:
-- `go_router/example/lib/books` (15 files): modeled-root 9 → 10 (+1, `BookstoreAuthScope` resolved cross-file).
-- `go_router/example/lib` (42 files): modeled-root 36 → 37 (+1).
-- `google_maps_flutter` example (28 files): no change — all widgets self-contained per file.
-- `animations` example (5 files): no change — all self-contained.
-
-The honest finding: flutter-packages examples are mostly small, self-contained demos where intra-file discovery (Phase 1) already catches everything. Cross-file impact is therefore modest on this corpus. The feature unlocks recognition for larger multi-file apps (the ones the visual-editor consumer will actually edit), and the unit tests prove correctness for the patterns we'd expect there: nested imports, transitive re-exports, combinators, and visibility rules.
-
 **Combined impact across all five opaque-root phases (vs. the scout-validation baseline):**
 
 | Corpus | Modeled root (baseline) | Final (Phase 5) | Cat C → final |
@@ -36,13 +58,7 @@ The honest finding: flutter-packages examples are mostly small, self-contained d
 | Flutter SDK | 131 (28%) | **297 (63%)** | 218 → 58 |
 | (multi-file apps; project-aware) | varies | +1–2% extra | — |
 
-**Tools added this thread:**
-- `tool/opaque_root_diagnostic.dart` — per-file Cat A/B/C/D classifier (Phase 1–4).
-- `tool/project_opaque_root_diagnostic.dart` — project-aware version that measures cross-file resolution (Phase 5). Strips OS path prefixes for clean relative-URI resolution.
-
 **The opaque-root attack is essentially complete.** Phase 5 closes the last known structural gap for widget recognition. What's left in each remaining category is architectural (Cat A — bare-variable / ternary / prefixed-identifier returns; needs data-flow tracking), narrow (Cat D — no top-level return; tractable parser fix but needs design call on "which return is canonical"), or just-not-in-the-catalog (long-tail third-party widgets; diminishing returns).
-
-The natural next move is **starting the UI consumer** — the kernel has now been validated against real code, four kinds of trees (widget, route, pipeline, class), cross-file resolution, type queries, codegen recognition, and named constructors. Further foundational work has measurable but small returns. The truth-check now is whether the kernel's API actually drives a visual editor.
 
 **Prior summary block (Phase 4 — named-constructor support — preserved):**
 
@@ -872,6 +888,34 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-15] M10.5 — workspace conversion (monorepo, melos, Flutter app scaffold)
+
+**Worked on:** Repo restructured into a melos monorepo. Kernel moved to `packages/loom/` via `git mv` (history preserved). New `packages/loom_app/` scaffolded via `flutter create` with desktop targets (windows / macos / linux). Placeholder `LoomApp` replaces the scaffolded counter demo. Melos orchestrates with `cd packages/<pkg> && <cmd>`-form scripts.
+
+**Learned:**
+- **Dart workspaces don't play with Flutter.** Tried `resolution: workspace` at both packages with workspace root listing both as members. Dart's shared resolution then forced Flutter SDK pins onto the kernel (`meta 1.17` vs analyzer 13's `^1.18`, `matcher 0.12.19` vs the kernel's `test ^1.25` chain, `test_api 0.7.10` vs anything modern). Dropped workspace mode entirely; each package has its own `pubspec.lock`. Melos 6.x orchestrates fine without workspaces; melos 7 requires them, so we're pinned to ^6.3.0.
+- **`dependency_overrides: meta: ^1.18.0`** in the loom_app pubspec is the only override needed once workspaces are gone — it tells pub that the Flutter SDK's pin is suggestive, not strict, and lets the app coexist with analyzer 13 via path dep on the kernel.
+- **`flutter create` emits `.fromSeed(...)` dot-shorthand syntax** in main.dart which requires Dart 3.10+ language flag. Replaced the scaffold with a minimal LoomApp placeholder so analyze stays clean.
+- **Melos scripts need full commands, not `melos exec`.** Because `melos` isn't on PATH (it's a `dart pub global`-activated executable in `%APPDATA%\Local\Pub\Cache\bin\`), the `melos exec` subcommand inside scripts can't find `melos`. Workaround: scripts use `cd packages/<pkg> && <command>` directly. Trades parallel execution for working commands; fine for our two-package case.
+- **`lints` had to bump from 5 → 6** to coexist with `flutter_lints ^6` in loom_app. Inspected analysis_options; no rules from lints 5 that lints 6 dropped, no behavior diff observed.
+- **Windows Developer Mode is required for `flutter run`** when any plugin (e.g., file_picker) needs symlinks. Non-blocker for `flutter test` / `flutter analyze`; only matters when the user actually launches the app.
+
+**Decided:**
+- Workspace: melos monorepo, **not** Dart workspaces. Reason above. If Flutter ever lifts its meta / matcher / test_api pins, we revisit.
+- Kernel package name stays `loom` — every existing `import 'package:loom/loom.dart'` survives unchanged.
+- Kernel version bumped 0.1.0 → 0.2.0 to mark the workspace-era boundary.
+- Editor package: `loom_app`, version 0.1.0, scaffolded with windows / macos / linux platform shells, M3 theme, indigo seed color (placeholder).
+
+**Verification:**
+- `dart run melos run test:kernel` → 710 tests passed (no regression).
+- `dart run melos run analyze:kernel` → clean.
+- `dart run melos run analyze:app` → clean.
+- `dart run melos run format:check:kernel` → clean (131 files).
+- `dart run melos run format:check:app` → clean (2 files).
+- `dart run melos run test:app` → 1 placeholder test passed (LoomApp boots).
+
+**Next:** M11. Plan in `you-re-picking-up-work-validated-liskov.md`. First slice: shell + project loader + widget-tree outline + property inspector for string / int / double / bool values. Target ~35 new files in loom_app, three integration tests including a round-trip-through-UI test that drives the full stack and verifies disk diffs are single-line minimal.
 
 ### [2026-05-15] M10 series complete — type/reference analysis + codegen recognition
 **Worked on:** Closed the M10 series with M10.0a → M10.2c, eight sub-milestones across three arcs.

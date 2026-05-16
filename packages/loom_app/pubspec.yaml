@@ -1,0 +1,33 @@
+name: loom_app
+description: Loom visual editor — Flutter desktop application.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.6.0
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  loom:
+    path: ../loom
+  flutter_riverpod: ^2.6.1
+  file_picker: ^8.1.7
+  path: ^1.9.0
+  watcher: ^1.1.0
+  collection: ^1.18.0
+  dart_style: ^3.0.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+dependency_overrides:
+  meta: ^1.18.0
+
+
+flutter:
+  uses-material-design: true

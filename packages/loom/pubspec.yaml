@@ -1,0 +1,20 @@
+name: loom
+description: >-
+  Two-way visual editor kernel for Flutter widget source. AST<->model bridge
+  with byte-level round-trip fidelity. Pure Dart, headless, CI-friendly.
+version: 0.2.0
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  analyzer: ^13.0.0
+  path: ^1.9.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^6.0.0
+
+executables:
+  loom:

@@ -1,0 +1,45 @@
+name: loom_workspace
+
+packages:
+  - packages/*
+
+command:
+  bootstrap:
+    runPubGetInParallel: true
+
+scripts:
+  test:kernel:
+    run: cd packages/loom && dart test
+    description: Run the kernel test suite (packages/loom).
+
+  test:app:
+    run: cd packages/loom_app && flutter test
+    description: Run the editor test suite (packages/loom_app).
+
+  analyze:kernel:
+    run: cd packages/loom && dart analyze --fatal-infos --fatal-warnings
+    description: Analyze the kernel package.
+
+  analyze:app:
+    run: cd packages/loom_app && flutter analyze --fatal-infos --fatal-warnings
+    description: Analyze the editor package.
+
+  format:check:kernel:
+    run: cd packages/loom && dart format --output=none --set-exit-if-changed .
+    description: Verify the kernel package is dart-format clean.
+
+  format:check:app:
+    run: cd packages/loom_app && dart format --output=none --set-exit-if-changed .
+    description: Verify the editor package is dart-format clean.
+
+  format:kernel:
+    run: cd packages/loom && dart format .
+    description: Apply dart format to the kernel.
+
+  format:app:
+    run: cd packages/loom_app && dart format .
+    description: Apply dart format to the editor.
+
+  scout:
+    run: cd packages/loom && dart run tool/scout.dart
+    description: Run the kernel's scout tool against external Flutter corpora.
