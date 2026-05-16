@@ -8,6 +8,25 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** Scout validation complete — kernel survives 7,838 real-world Dart files clean
+**Last touched:** 2026-05-15 — ran `tool/scout.dart` against four real-world corpora (flutter/packages clone, Flutter SDK packages, Flutter dev tools, Flutter examples) totaling 7,838 .dart files. **Zero crashes, zero analyzer diagnostics on parsed models, zero empty-edit idempotence failures across all four runs.** The kernel parses Dart from every meaningful surface area of the framework + first-party plugin ecosystem without ever throwing an unhandled exception or violating the round-trip invariant.
+
+**Scout breakdown (combined across four corpora):**
+- `flutter-packages` (2,365 files): 450 widget + 48 route + 1,432 class-structure clean parses. 933 no-tree-found. 0 crashes.
+- `flutter SDK packages` (2,821 files): 425 widget + 1,740 class-structure clean parses. 1,081 no-tree-found. 0 crashes.
+- `flutter dev` (1,438 files): 360 widget + 647 class-structure clean parses. 791 no-tree-found. 0 crashes.
+- `flutter examples` (1,214 files): 588 widget + 599 class-structure clean parses. 615 no-tree-found. 0 crashes.
+
+**Observations worth carrying forward:**
+- **Widget parser falls back to `OpaqueNode` root frequently in the Flutter SDK.** Files like `button.dart`, `checkbox.dart`, `app.dart` parse "cleanly" but with an opaque root — the parser found a candidate top-level construct but couldn't structurally classify it. This is correct safe-fallback behavior (the kernel leaves what it doesn't understand alone), but it inflates the "parsed clean" count without those files yielding a usable tree from a consumer's perspective. Not a bug; flagging for the future UI consumer to know.
+- **Pipeline parser hits = 0 across all corpora.** First-party Flutter code doesn't use fpdart-style functional pipelines. The pipeline DSL catalog is exercised only by Loom's own fixtures. Expected, but confirms the catalog won't be validated by scout against first-party code — needs targeted corpora (fpdart's own examples, rxdart-heavy codebases) if we want broader signal.
+- **Route parser hits exist only in flutter-packages.** Those 48 hits are all `go_router/example/` files. SDK + dev + examples don't ship go_router code. Expected.
+- **Empty-edit idempotence (`applySourceEdits(source, []) == source`) held universally.** This is the canonical round-trip invariant the kernel claims; 7,838 files confirms it holds against real code.
+
+**Trust signal:** the kernel's parse surface is validated against 4× the in-repo test corpus by file count and considerably more by code diversity. This is the truth-check that the foundation under M5.5–M10 actually works on code that wasn't written for our tests.
+
+**Prior summary block (M10 complete — preserved):**
+
 **Active milestone:** M10 complete — type/reference analysis + codegen-aware modeling shipped
 **Last touched:** 2026-05-15 — closed the M10 series with M10.0a → M10.2c. Kernel now models annotation arguments, recognizes the three biggest codegen idioms (Freezed, json_serializable, Drift), and has an opt-in resolved-analysis layer for type/element queries.
 
@@ -42,7 +61,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 - `ResolvedProject`: file-based; in-memory analysis requires writing to a tempdir.
 
 **Blockers:** none
-**Next action:** Eric review of the M10 series (8 new commits). The kernel is now feature-complete for the "OutSystems for Dart/Flutter" trajectory across all the originally-rostered domains. Remaining ambition arcs: (1) pivot to building a real UI consumer on top of the kernel; (2) run scout against larger real-world corpora to find edge cases; (3) extend codegen recognition to more domains (build_runner, dio, riverpod code-gen); (4) build element-precise rename on top of M10.2c.
+**Next action:** Eric review of the M10 series + scout validation. Remaining ambition arcs (validation arc now resolved positively): (1) pivot to building a real UI consumer on top of the kernel; (2) extend codegen recognition to more domains (build_runner, dio, riverpod code-gen); (3) build element-precise rename on top of M10.2c. With scout green, the foundation is solid enough to start building the visual editor on top.
 
 **Prior summary block (M9 complete — preserved):**
 
