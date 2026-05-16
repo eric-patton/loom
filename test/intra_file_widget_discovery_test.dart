@@ -192,38 +192,6 @@ class _Card extends StatelessWidget {
       expect((children[1] as WidgetNode).className, equals('_Card'));
     });
 
-    test(
-        'user-defined widget args land as opaque properties (no slot inference)',
-        () {
-      // App FIRST: parser models App.build = MyCard(child: ..., title: ...).
-      const source = '''
-class App extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MyCard(child: const SizedBox(), title: 'hello');
-  }
-}
-
-class MyCard extends StatelessWidget {
-  const MyCard({super.key, required this.child, required this.title});
-  final Widget child;
-  final String title;
-  @override
-  Widget build(BuildContext context) => child;
-}
-''';
-      final model = parseWidgetTree(source);
-      final root = model.root as WidgetNode;
-      expect(root.className, equals('MyCard'));
-      // Empty WidgetSpec means no child slots → both args become properties.
-      expect(root.childSlots, isEmpty);
-      expect(root.properties.keys, containsAll(['child', 'title']));
-      // The child: arg becomes an opaque property (since not a known slot).
-      expect(root.properties['child'], isA<OpaquePropertyValue>());
-      // title: is a literal string, modeled as StringLiteralValue.
-      expect(root.properties['title'], isA<StringLiteralValue>());
-    });
-
     test('class without extends clause is not registered', () {
       const source = '''
 class App extends StatelessWidget {
@@ -240,6 +208,287 @@ class PlainHelper {
       final model = parseWidgetTree(source);
       // PlainHelper has no extends clause — NOT registered. Falls to opaque.
       expect(model.root, isA<OpaqueNode>());
+    });
+
+    test('slot inference: `Widget child` becomes single slot', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(child: const SizedBox());
+  }
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({required Widget child});
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('MyCard'));
+      expect(root.childSlots.containsKey('child'), isTrue);
+      expect(root.childSlots['child'], hasLength(1));
+      expect(root.childSlots['child']!.first, isA<WidgetNode>());
+      expect((root.childSlots['child']!.first as WidgetNode).className,
+          equals('SizedBox'));
+    });
+
+    test('slot inference: `this.child` resolves through field declaration',
+        () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(child: const SizedBox());
+  }
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({super.key, required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('MyCard'));
+      expect(root.childSlots.containsKey('child'), isTrue);
+      expect((root.childSlots['child']!.first as WidgetNode).className,
+          equals('SizedBox'));
+    });
+
+    test('slot inference: `List<Widget> children` becomes list slot', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyRow(
+      children: [
+        const SizedBox(),
+        const Padding(padding: EdgeInsets.all(4)),
+      ],
+    );
+  }
+}
+
+class MyRow extends StatelessWidget {
+  const MyRow({required this.children});
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => Row(children: children);
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('MyRow'));
+      expect(root.childSlots.containsKey('children'), isTrue);
+      expect(root.childSlots['children'], hasLength(2));
+      final first = root.childSlots['children']!.first as WidgetNode;
+      expect(first.className, equals('SizedBox'));
+    });
+
+    test('slot inference: nullable `Widget? child` still becomes a slot', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(child: const SizedBox());
+  }
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({this.child});
+  final Widget? child;
+  @override
+  Widget build(BuildContext context) => child ?? const SizedBox();
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.childSlots.containsKey('child'), isTrue);
+    });
+
+    test('slot inference: function-typed param is NOT classified as a slot',
+        () {
+      // Common builder pattern. `Widget Function(BuildContext)` is NOT a
+      // child slot — calling it requires a BuildContext at runtime.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyBuilder(builder: (ctx) => const SizedBox());
+  }
+}
+
+class MyBuilder extends StatelessWidget {
+  const MyBuilder({required this.builder});
+  final Widget Function(BuildContext) builder;
+  @override
+  Widget build(BuildContext context) => builder(context);
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('MyBuilder'));
+      // The builder param should NOT be a child slot.
+      expect(root.childSlots.containsKey('builder'), isFalse);
+      // It becomes an opaque property (the function literal).
+      expect(root.properties.containsKey('builder'), isTrue);
+      expect(root.properties['builder'], isA<OpaquePropertyValue>());
+    });
+
+    test('slot inference: typedef-named function type is NOT a slot', () {
+      // We can't resolve typedefs without semantic analysis. The conservative
+      // path: `WidgetBuilder` (typedef for `Widget Function(BuildContext)`)
+      // doesn't match `Widget` exactly, so it's NOT classified as a slot.
+      // This is intentional — false-positive on a builder would break edits.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyView(builder: (ctx) => const SizedBox());
+  }
+}
+
+class MyView extends StatelessWidget {
+  const MyView({required this.builder});
+  final WidgetBuilder builder;
+  @override
+  Widget build(BuildContext context) => builder(context);
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.childSlots.containsKey('builder'), isFalse);
+    });
+
+    test('slot inference: mixed slot + property params handled correctly', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(
+      title: 'hello',
+      child: const SizedBox(),
+      enabled: true,
+    );
+  }
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({required this.title, required this.child, this.enabled = true});
+  final String title;
+  final Widget child;
+  final bool enabled;
+  @override
+  Widget build(BuildContext context) => child;
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.childSlots.containsKey('child'), isTrue);
+      expect(root.childSlots.containsKey('title'), isFalse);
+      expect(root.childSlots.containsKey('enabled'), isFalse);
+      expect(root.properties['title'], isA<StringLiteralValue>());
+      expect(root.properties['enabled'], isA<BoolLiteralValue>());
+    });
+
+    test('slot inference: prefers unnamed constructor over named ones', () {
+      // The unnamed `MyCard(...)` constructor is what `MyCard(...)` calls
+      // resolve to. Named alternatives (`MyCard.empty()`) are inert here.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(child: const SizedBox());
+  }
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard.empty() : child = const SizedBox();
+  const MyCard({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.childSlots.containsKey('child'), isTrue);
+    });
+
+    test(
+        'multi-reference defense counts helpers inside user-widget inferred slots',
+        () {
+      // Regression: when slot inference gives a user widget a `child:` slot,
+      // a helper referenced inside that slot AND at another position counts
+      // as multi-reference — the counter must see both. Without this, the
+      // counter would treat the helper as safe → both call sites become
+      // MethodReferenceNode → in-memory edits diverge from reparsed source.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      MyCard(child: _helper()),
+      _helper(),
+    ]);
+  }
+
+  Widget _helper() => const SizedBox();
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      final children = root.childSlots['children']!;
+      // Two call sites for _helper. Counter must mark it multi-ref → both
+      // sites become OpaqueNode, not MethodReferenceNode.
+      final myCard = children[0] as WidgetNode;
+      final helperInSlot = myCard.childSlots['child']!.first;
+      final helperDirect = children[1];
+      expect(helperInSlot, isA<OpaqueNode>(),
+          reason: 'helper inside user-widget slot must be opaque (multi-ref)');
+      expect(helperDirect, isA<OpaqueNode>(),
+          reason: 'helper at direct position must be opaque (multi-ref)');
+    });
+
+    test('single helper reference inside user-widget slot resolves cleanly',
+        () {
+      // Counterpart: when a helper is referenced exactly once (inside a
+      // user-widget slot), the visitor SHOULD resolve it to a
+      // MethodReferenceNode. Verifies the recursion reaches inferred slots.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MyCard(child: _helper());
+  }
+
+  Widget _helper() => const SizedBox();
+}
+
+class MyCard extends StatelessWidget {
+  const MyCard({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => child;
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      final helperRef = root.childSlots['child']!.first;
+      expect(helperRef, isA<MethodReferenceNode>());
+      expect((helperRef as MethodReferenceNode).methodName, equals('_helper'));
     });
 
     test('round-trip invariant holds for user-defined widget at root', () {

@@ -68,6 +68,7 @@ WidgetTreeModel parseWidgetTree(String source) {
     final referenceCounts = _countMethodReferences(
       knownMethods: classMethods.keys.toSet(),
       methods: [buildMethod, ...classMethods.values],
+      localCatalog: localCatalog,
     );
     final safeMethods = <String, MethodDeclaration>{
       for (final entry in classMethods.entries)
@@ -108,8 +109,9 @@ WidgetTreeModel parseWidgetTree(String source) {
 Map<String, int> _countMethodReferences({
   required Set<String> knownMethods,
   required Iterable<MethodDeclaration> methods,
+  required Map<String, WidgetSpec> localCatalog,
 }) {
-  final counter = _ReferenceCounter(knownMethods);
+  final counter = _ReferenceCounter(knownMethods, localCatalog);
   for (final method in methods) {
     final expr = extractMethodReturnExpression(method);
     if (expr != null) {
@@ -120,9 +122,10 @@ Map<String, int> _countMethodReferences({
 }
 
 class _ReferenceCounter {
-  _ReferenceCounter(this._knownMethods);
+  _ReferenceCounter(this._knownMethods, this._localCatalog);
 
   final Set<String> _knownMethods;
+  final Map<String, WidgetSpec> _localCatalog;
   final Map<String, int> counts = <String, int>{};
 
   void _countAtWidgetPosition(Expression expr) {
@@ -150,7 +153,13 @@ class _ReferenceCounter {
     if (call == null) {
       return;
     }
-    final spec = WidgetCatalog.specFor(call.className);
+    // Match the visitor's lookup order: framework catalog wins, otherwise
+    // fall back to project-discovered widgets. Without this, helpers nested
+    // inside a user widget's inferred `child:` slot would be undercounted —
+    // the visitor would still create MethodReferenceNodes for them, leading
+    // to multi-reference divergence on edit.
+    final spec =
+        WidgetCatalog.specFor(call.className) ?? _localCatalog[call.className];
     if (spec == null) {
       return;
     }
