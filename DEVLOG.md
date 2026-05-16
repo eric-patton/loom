@@ -8,6 +8,47 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** Three-phase opaque-root attack — modeled-root rate jumped from 28% → 62% on SDK, 38% → 76% on apps
+**Last touched:** 2026-05-15 — followed scout-validation work with a layered fix for the biggest scout finding (`parseWidgetTree` returning `OpaqueNode` at root for a large fraction of real files). Three phases shipped in three commits, each building on the previous: intra-file user-widget recognition → slot inference from constructor signatures → framework catalog expansion against measured demand.
+
+**Combined impact (Phase 1 + Phase 2 + Phase 3):**
+
+| Corpus | Modeled root (before) | Modeled root (after) | Unknown-class Cat C (before → after) |
+|---|---:|---:|---:|
+| flutter-packages (459 build files) | 176 (38%) | **350 (76%)** | 193 → **19** (-90%) |
+| Flutter SDK (470 build files) | 131 (28%) | **291 (62%)** | 218 → **58** (-73%) |
+
+Zero scout crashes, zero idempotence failures across all three phases. 685 tests passing (was 664 at baseline, +21 new across this thread).
+
+**Phase 1: intra-file recognition** — `parseWidgetTree` now pre-scans the unit for `extends *Widget` classes and synthesizes an empty `WidgetSpec` for each. The visitor consults a `localCatalog` as a fallback after the framework catalog (framework-first lookup, so project classes can't shadow). Catches all user-defined widget classes referenced from the same file — including the `_LiteModeBody` / `_ClusteringBody` / `_PrivateBody` long tail that the static catalog can't know about. Recognition rule: superclass simple-name ends in `"Widget"` (catches all framework bases + `ConsumerWidget` / `HookWidget` / `ConsumerStatefulWidget` third-party conventions; excludes `State<X>`).
+
+**Phase 2: slot inference** — for each discovered widget, walks the primary (unnamed if present, else first named) constructor's parameters and infers child slots: `Widget` / `Widget?` → single, `List<Widget>` / `List<Widget>?` → list. Handles `this.fieldName` parameters by indexing the class's field declarations and resolving the param name to its field type. Conservative type matching only — typedef aliases (`WidgetBuilder`, `IndexedWidgetBuilder`) and explicit function types (`Widget Function(BuildContext)`) are NOT classified as slots, because false-positive on a builder callback would break visitor recursion. The multi-reference counter was also taught about `localCatalog` so helpers nested inside inferred slots count correctly — otherwise two same-helper call sites could each become `MethodReferenceNode` and diverge on edit.
+
+**Phase 3: framework catalog expansion** — added ~50 framework widgets to `WidgetCatalog` driven by what the opaque-root diagnostic actually surfaced (≥2 hits in either corpus) plus obvious companions. Coverage now includes: Stack/Wrap/IndexedStack/Flow/ListView/GridView/CustomScrollView/Positioned; Align/AspectRatio/ConstrainedBox/FittedBox/FractionallySizedBox/OverflowBox/Transform/Clip*/Opacity/Visibility/Offstage/AbsorbPointer/IgnorePointer/DecoratedBox/Card/Hero/KeepAlive; the implicit-animation family (Animated*); CustomPaint; Semantics/MergeSemantics/ExcludeSemantics/BlockSemantics; Focus/FocusScope/FocusableActionDetector/Listener/MouseRegion/TapRegion/NotificationListener/Actions/Shortcuts; inherited-widget scopes (Directionality/MediaQuery/Localizations/Theme/DefaultTextStyle/IconTheme/ScrollConfiguration/Root+UnmanagedRestorationScope); CupertinoApp/CupertinoPageScaffold/CupertinoTabScaffold; ElevatedButton/TextButton/OutlinedButton/FilledButton/Placeholder; UiKitView/AndroidView/HtmlElementView; Form. Builder-style widgets (LayoutBuilder, FutureBuilder, StreamBuilder) added as no-slot recognition only — the builder callback is the only slot and it's a function we model opaquely.
+
+**Diagnostic / measurement tool:** `tool/opaque_root_diagnostic.dart` classifies opaque-root cases into four buckets (non-call return, named-ctor return, unknown-class return, no-top-level-return). Reusable for future measurement. Reports top-N class names per bucket so the next catalog expansion can be data-driven.
+
+**What's left after these three phases:**
+
+| Cause (SDK) | Count | What it'd take to fix |
+|---|---:|---|
+| Cat C: unknown class | 58 | Long tail; another ~30 framework widgets would catch most. Diminishing returns. |
+| Cat A: non-call return | 57 | Bare `return result;` patterns. Would need data-flow tracking. Architectural. |
+| Cat D: no top-level return | 45 | `if (...) return X; return Y;` patterns. Parser could walk nested returns. |
+| Cat B: named-ctor | 19 | `MaterialApp.router` (43 in flutter-packages!) + scattered. Needs named-ctor catalog support. |
+
+The single highest-leverage remaining fix is **named-constructor support in the catalog** — would resolve the 43 `MaterialApp.router` cases that are the biggest single Cat B contributor across both corpora. Cat A / Cat D are structural and need design decisions (which return is canonical? do we descend into ternary branches?) — defer until the visual editor has a position to push back on.
+
+**New surface (this thread):**
+- `lib/src/parsing/project_widget_discovery.dart` — `discoverIntraFileWidgets(unit)` with constructor-based slot inference.
+- `lib/src/parsing/widget_tree_parser.dart` — calls discovery, passes `localCatalog` to both visitor and multi-reference counter.
+- `lib/src/parsing/widget_visitor.dart` — accepts `localCatalog`, framework-first lookup.
+- `lib/src/catalog/widget_catalog.dart` — Phase 3 expansion (~50 new entries).
+- `tool/opaque_root_diagnostic.dart` — reusable measurement tool.
+- `test/intra_file_widget_discovery_test.dart` — 21 tests covering discovery, slot inference, multi-reference safety, name-collision behavior.
+
+**Prior summary block (scout validation — preserved):**
+
 **Active milestone:** Intra-file widget discovery — opaque-root rate cut from 62% to 31% on real apps
 **Last touched:** 2026-05-15 — followed scout-validation work with a targeted fix for the most surprising scout finding: `parseWidgetTree` was returning `OpaqueNode` at the root for a large fraction of real files, masking actual widget structure behind the "safe fallback." Built a per-corpus diagnostic, classified the cause distribution, then shipped the highest-leverage fix.
 

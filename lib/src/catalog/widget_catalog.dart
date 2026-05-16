@@ -100,6 +100,244 @@ class WidgetCatalog {
     'FloatingActionButton': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
     ),
+    'ElevatedButton': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'TextButton': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'OutlinedButton': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FilledButton': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Placeholder': WidgetSpec(),
+    'UiKitView': WidgetSpec(),
+    'AndroidView': WidgetSpec(),
+    'HtmlElementView': WidgetSpec(),
+
+    // ---------------- Phase 3 catalog expansion ----------------
+    // Drawn from the opaque-root diagnostic against Flutter SDK +
+    // flutter-packages: every framework class that the diagnostic saw
+    // ≥2 times as a build()-return root, plus a handful of obvious
+    // companions (Wrap, Hero, Card, Align, etc.) used to compose those.
+
+    // Layout: stacks, lists, grids, sliver-shaped containers.
+    'Stack': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'IndexedStack': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'Wrap': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'Flow': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'ListView': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'GridView': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'CustomScrollView': WidgetSpec(
+      childSlots: {'slivers': ChildSlotShape.list},
+    ),
+    'Positioned': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Single-child layout wrappers (clipping, sizing, transformations).
+    'Align': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AspectRatio': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ConstrainedBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FittedBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FractionallySizedBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'OverflowBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Transform': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ClipRect': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ClipRRect': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ClipOval': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ClipPath': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Opacity': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Visibility': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Offstage': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AbsorbPointer': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'IgnorePointer': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'DecoratedBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Card': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Hero': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'KeepAlive': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Animation wrappers — the implicit-animation family. All take a
+    // single `child:` and drive properties around it.
+    'AnimatedContainer': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedPadding': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedAlign': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedOpacity': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedSize': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedPositioned': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'AnimatedSwitcher': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    // Builder-shaped animation widgets — `builder:` is a callback so it
+    // stays opaque; the optional `child:` is real and gets modeled.
+    'AnimatedBuilder': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'DualTransitionBuilder': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FutureBuilder': WidgetSpec(),
+    'StreamBuilder': WidgetSpec(),
+    'LayoutBuilder': WidgetSpec(),
+
+    // Painting / decoration.
+    'CustomPaint': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Accessibility and semantics.
+    'Semantics': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'MergeSemantics': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ExcludeSemantics': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'BlockSemantics': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Input / focus / pointer / shortcuts.
+    'Focus': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FocusScope': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'FocusableActionDetector': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Listener': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'MouseRegion': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'TapRegion': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'NotificationListener': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Actions': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Shortcuts': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Inherited-widget scopes that surround a child subtree.
+    'Directionality': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'MediaQuery': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Localizations': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Theme': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'DefaultTextStyle': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'IconTheme': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ScrollConfiguration': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'RootRestorationScope': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'UnmanagedRestorationScope': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+
+    // Cupertino app shell + navigation primitives.
+    'CupertinoApp': WidgetSpec(
+      childSlots: {'home': ChildSlotShape.single},
+    ),
+    'CupertinoPageScaffold': WidgetSpec(
+      childSlots: {
+        'child': ChildSlotShape.single,
+        'navigationBar': ChildSlotShape.single,
+      },
+    ),
+    'CupertinoTabScaffold': WidgetSpec(),
+    // Form composition.
+    'Form': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
   };
 
   static WidgetSpec? specFor(String className) => _known[className];
