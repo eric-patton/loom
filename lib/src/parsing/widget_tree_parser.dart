@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import '../catalog/widget_catalog.dart';
 import '../model/source_span.dart';
 import '../model/node.dart';
+import 'project_widget_discovery.dart';
 import 'widget_visitor.dart';
 
 /// Parses a Dart source string into a `WidgetTreeModel`.
@@ -22,6 +23,13 @@ WidgetTreeModel parseWidgetTree(String source) {
         message: error.message,
       ),
   ];
+
+  // Pre-pass: discover project-defined widget classes (anything extending
+  // a `*Widget` base) in this unit. The visitor consults this map as a
+  // fallback when the framework catalog doesn't recognize a class —
+  // turning `MyHomePage(...)` references into `WidgetNode` rather than
+  // `OpaqueNode`, even though we know nothing about its child slots.
+  final localCatalog = discoverIntraFileWidgets(unit);
 
   for (final declaration in unit.declarations) {
     if (declaration is! ClassDeclaration) {
@@ -72,7 +80,11 @@ WidgetTreeModel parseWidgetTree(String source) {
         'build() found but has no return expression',
       );
     }
-    final visitor = WidgetVisitor(source, classMethods: safeMethods);
+    final visitor = WidgetVisitor(
+      source,
+      classMethods: safeMethods,
+      localCatalog: localCatalog,
+    );
     return WidgetTreeModel(
       root: visitor.convertNode(root),
       diagnostics: diagnostics,

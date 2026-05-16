@@ -45,6 +45,7 @@ export 'src/parsing/directives_parser.dart';
 export 'src/parsing/file_symbols_parser.dart';
 export 'src/parsing/function_body_parser.dart';
 export 'src/parsing/pipeline_tree_parser.dart';
+export 'src/parsing/project_widget_discovery.dart';
 export 'src/parsing/route_tree_parser.dart';
 export 'src/parsing/widget_tree_parser.dart';
 export 'src/parsing/widget_visitor.dart' show ParseException;

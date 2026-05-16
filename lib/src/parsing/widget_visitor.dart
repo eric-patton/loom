@@ -18,11 +18,27 @@ export 'base_visitor.dart' show ParseException, extractMethodReturnExpression;
 /// M6.1 Phase 2: the shared scaffolding lives in [BaseVisitor]; this class
 /// adds the three widget-specific hooks (catalog lookup, `WidgetNode`
 /// construction, and `EdgeInsets.all` / `Color` property recognition).
+///
+/// `localCatalog` lets the parser inject project-discovered widget classes
+/// (intra-file pre-scan; see `project_widget_discovery.dart`). Lookups
+/// consult the static `WidgetCatalog` first, then fall through to
+/// `localCatalog` — so a project class can't accidentally shadow a
+/// framework widget of the same name.
 class WidgetVisitor extends BaseVisitor {
-  WidgetVisitor(super.source, {super.classMethods});
+  WidgetVisitor(
+    super.source, {
+    super.classMethods,
+    this.localCatalog = const <String, WidgetSpec>{},
+  });
+
+  /// Project-defined widget classes discovered in the same compilation
+  /// unit. Empty `WidgetSpec` per entry — recognition only, no slot
+  /// inference yet.
+  final Map<String, WidgetSpec> localCatalog;
 
   @override
-  CatalogSpec? specFor(String className) => WidgetCatalog.specFor(className);
+  CatalogSpec? specFor(String className) =>
+      WidgetCatalog.specFor(className) ?? localCatalog[className];
 
   @override
   ModelNode buildModeledNode({

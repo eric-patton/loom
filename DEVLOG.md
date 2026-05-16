@@ -8,6 +8,44 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** Intra-file widget discovery — opaque-root rate cut from 62% to 31% on real apps
+**Last touched:** 2026-05-15 — followed scout-validation work with a targeted fix for the most surprising scout finding: `parseWidgetTree` was returning `OpaqueNode` at the root for a large fraction of real files, masking actual widget structure behind the "safe fallback." Built a per-corpus diagnostic, classified the cause distribution, then shipped the highest-leverage fix.
+
+**Root-cause breakdown (before fix), from `tool/opaque_root_diagnostic.dart`:**
+- **flutter-packages** (459 files with `build()`): 176 modeled (38%), **193 unknown-class** (42%), 57 named-ctor, 24 non-call, 9 no-return.
+- **Flutter SDK packages** (470 files with `build()`): 131 modeled (28%), **218 unknown-class** (46%), 19 named-ctor, 57 non-call, 45 no-return.
+
+The dominant cause in BOTH was "build returns a constructor call to a class not in the static catalog" — and the long tail was almost entirely user-defined widget classes (`_ClusteringBody`, `_LiteModeBody`, `MapUiBody`, etc.) the catalog couldn't possibly know about.
+
+**Fix shipped:** `discoverIntraFileWidgets(unit)` — a pre-pass over the compilation unit that finds every class with an `extends *Widget` superclass and synthesizes an empty `WidgetSpec` for it. The visitor consults this `localCatalog` as a fallback after `WidgetCatalog`. Recognition only — no slot inference yet, so user widgets' constructor args land as opaque properties. The lookup order (framework catalog → local catalog) ensures a project class can't accidentally shadow a framework widget of the same name.
+
+**Recognition rule:** the superclass simple-name ends in `"Widget"`. Catches all framework bases (`StatelessWidget`, `StatefulWidget`, `InheritedWidget`, all `*RenderObjectWidget` variants, `ProxyWidget`, `PreferredSizeWidget`) plus common third-party conventions (`ConsumerWidget`, `HookWidget`, `ConsumerStatefulWidget`, etc.). Critically excludes `State<X>` since "State" doesn't end in "Widget" — so the State half of a StatefulWidget pair is not registered (only the StatefulWidget itself).
+
+**After fix:**
+- **flutter-packages**: 318 modeled (69%, up from 38%). Unknown-class dropped from 193 → **51** (-74%).
+- **Flutter SDK packages**: 159 modeled (34%, up from 28%). Unknown-class dropped from 218 → 190 (-13%).
+
+The asymmetry is exactly the validation we'd want: app code (many widgets per project, mostly user-defined) sees a huge win; framework code (one widget per file, composes other framework widgets) sees a smaller win that's entirely accounted for by the few user-defined private widgets in the SDK.
+
+**Remaining Cat C in the SDK** (~190 cases) is overwhelmingly framework widgets the static catalog doesn't list yet: `Semantics` (25), `Stack` (11), `CustomPaint` (7), `Directionality` (6), `Focus` (6), `AnimatedBuilder` (6), `MouseRegion` (5), `DecoratedBox` (5), and so on. Adding the top ~25 to `WidgetCatalog` would resolve nearly all remaining SDK opaque-roots. That's the natural next milestone.
+
+**Limitations carried forward:**
+- **No slot inference for user widgets** — their args (including `child:` / `children:`) land as opaque properties, so visual-editor child-tree composition won't work for project widgets yet. Phase 2 of this thread.
+- **No transitive recognition** — a class extending `_PrivateBase` where `_PrivateBase extends StatelessWidget` is missed. Direct match only.
+- **Intra-file only** — a public widget imported from another project file is not yet recognized. Phase 3 (cross-file) needs `ProjectModel` integration.
+- **Named-constructor calls still opaque** — `MaterialApp.router(...)` (43 cases in flutter-packages, single biggest Cat B contributor) still goes to OpaqueNode. The parser explicitly rejects named constructors.
+- **Cat A and Cat D still unhandled** — bare-variable returns (`return result;`), ternary returns, no-top-level-return patterns. Deferred — these need behavior decisions the kernel doesn't have yet.
+
+**New surface:**
+- `lib/src/parsing/project_widget_discovery.dart` — `discoverIntraFileWidgets(unit)` function.
+- `lib/src/parsing/widget_tree_parser.dart` — calls discovery before constructing the visitor.
+- `lib/src/parsing/widget_visitor.dart` — accepts `localCatalog`, falls back to it in `specFor`.
+- `tool/opaque_root_diagnostic.dart` — reusable diagnostic tool that categorizes opaque-root causes.
+- `test/intra_file_widget_discovery_test.dart` — 12 new tests.
+- 676 tests green (was 664, +12 new).
+
+**Prior summary block (scout validation — preserved):**
+
 **Active milestone:** Scout validation complete — kernel survives 7,838 real-world Dart files clean
 **Last touched:** 2026-05-15 — ran `tool/scout.dart` against four real-world corpora (flutter/packages clone, Flutter SDK packages, Flutter dev tools, Flutter examples) totaling 7,838 .dart files. **Zero crashes, zero analyzer diagnostics on parsed models, zero empty-edit idempotence failures across all four runs.** The kernel parses Dart from every meaningful surface area of the framework + first-party plugin ecosystem without ever throwing an unhandled exception or violating the round-trip invariant.
 
