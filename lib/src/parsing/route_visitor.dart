@@ -23,6 +23,7 @@ class RouteVisitor extends BaseVisitor {
   @override
   ModelNode buildModeledNode({
     required String className,
+    required String? namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required Map<String, ListSlotStyle> childSlotStyles,
@@ -31,6 +32,7 @@ class RouteVisitor extends BaseVisitor {
   }) {
     return RouteNode(
       className: className,
+      namedConstructor: namedConstructor,
       properties: properties,
       childSlots: childSlots,
       childSlotStyles: childSlotStyles,

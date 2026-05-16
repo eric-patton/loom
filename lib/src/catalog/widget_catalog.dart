@@ -34,6 +34,24 @@ class WidgetCatalog {
     ),
     'SizedBox': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
+      namedConstructors: {
+        // All SizedBox named constructors take an optional `child:` Widget.
+        // They differ from the unnamed constructor in how they derive width/
+        // height (from a Size, by expanding to parent, by collapsing to 0,
+        // etc.) but the slot shape is identical.
+        'expand': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+        'shrink': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+        'square': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+        'fromSize': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+      },
     ),
     'Container': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
@@ -57,6 +75,14 @@ class WidgetCatalog {
     // App scaffolding.
     'MaterialApp': WidgetSpec(
       childSlots: {'home': ChildSlotShape.single},
+      namedConstructors: {
+        // `MaterialApp.router(...)` is the GoRouter-canonical app shell.
+        // It takes `routerConfig:` / `routerDelegate:` / etc. instead of
+        // `home:` — no widget-valued slots that the kernel models. The
+        // entry exists so the parser classifies the call as a `WidgetNode`
+        // (modeled root) rather than `OpaqueNode`.
+        'router': WidgetSpec(),
+      },
     ),
     'Scaffold': WidgetSpec(
       childSlots: {
@@ -92,7 +118,15 @@ class WidgetCatalog {
     ),
 
     // Leaves and buttons.
-    'Text': WidgetSpec(positionalToProperty: <int, String>{0: 'data'}),
+    'Text': WidgetSpec(
+      positionalToProperty: <int, String>{0: 'data'},
+      namedConstructors: {
+        // `Text.rich(textSpan)` takes an `InlineSpan` (not a Widget) as
+        // its first positional. The kernel can recognize it but the
+        // textSpan stays as an opaque property.
+        'rich': WidgetSpec(),
+      },
+    ),
     'Icon': WidgetSpec(positionalToProperty: <int, String>{0: 'icon'}),
     'IconButton': WidgetSpec(
       childSlots: {'icon': ChildSlotShape.single},
@@ -138,9 +172,29 @@ class WidgetCatalog {
     ),
     'ListView': WidgetSpec(
       childSlots: {'children': ChildSlotShape.list},
+      namedConstructors: {
+        // `ListView.builder` / `.separated` / `.custom` use builder
+        // callbacks (`itemBuilder:`, `separatorBuilder:`, `childrenDelegate:`)
+        // which the kernel models opaquely — no `children:` slot to wire up.
+        'builder': WidgetSpec(),
+        'separated': WidgetSpec(),
+        'custom': WidgetSpec(),
+      },
     ),
     'GridView': WidgetSpec(
       childSlots: {'children': ChildSlotShape.list},
+      namedConstructors: {
+        // `.count` and `.extent` keep the `children:` list; `.builder`
+        // and `.custom` use builder callbacks.
+        'count': WidgetSpec(
+          childSlots: {'children': ChildSlotShape.list},
+        ),
+        'extent': WidgetSpec(
+          childSlots: {'children': ChildSlotShape.list},
+        ),
+        'builder': WidgetSpec(),
+        'custom': WidgetSpec(),
+      },
     ),
     'CustomScrollView': WidgetSpec(
       childSlots: {'slivers': ChildSlotShape.list},
@@ -309,6 +363,12 @@ class WidgetCatalog {
     ),
     'DefaultTextStyle': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
+      namedConstructors: {
+        // `.merge` wraps a child with merged text-style overrides.
+        'merge': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+      },
     ),
     'IconTheme': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},

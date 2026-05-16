@@ -25,6 +25,7 @@ class CatalogSpec {
   const CatalogSpec({
     this.childSlots = const <String, ChildSlotShape>{},
     this.positionalToProperty = const <int, String>{},
+    this.namedConstructors = const <String, CatalogSpec>{},
   });
 
   /// Named arguments that hold child nodes, and the shape of each slot.
@@ -32,4 +33,13 @@ class CatalogSpec {
 
   /// Maps positional argument index to model property name.
   final Map<int, String> positionalToProperty;
+
+  /// Per-named-constructor sub-specs. A call to `Class.foo(...)` looks up
+  /// the parent class's spec, then consults `namedConstructors['foo']`.
+  /// Each sub-spec is itself a full `CatalogSpec` — named constructors
+  /// typically have a different argument shape than the unnamed
+  /// constructor (e.g. `MaterialApp.router` takes `routerConfig:` instead
+  /// of `home:`). Empty by default; only catalogs that explicitly model
+  /// named-constructor variants populate this map.
+  final Map<String, CatalogSpec> namedConstructors;
 }

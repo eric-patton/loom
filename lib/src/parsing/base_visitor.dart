@@ -122,8 +122,13 @@ abstract class BaseVisitor {
   /// Instantiates the concrete `ModelNode` subclass for a modeled
   /// constructor call. Subclasses construct `WidgetNode`, `RouteNode`,
   /// etc. with the collected properties + childSlots.
+  ///
+  /// [namedConstructor] is non-null when the call was `Class.named(...)` —
+  /// the subclass must preserve it on the produced node so emission can
+  /// re-render the named-ctor form.
   ModelNode buildModeledNode({
     required String className,
+    required String? namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required Map<String, ListSlotStyle> childSlotStyles,
@@ -168,14 +173,24 @@ abstract class BaseVisitor {
     if (call == null) {
       return opaqueNode(expr);
     }
-    if (call.namedConstructor != null) {
-      return opaqueNode(expr);
-    }
-    final spec = specFor(call.className);
+    final spec = _resolveSpec(call);
     if (spec == null) {
       return opaqueNode(expr);
     }
     return _buildModeledFromCall(call, spec);
+  }
+
+  /// Resolves the `CatalogSpec` for [call] across both unnamed-ctor and
+  /// named-ctor shapes. For `Class(...)` it's a direct catalog lookup;
+  /// for `Class.named(...)` we first find the parent class's spec, then
+  /// consult its `namedConstructors` map. Returns null when neither
+  /// shape is recognized (the caller falls back to `OpaqueNode`).
+  CatalogSpec? _resolveSpec(CallInfo call) {
+    if (call.namedConstructor == null) {
+      return specFor(call.className);
+    }
+    final parent = specFor(call.className);
+    return parent?.namedConstructors[call.namedConstructor!];
   }
 
   ModelNode _buildMethodReference(
@@ -259,6 +274,7 @@ abstract class BaseVisitor {
 
     return buildModeledNode(
       className: call.className,
+      namedConstructor: call.namedConstructor,
       properties: properties,
       childSlots: childSlots,
       childSlotStyles: childSlotStyles,

@@ -8,6 +8,44 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** Named-constructor catalog + model support — opaque-root rate now 13% on apps, 37% on SDK
+**Last touched:** 2026-05-15 — fourth phase of the opaque-root attack. The `MaterialApp.router(...)` form alone was responsible for 43 of the remaining 57 Cat B (named-ctor) cases in flutter-packages. Built proper model + serializer support for named constructors, then added catalog entries for the common variants.
+
+**What landed:**
+- **Model**: `WidgetNode` / `RouteNode` / `PipelineNode` each gained a nullable `namedConstructor: String?` field — null for plain `Class(...)` calls, set to the constructor name for `Class.named(...)` calls.
+- **CatalogSpec**: gained `namedConstructors: Map<String, CatalogSpec>` — per-parent map of named-ctor sub-specs. Each sub-spec is a fully-featured `CatalogSpec` (its own slots, positionals, and recursively, its own namedConstructors).
+- **BaseVisitor**: `convertNode` now does composite spec resolution — when a call has a named constructor, look up the parent's spec first, then consult its `namedConstructors` map. Unknown named ctors still fall to `OpaqueNode` exactly as before, so the change is conservative.
+- **ConstructorCallSerializer**: emits `Class.named(args)` when `namedConstructor` is set, `Class(args)` otherwise. Round-trip preserved.
+- **NodePath / `withProperty` / `_modifySlot`**: four widget-reconstruction sites that previously dropped any new field were updated to preserve `namedConstructor`. Caught by the existing random-property-edit round-trip test — without the fix, edits to a `ListView.builder` property silently dropped the `.builder` part and reparse-equivalence failed.
+- **Catalog entries**: `MaterialApp.router`, `SizedBox.expand` / `.shrink` / `.square` / `.fromSize`, `ListView.builder` / `.separated` / `.custom`, `GridView.count` / `.extent` / `.builder` / `.custom`, `Text.rich`, `DefaultTextStyle.merge`. Each carries the appropriate slot shape — `.expand/.shrink/.square/.fromSize/.merge` keep their `child:` slot; `GridView.count/.extent` keep `children:`; builder/router variants have empty specs (their builder callbacks model opaquely).
+
+**Combined impact across all four opaque-root phases (vs. the baseline from scout validation):**
+
+| Corpus | Modeled root (baseline) | After Phase 1+2 | After Phase 3 | After Phase 4 (now) |
+|---|---:|---:|---:|---:|
+| flutter-packages | 176 (38%) | 318 (69%) | 350 (76%) | **397 (87%)** |
+| Flutter SDK | 131 (28%) | 159 (34%) | 291 (62%) | **297 (63%)** |
+
+| Corpus | Cat B (baseline → final) | Reduction |
+|---|---:|---:|
+| flutter-packages | 57 → **10** | -82% |
+| Flutter SDK | 19 → **13** | -32% |
+
+Most of the SDK's remaining Cat B is unfixable without semantic analysis: `widget.builder`, `_buffer.toString`, `widget.layoutBuilder` are instance method calls on `this.widget`/local references that syntactically look identical to named ctors. The parser correctly punts these to opaque (the receiver lower-cased doesn't match any class in the catalog).
+
+**Tests:** 696 tests green (was 685, +11 new in `test/named_constructor_catalog_test.dart` covering recognition, slot inference per ctor variant, false-positive defense against instance-method-call shapes, and round-trip preservation through the serializer). Random-property-edit round-trip test caught the `withProperty` field-drop bug as designed.
+
+**Scout:** still 0 crashes, 0 idempotence failures, 0 analyzer diagnostics across 2,365 flutter-packages files.
+
+**What's still left:**
+- **Cat C: framework long tail** — 19 in flutter-packages, 58 in SDK. Diminishing returns from further catalog expansion.
+- **Cat A: bare-variable / ternary / prefixed-identifier returns** — 24 in flutter-packages, 57 in SDK. Architectural; needs data-flow tracking or a design decision on ternary descent. Defer.
+- **Cat D: no-top-level-return** — 9 in flutter-packages, 45 in SDK. Parser could walk nested returns inside if-blocks. Smaller fix but still wants a "which return is canonical" decision.
+
+The opaque-root attack's measurable runway is essentially exhausted on these two corpora. **Next foundational targets** would either be: (a) Cat D parser fix (single milestone, smallest remaining wedge), (b) pivot to project-wide widget discovery (Phase 3 of the original intra-file plan — cross-file user-widget recognition via `ProjectModel`), or (c) actually start building the visual-editor UI consumer now that the kernel surface is this strong.
+
+**Prior summary block (three-phase opaque-root attack — preserved):**
+
 **Active milestone:** Three-phase opaque-root attack — modeled-root rate jumped from 28% → 62% on SDK, 38% → 76% on apps
 **Last touched:** 2026-05-15 — followed scout-validation work with a layered fix for the biggest scout finding (`parseWidgetTree` returning `OpaqueNode` at root for a large fraction of real files). Three phases shipped in three commits, each building on the previous: intra-file user-widget recognition → slot inference from constructor signatures → framework catalog expansion against measured demand.
 

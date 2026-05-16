@@ -131,6 +131,7 @@ class OpaqueNode extends ModelNode {
 class WidgetNode extends ModelNode {
   WidgetNode({
     required this.className,
+    this.namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required this.sourceSpan,
@@ -146,6 +147,12 @@ class WidgetNode extends ModelNode {
 
   /// Class name of the constructor invoked — e.g. `'Column'`.
   final String className;
+
+  /// Named constructor (if any) — e.g. `'router'` for `MaterialApp.router(...)`
+  /// or `'expand'` for `SizedBox.expand(...)`. Null for unnamed constructors,
+  /// which is the common case. Required for round-trip emission of named-ctor
+  /// calls.
+  final String? namedConstructor;
 
   /// Modeled literal properties keyed by the named-argument label they came
   /// from. Children are NOT in this map; they live in `childSlots`.
@@ -245,6 +252,7 @@ class ParseDiagnostic {
 class RouteNode extends ModelNode {
   RouteNode({
     required this.className,
+    this.namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required this.sourceSpan,
@@ -260,6 +268,11 @@ class RouteNode extends ModelNode {
 
   /// Class name of the constructor invoked — e.g. `'GoRouter'`, `'GoRoute'`.
   final String className;
+
+  /// Named constructor (if any). Null for unnamed constructors. Mirrors
+  /// `WidgetNode.namedConstructor` so the constructor-call serializer can
+  /// emit either form uniformly across domains.
+  final String? namedConstructor;
 
   /// Modeled literal properties keyed by their named-argument label.
   /// Function-literal arguments like `builder: (ctx, state) => …` land in
@@ -333,6 +346,7 @@ class RouteTreeModel {
 class PipelineNode extends ModelNode {
   PipelineNode({
     required this.className,
+    this.namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required this.sourceSpan,
@@ -348,6 +362,9 @@ class PipelineNode extends ModelNode {
 
   /// Class name of the constructor invoked — e.g. `'Pipeline'`, `'Branch'`.
   final String className;
+
+  /// Named constructor (if any). Null for unnamed constructors.
+  final String? namedConstructor;
 
   final Map<String, PropertyValue> properties;
   final Map<String, List<ModelNode>> childSlots;

@@ -235,8 +235,7 @@ class MyCard extends StatelessWidget {
           equals('SizedBox'));
     });
 
-    test('slot inference: `this.child` resolves through field declaration',
-        () {
+    test('slot inference: `this.child` resolves through field declaration', () {
       const source = '''
 class App extends StatelessWidget {
   @override

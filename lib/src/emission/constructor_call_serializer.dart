@@ -23,6 +23,7 @@ class ConstructorCallSerializer {
 
   static String serialize({
     required String className,
+    String? namedConstructor,
     required Map<String, PropertyValue> properties,
     required Map<String, List<ModelNode>> childSlots,
     required StyleHints styleHints,
@@ -36,6 +37,10 @@ class ConstructorCallSerializer {
       buf.write('new ');
     }
     buf.write(className);
+    if (namedConstructor != null) {
+      buf.write('.');
+      buf.write(namedConstructor);
+    }
     buf.write('(');
 
     final parts = <String>[];

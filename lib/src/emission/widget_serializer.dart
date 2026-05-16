@@ -33,14 +33,24 @@ class WidgetSerializer {
       };
 
   static String _serializeWidget(WidgetNode node) {
-    final spec = WidgetCatalog.specFor(node.className);
-    if (spec == null) {
+    final parentSpec = WidgetCatalog.specFor(node.className);
+    if (parentSpec == null) {
       throw ArgumentError(
         'No catalog entry for ${node.className}; cannot serialize',
       );
     }
+    final spec = node.namedConstructor == null
+        ? parentSpec
+        : parentSpec.namedConstructors[node.namedConstructor!];
+    if (spec == null) {
+      throw ArgumentError(
+        'No catalog entry for ${node.className}.${node.namedConstructor}; '
+        'cannot serialize',
+      );
+    }
     return ConstructorCallSerializer.serialize(
       className: node.className,
+      namedConstructor: node.namedConstructor,
       properties: node.properties,
       childSlots: node.childSlots,
       styleHints: node.styleHints,

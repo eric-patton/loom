@@ -205,6 +205,7 @@ WidgetNode _withProperty(
     };
     return WidgetNode(
       className: node.className,
+      namedConstructor: node.namedConstructor,
       properties: newProps,
       childSlots: node.childSlots,
       childSlotStyles: node.childSlotStyles,
@@ -324,6 +325,7 @@ WidgetNode _modifySlot(
     };
     return WidgetNode(
       className: node.className,
+      namedConstructor: node.namedConstructor,
       properties: node.properties,
       childSlots: newSlots,
       childSlotStyles: node.childSlotStyles,

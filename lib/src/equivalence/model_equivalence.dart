@@ -70,6 +70,9 @@ bool _widgetNodesEqual(WidgetNode a, WidgetNode b) {
   if (a.className != b.className) {
     return false;
   }
+  if (a.namedConstructor != b.namedConstructor) {
+    return false;
+  }
   if (a.styleHints != b.styleHints) {
     return false;
   }
