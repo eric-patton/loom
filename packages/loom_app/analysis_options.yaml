@@ -9,6 +9,14 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Pinned fixture source consumed by the kernel as parse-input, not
+    # built or compiled. Lints for unused fields / non-final captures
+    # would force edits that defeat the round-trip invariant the
+    # integration tests rely on.
+    - test/fixtures/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

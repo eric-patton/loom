@@ -1,0 +1,12 @@
+name: m11_counter_app
+description: M11 acceptance fixture — counter app for round-trip property edit tests. Pinned source; do not auto-format. Do not run `flutter pub get` against this; it is a parse-only target consumed by `package:loom`.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.6.0
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter

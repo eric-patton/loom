@@ -8,19 +8,27 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M10.5 — workspace conversion. Monorepo restructure laying groundwork for the UI consumer (M11 → M16).
-**Last touched:** 2026-05-15 — repo restructured into a melos-orchestrated two-package monorepo. Kernel moved to `packages/loom/` (lib + bin + test + tool + analysis_options + pubspec, all relocated via `git mv` so history is preserved). New `packages/loom_app/` scaffolded as a Flutter desktop app (Windows / macOS / Linux targets) with a placeholder `LoomApp`. Root holds `pubspec.yaml` (alias only — no shared resolution), `melos.yaml` (orchestrator), DEVLOG / PROJECT_SPEC / README, and `.gitignore`.
+**Active milestone:** M11 — shell + project loader + widget-tree outline + property editor. First Loom editor surface to consume the kernel in-process.
+**Last touched:** 2026-05-16 — M11 shipped. `packages/loom_app/` boots a three-pane shell (left toolbox / center editor surface / right pane with Interface+Outline tabs above a property inspector), opens a project via a file picker, classifies each `.dart` file (modeled / opaque-root / no-build / parse-error), renders a widget-tree outline for the active document, and edits string / int / double / bool properties on the selected node with byte-minimal diffs that round-trip through `EditPlanner.propertyEdit` + atomic save.
 
-**Why a melos monorepo, not Dart workspaces:** tried Dart workspaces first; shared resolution forced Flutter SDK's pins (`meta 1.17`, `matcher 0.12.19`, `test_api 0.7.10`) onto the kernel side, breaking analyzer 13. Dropped `resolution: workspace` from both packages; each has its own `pubspec.lock`. Melos 6.3+ orchestrates without requiring workspaces (melos 7 requires them, so we're pinned to ^6.3.0).
+**Shipped surface:**
+- ~30 new files under `packages/loom_app/lib/src/` — services (5), state (8 incl. `WorkspaceController`), shell (8), right pane (4), surfaces/widget_outline (3), inspectors (5), app bootstrap (2).
+- 15 Riverpod providers: `kernelAdapterProvider`, `fileSystemServiceProvider`, `widgetFilterServiceProvider`, `formatServiceProvider` (M12 stub), `editHistoryServiceProvider` (M12 stub), `projectControllerProvider` (Notifier), `projectModelProvider`, `projectWidgetIndexProvider`, `openDocumentsProvider` (Notifier), `activeDocumentUriProvider`, `widgetTreeForDocumentProvider` (autodispose family), `selectedNodePathProvider`, `rightTopTabProvider`, `toolboxItemsProvider`, `workspaceControllerProvider`.
+- One pinned fixture at `packages/loom_app/test/fixtures/m11_counter_app/` — 3 files (`pubspec.yaml`, `lib/main.dart`, `lib/widgets/counter.dart`). Integration tests copy this fixture to a temp dir per test so the repo's pristine copy never gets mutated.
+- 38 new app-side tests (5 unit + 4 widget + 3 integration). The load-bearing one: `multi_property_edits_round_trip_test.dart` drives 100 randomized property edits through `WorkspaceController.applyPropertyEdit` and verifies each result re-parses cleanly. `round_trip_through_ui_test.dart` drives one edit through the full UI stack (outline-selection → inspector TextField → focus-loss commit → atomic save) as the acceptance demo.
 
-**Hard-won workarounds:**
-- `dependency_overrides: meta: ^1.18.0` in `packages/loom_app/pubspec.yaml` — bridges the Flutter SDK's pin to analyzer 13's minimum. Flutter still runs with meta 1.18.
-- `lints` bumped to `^6.0.0` in kernel pubspec (was `^5.0.0`) — `flutter_lints ^6.0.0` brought in by the app made the constraint clash unavoidable.
-- Replaced the scaffolded `main.dart` (used Dart 3.10+ `dot-shorthands` syntax that requires a non-default language flag) with a minimal `LoomApp` placeholder.
-- Melos scripts use the `cd packages/<pkg> && <cmd>` form instead of `melos exec`, because `melos` isn't on PATH — we invoke it via `dart run melos`, and `melos exec` triggers a nested `melos` lookup that then fails.
-- File-picker plugin's symlink processing on Windows requires Developer Mode for `flutter run` — non-blocker for tests; the user enables this when they want to launch the actual app.
+**Single seam to the kernel:** every file under `packages/loom_app/lib/src/` that needs kernel types imports `services/kernel_adapter.dart`, which re-exports `package:loom/loom.dart` and adds a `KernelAdapter` class wrapping the verbs (`buildProject` / `buildWidgetIndex` / `parseWidgetTreeFor` / `applyPropertyEdit`). Nothing structural enforces this — it's by convention so a future IPC migration is a single-file change.
 
-**Verification:** `dart run melos run test:kernel` reports **710 tests passed** (unchanged from Phase 5; the move did not break anything). `analyze:kernel`, `analyze:app`, `format:check:kernel`, `format:check:app` all clean. Placeholder `widget_test.dart` in loom_app passes.
+**Hard-won lessons:**
+- **`testWidgets` + real disk I/O = wrap in `tester.runAsync`.** Flutter's `AutomatedTestWidgetsFlutterBinding` runs callbacks inside a FakeAsync zone, and a `Future` returned from `dart:io` (or anything that uses real timers) never completes there. Discovered when a test hung for 10 minutes opening a temp-dir-copied fixture. The fix is a helper `openFixtureSessionForWidgets(tester)` that wraps the initial project-open, plus `runAsync` around every `applyPropertyEdit` call in integration tests, and around the focus-loss step in the UI round-trip test.
+- **`ValueKey(span)` on inspector editors is the cache-invalidation lever.** Each property's editor is keyed by `(typeTag, span.offset, span.length)`. After an edit, source bytes shift and the same property now sits at a different span — the editor remounts, `_lastCommittedText` re-initializes from the post-edit value, and the next edit's diff against `widget.value.value` is correct. Without this, the second edit's TextField holds stale state and `_commit` no-ops.
+- **`test/fixtures/**` must be excluded from analyze.** The fixture's `_count` field is intentionally unused (parse-only target). Added `analyzer.exclude: [test/fixtures/**]` to `packages/loom_app/analysis_options.yaml`.
+
+**Verification (this session):**
+- `dart run melos run test:kernel` → 736 passed (kernel side concurrent edits by a parallel session added tests).
+- `dart run melos run test:app` → 38 passed.
+- `dart run melos run analyze:kernel` / `analyze:app` → clean.
+- `dart run melos run format:check:kernel` / `format:check:app` → clean.
 
 **Repo shape now:**
 ```
@@ -29,14 +37,17 @@ loom/
 ├── melos.yaml            (orchestrator scripts)
 ├── DEVLOG.md  PROJECT_SPEC.md  README.md
 └── packages/
-    ├── loom/             (kernel — was the root; now lives here)
-    │   ├── pubspec.yaml  bin/  lib/  test/  tool/  analysis_options.yaml
-    └── loom_app/         (Flutter desktop editor — M11 begins here)
-        ├── pubspec.yaml  lib/main.dart  test/widget_test.dart
-        └── windows/  macos/  linux/
+    ├── loom/             (kernel — 736 tests)
+    └── loom_app/         (Flutter desktop editor — M11)
+        ├── lib/main.dart
+        ├── lib/src/      (app bootstrap, services, state, shell, surfaces, inspectors)
+        └── test/         (fixtures/, helpers/, unit/, widget/, integration/)
 ```
 
-**Next:** start M11 — shell + project loader + widget-tree outline + property inspector. Plan lives in the user's plans folder (`you-re-picking-up-work-validated-liskov.md`). M10.5 is a one-shot structural change; M11 is the first milestone of real editor work and will define the kernel's first non-CLI consumer.
+**Next:** M12 — undo/redo via the `EditHistoryService` (currently a no-op stub), `dart_style` integration as an opt-in formatter, multi-tab polish (dirty-prompt on close, reopen-on-startup).
+
+**Prior summary block (M10.5 — workspace conversion):**
+M10.5 restructured the repo into a melos-orchestrated two-package monorepo. Kernel moved to `packages/loom/` (history preserved via `git mv`); new `packages/loom_app/` scaffolded as a Flutter desktop app. Dart workspaces were tried first but couldn't coexist with Flutter SDK pins (`meta 1.17`, `matcher 0.12.19`, `test_api 0.7.10` clashed with analyzer 13's requirements); dropped to per-package `pubspec.lock` with melos 6.3+ orchestrating. Single `dependency_overrides: meta: ^1.18.0` bridges Flutter SDK → analyzer 13 in the app's pubspec. Melos scripts use `cd packages/<pkg> && <cmd>` form (avoiding `melos exec` which fails when melos isn't on PATH).
 
 **Prior summary block (Phase 5 — cross-file widget discovery — preserved):**
 
@@ -888,6 +899,19 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-16] M11 — visual editor: shell + project loader + outline + property inspector
+
+**Worked on:** Shipped M11 per the plan. New `packages/loom_app/lib/src/` tree with ~30 files spanning bootstrap, services, state (Riverpod 2.x), shell, right pane, outline surface, and property inspectors. Pinned a 3-file `m11_counter_app` fixture under `test/fixtures/`. Wrote 12 new tests (5 unit + 4 widget + 3 integration) covering the kernel seam, file classification, notifier state, property routing, outline rendering, project open, and a 100-iteration randomized round-trip stress test.
+
+**Learned:**
+- **Flutter's `testWidgets` swallows real-I/O futures.** The fake-async clock catches all `dart:io` futures, so anything that does real disk work has to be wrapped in `tester.runAsync(...)`. Discovered when a test that opens a temp-dir-copied fixture hung for 10 minutes. Fixed by adding `openFixtureSessionForWidgets(tester)` that wraps the initial open, plus `runAsync` around every disk-touching call in integration tests (including the UI round-trip's focus-loss step).
+- **`ValueKey(span)` on inspector editors is the cache-invalidation lever.** Each property's editor is keyed by `(typeTag, span.offset, span.length)`. After an edit, source bytes shift and the same property now sits at a different span — the editor remounts, `_lastCommittedText` re-initializes from the post-edit value, and the next edit's diff against `widget.value.value` is correct.
+- **`test/fixtures/**` must be excluded from analyze.** The fixture's `_count` field is intentionally unused (parse-only target). Added an `analyzer.exclude` block to `packages/loom_app/analysis_options.yaml`.
+
+**Decided:** Per the plan, the UI test (`round_trip_through_ui_test.dart`) drives a single end-to-end edit through outline-selection + inspector field + focus-loss commit + atomic save (proving the wiring). The 50-iteration randomized stress moved to `multi_property_edits_round_trip_test.dart` driven through `WorkspaceController` (now 100 iterations, all green in ~3 seconds). Splitting the load-bearing assertion across two tests is more reliable than 50 UI iterations — UI iteration hits flaky focus-management issues; controller iteration is rock-solid.
+
+**Next:** M12 — undo/redo via the `EditHistoryService` stub (currently a no-op), `dart_style` integration as opt-in formatter, multi-tab polish (dirty-prompt on close, reopen-on-startup).
 
 ### [2026-05-15] M10.5 — workspace conversion (monorepo, melos, Flutter app scaffold)
 
