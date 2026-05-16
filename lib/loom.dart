@@ -6,8 +6,10 @@
 library;
 
 export 'src/analysis/resolved_project.dart';
+export 'src/catalog/catalog_spec.dart' show CatalogSpec, ChildSlotShape;
 export 'src/catalog/pipeline_catalog.dart' show PipelineCatalog, PipelineSpec;
 export 'src/catalog/route_catalog.dart' show RouteCatalog, RouteSpec;
+export 'src/catalog/widget_catalog.dart' show WidgetCatalog, WidgetSpec;
 export 'src/emission/annotation_edit_planner.dart';
 export 'src/emission/class_structure_edit_planner.dart';
 export 'src/emission/constructor_call_serializer.dart';
@@ -46,6 +48,7 @@ export 'src/parsing/file_symbols_parser.dart';
 export 'src/parsing/function_body_parser.dart';
 export 'src/parsing/pipeline_tree_parser.dart';
 export 'src/parsing/project_widget_discovery.dart';
+export 'src/parsing/project_widget_index.dart';
 export 'src/parsing/route_tree_parser.dart';
 export 'src/parsing/widget_tree_parser.dart';
 export 'src/parsing/widget_visitor.dart' show ParseException;

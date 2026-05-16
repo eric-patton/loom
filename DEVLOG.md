@@ -8,6 +8,44 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
+**Active milestone:** Cross-file widget discovery — `ProjectWidgetIndex` closes the last remaining gap
+**Last touched:** 2026-05-15 — Phase 5 of the opaque-root attack. With intra-file (Phase 1), slot inference (Phase 2), framework catalog expansion (Phase 3), and named-constructor support (Phase 4) shipped, the only remaining structural gap was widgets declared in one file and referenced from another.
+
+**What landed:**
+- **`ProjectWidgetIndex`** (`lib/src/parsing/project_widget_index.dart`) — eager-built index over an entire `ProjectModel`. For each file, runs `discoverIntraFileWidgets` and stores the result. Exposes `widgetsVisibleFrom(filePath)` that returns the cross-file widgets imported from the given file's perspective.
+- **Visibility rules mirror Dart's import semantics**: direct imports + transitive re-exports via barrel files, filtered through `show` / `hide` combinators. Cycle-safe through a visited set. **Prefixed imports (`as f;`) are skipped** — they require a qualified `f.MyWidget(...)` reference that parses as a named constructor, a separate code path we defer.
+- **`parseWidgetTree`** gained an optional `projectWidgets: Map<String, WidgetSpec>` parameter. Caller computes the cross-file widgets via `ProjectWidgetIndex.widgetsVisibleFrom(filePath)` and passes them in. Intra-file discoveries always win on name collisions (more specific scope).
+- **`loom.dart`** now exports `WidgetCatalog` / `WidgetSpec` / `CatalogSpec` / `ChildSlotShape` and the new index — needed for tool authors and downstream consumers to construct widget catalogs themselves.
+- **Widget-base allowlist extended**: a real-world finding from `BookstoreAuthScope extends InheritedNotifier<BookstoreAuth>` — `InheritedNotifier` doesn't end in `"Widget"` despite being a widget base. Added a small allowlist of framework widget bases that violate the suffix convention: `InheritedNotifier`, `InheritedTheme`, `InheritedModel`. Transitive recognition (chasing extends chains within the project) is still deferred.
+
+**Tests:** 710 green (was 696, +14 new — 13 in `test/project_widget_index_test.dart` covering build, visibility, combinators, transitive re-export, cycles, intra-file precedence, round-trip; +1 in the intra-file test for the new allowlist).
+
+**Real-world measurement:** ran the new `tool/project_opaque_root_diagnostic.dart` on several multi-file flutter-packages examples:
+- `go_router/example/lib/books` (15 files): modeled-root 9 → 10 (+1, `BookstoreAuthScope` resolved cross-file).
+- `go_router/example/lib` (42 files): modeled-root 36 → 37 (+1).
+- `google_maps_flutter` example (28 files): no change — all widgets self-contained per file.
+- `animations` example (5 files): no change — all self-contained.
+
+The honest finding: flutter-packages examples are mostly small, self-contained demos where intra-file discovery (Phase 1) already catches everything. Cross-file impact is therefore modest on this corpus. The feature unlocks recognition for larger multi-file apps (the ones the visual-editor consumer will actually edit), and the unit tests prove correctness for the patterns we'd expect there: nested imports, transitive re-exports, combinators, and visibility rules.
+
+**Combined impact across all five opaque-root phases (vs. the scout-validation baseline):**
+
+| Corpus | Modeled root (baseline) | Final (Phase 5) | Cat C → final |
+|---|---:|---:|---:|
+| flutter-packages | 176 (38%) | **397 (87%)** | 193 → ~18 |
+| Flutter SDK | 131 (28%) | **297 (63%)** | 218 → 58 |
+| (multi-file apps; project-aware) | varies | +1–2% extra | — |
+
+**Tools added this thread:**
+- `tool/opaque_root_diagnostic.dart` — per-file Cat A/B/C/D classifier (Phase 1–4).
+- `tool/project_opaque_root_diagnostic.dart` — project-aware version that measures cross-file resolution (Phase 5). Strips OS path prefixes for clean relative-URI resolution.
+
+**The opaque-root attack is essentially complete.** Phase 5 closes the last known structural gap for widget recognition. What's left in each remaining category is architectural (Cat A — bare-variable / ternary / prefixed-identifier returns; needs data-flow tracking), narrow (Cat D — no top-level return; tractable parser fix but needs design call on "which return is canonical"), or just-not-in-the-catalog (long-tail third-party widgets; diminishing returns).
+
+The natural next move is **starting the UI consumer** — the kernel has now been validated against real code, four kinds of trees (widget, route, pipeline, class), cross-file resolution, type queries, codegen recognition, and named constructors. Further foundational work has measurable but small returns. The truth-check now is whether the kernel's API actually drives a visual editor.
+
+**Prior summary block (Phase 4 — named-constructor support — preserved):**
+
 **Active milestone:** Named-constructor catalog + model support — opaque-root rate now 13% on apps, 37% on SDK
 **Last touched:** 2026-05-15 — fourth phase of the opaque-root attack. The `MaterialApp.router(...)` form alone was responsible for 43 of the remaining 57 Cat B (named-ctor) cases in flutter-packages. Built proper model + serializer support for named constructors, then added catalog entries for the common variants.
 

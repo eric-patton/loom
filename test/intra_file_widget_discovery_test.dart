@@ -66,6 +66,38 @@ class MyService extends BaseService {}
     });
 
     test(
+        'recognizes InheritedNotifier / InheritedTheme / InheritedModel '
+        '(non-Widget-suffix framework bases)', () {
+      const source = '''
+class AuthScope extends InheritedNotifier<AuthState> {
+  const AuthScope({super.key, super.notifier, required super.child});
+}
+
+class MyTheme extends InheritedTheme {
+  const MyTheme({super.key, required super.child});
+  @override
+  Widget wrap(BuildContext context, Widget child) => child;
+}
+
+class CounterModel extends InheritedModel<int> {
+  const CounterModel({super.key, required super.child});
+  @override
+  bool updateShouldNotify(covariant CounterModel oldWidget) => false;
+  @override
+  bool updateShouldNotifyDependent(
+          covariant CounterModel oldWidget, Set<int> dependencies) =>
+      false;
+}
+''';
+      final unit = parseString(content: source).unit;
+      final discovered = discoverIntraFileWidgets(unit);
+      // All three transitively extend Widget but their direct super
+      // doesn't end in "Widget"; the allowlist covers them.
+      expect(discovered.keys,
+          containsAll(['AuthScope', 'MyTheme', 'CounterModel']));
+    });
+
+    test(
         'recognizes third-party widget conventions (HookWidget, ConsumerWidget)',
         () {
       const source = '''

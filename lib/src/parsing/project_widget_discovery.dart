@@ -128,16 +128,29 @@ ChildSlotShape? _slotShapeFor(TypeAnnotation type) {
 }
 
 bool _looksLikeWidgetBase(String superName) {
-  // The unambiguous heuristic: ends in "Widget". Catches all framework
-  // widget bases (`StatelessWidget`, `StatefulWidget`, `InheritedWidget`,
-  // `RenderObjectWidget`, `LeafRenderObjectWidget`, `MultiChildRenderObjectWidget`,
-  // `SingleChildRenderObjectWidget`, `ProxyWidget`, `PreferredSizeWidget`,
-  // `ComponentWidget`) plus the common third-party bases that conventionally
-  // follow the same naming (`ConsumerWidget`, `HookWidget`,
-  // `ConsumerStatefulWidget`, `StatefulHookConsumerWidget`).
+  // Primary heuristic: ends in "Widget". Catches all framework widget
+  // bases that follow the convention (`StatelessWidget`, `StatefulWidget`,
+  // `InheritedWidget`, `RenderObjectWidget`, `LeafRenderObjectWidget`,
+  // `MultiChildRenderObjectWidget`, `SingleChildRenderObjectWidget`,
+  // `ProxyWidget`, `PreferredSizeWidget`, `ComponentWidget`) plus
+  // third-party bases that follow the same naming (`ConsumerWidget`,
+  // `HookWidget`, `ConsumerStatefulWidget`, `StatefulHookConsumerWidget`).
   //
   // Crucially, `State<X>` does NOT end in "Widget", so the State half of a
   // StatefulWidget pair is excluded — we register the StatefulWidget itself,
   // not its State.
-  return superName.endsWith('Widget');
+  if (superName.endsWith('Widget')) return true;
+
+  // Allowlist of common framework widget bases that DON'T end in "Widget"
+  // despite being widget subclasses. Each transitively extends Widget;
+  // without resolved types we can't follow that chain across packages, so
+  // we hardcode the publicly-known cases that come up in real code.
+  return _knownNonWidgetSuffixBases.contains(superName);
 }
+
+const Set<String> _knownNonWidgetSuffixBases = <String>{
+  // All extend InheritedWidget transitively.
+  'InheritedNotifier',
+  'InheritedTheme',
+  'InheritedModel',
+};

@@ -13,7 +13,15 @@ import 'widget_visitor.dart';
 /// `build` whose body returns a widget tree, then walks that return
 /// expression. Imports and other top-level constructs are not modeled — see
 /// Settled Decisions Q5 in DEVLOG.md.
-WidgetTreeModel parseWidgetTree(String source) {
+///
+/// [projectWidgets] supplies cross-file user widgets — typically the
+/// result of `ProjectWidgetIndex.widgetsVisibleFrom(filePath)`. Intra-file
+/// discoveries always win on name collisions (more specific scope). Pass
+/// an empty map (the default) for single-file parsing.
+WidgetTreeModel parseWidgetTree(
+  String source, {
+  Map<String, WidgetSpec> projectWidgets = const <String, WidgetSpec>{},
+}) {
   final result = parseString(content: source, throwIfDiagnostics: false);
   final unit = result.unit;
   final diagnostics = <ParseDiagnostic>[
@@ -25,11 +33,14 @@ WidgetTreeModel parseWidgetTree(String source) {
   ];
 
   // Pre-pass: discover project-defined widget classes (anything extending
-  // a `*Widget` base) in this unit. The visitor consults this map as a
-  // fallback when the framework catalog doesn't recognize a class —
-  // turning `MyHomePage(...)` references into `WidgetNode` rather than
-  // `OpaqueNode`, even though we know nothing about its child slots.
-  final localCatalog = discoverIntraFileWidgets(unit);
+  // a `*Widget` base) in this unit. Merge with cross-file project widgets;
+  // intra-file declarations win on collisions (Dart's import-clash rules
+  // would be an error in that case anyway).
+  final intraFileWidgets = discoverIntraFileWidgets(unit);
+  final localCatalog = <String, WidgetSpec>{
+    ...projectWidgets,
+    ...intraFileWidgets,
+  };
 
   for (final declaration in unit.declarations) {
     if (declaration is! ClassDeclaration) {
