@@ -398,6 +398,380 @@ class WidgetCatalog {
     'Form': WidgetSpec(
       childSlots: {'child': ChildSlotShape.single},
     ),
+
+    // ---------------- Phase 6 catalog expansion ----------------
+    // Targeted at the UI editor's tree-view: every Sliver inside
+    // `CustomScrollView.slivers` used to land opaque, dialogs/sheets
+    // were unmodeled, Material 3 navigation was unmodeled. These entries
+    // close those gaps so the editor can show structural shape for the
+    // widgets users actually compose in real apps.
+
+    // Sliver family — children of `CustomScrollView.slivers`.
+    'SliverList': WidgetSpec(
+      // `.list` / `.builder` / `.separated` named constructors all use
+      // delegate callbacks (`itemBuilder:`, `separatorBuilder:`) which
+      // the kernel models opaquely. The base constructor takes
+      // `delegate: SliverChildDelegate` which is also opaque, but
+      // recognizing the type as a Sliver still gets us out of opaque
+      // root territory and lets the editor render a placeholder.
+      namedConstructors: {
+        'builder': WidgetSpec(),
+        'separated': WidgetSpec(),
+        'list': WidgetSpec(),
+      },
+    ),
+    'SliverGrid': WidgetSpec(
+      namedConstructors: {
+        'builder': WidgetSpec(),
+        'count': WidgetSpec(
+          childSlots: {'children': ChildSlotShape.list},
+        ),
+        'extent': WidgetSpec(
+          childSlots: {'children': ChildSlotShape.list},
+        ),
+      },
+    ),
+    'SliverPadding': WidgetSpec(
+      childSlots: {'sliver': ChildSlotShape.single},
+    ),
+    'SliverAppBar': WidgetSpec(
+      childSlots: {
+        'leading': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'flexibleSpace': ChildSlotShape.single,
+        'bottom': ChildSlotShape.single,
+        'actions': ChildSlotShape.list,
+      },
+      namedConstructors: {
+        'medium': WidgetSpec(
+          childSlots: {
+            'leading': ChildSlotShape.single,
+            'title': ChildSlotShape.single,
+            'flexibleSpace': ChildSlotShape.single,
+            'bottom': ChildSlotShape.single,
+            'actions': ChildSlotShape.list,
+          },
+        ),
+        'large': WidgetSpec(
+          childSlots: {
+            'leading': ChildSlotShape.single,
+            'title': ChildSlotShape.single,
+            'flexibleSpace': ChildSlotShape.single,
+            'bottom': ChildSlotShape.single,
+            'actions': ChildSlotShape.list,
+          },
+        ),
+      },
+    ),
+    'SliverFillRemaining': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'SliverFillViewport': WidgetSpec(),
+    'SliverToBoxAdapter': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'SliverPersistentHeader': WidgetSpec(),
+    'SliverOpacity': WidgetSpec(
+      childSlots: {'sliver': ChildSlotShape.single},
+    ),
+    'SliverVisibility': WidgetSpec(
+      childSlots: {'sliver': ChildSlotShape.single},
+    ),
+    'SliverSafeArea': WidgetSpec(
+      childSlots: {'sliver': ChildSlotShape.single},
+    ),
+    'SliverAnimatedList': WidgetSpec(),
+
+    // Dialogs and bottom sheets — wrapper widgets commonly composed in
+    // showDialog / showModalBottomSheet builder bodies.
+    'Dialog': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+      namedConstructors: {
+        'fullscreen': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+      },
+    ),
+    'AlertDialog': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'content': ChildSlotShape.single,
+        'actions': ChildSlotShape.list,
+      },
+    ),
+    'SimpleDialog': WidgetSpec(
+      childSlots: {
+        'title': ChildSlotShape.single,
+        'children': ChildSlotShape.list,
+      },
+    ),
+    'SimpleDialogOption': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'BottomSheet': WidgetSpec(),
+    'CupertinoAlertDialog': WidgetSpec(
+      childSlots: {
+        'title': ChildSlotShape.single,
+        'content': ChildSlotShape.single,
+        'actions': ChildSlotShape.list,
+      },
+    ),
+    'CupertinoActionSheet': WidgetSpec(
+      childSlots: {
+        'title': ChildSlotShape.single,
+        'message': ChildSlotShape.single,
+        'cancelButton': ChildSlotShape.single,
+        'actions': ChildSlotShape.list,
+      },
+    ),
+
+    // Material 3 navigation primitives.
+    'NavigationBar': WidgetSpec(
+      childSlots: {'destinations': ChildSlotShape.list},
+    ),
+    'NavigationDestination': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'selectedIcon': ChildSlotShape.single,
+      },
+    ),
+    'NavigationRail': WidgetSpec(
+      childSlots: {
+        'leading': ChildSlotShape.single,
+        'trailing': ChildSlotShape.single,
+        'destinations': ChildSlotShape.list,
+      },
+    ),
+    'NavigationRailDestination': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'selectedIcon': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+      },
+    ),
+    'NavigationDrawer': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'NavigationDrawerDestination': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'selectedIcon': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+      },
+    ),
+    'BottomNavigationBar': WidgetSpec(),
+    'BottomNavigationBarItem': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'activeIcon': ChildSlotShape.single,
+      },
+    ),
+    'Drawer': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'DrawerHeader': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'UserAccountsDrawerHeader': WidgetSpec(
+      childSlots: {
+        'currentAccountPicture': ChildSlotShape.single,
+        'otherAccountsPictures': ChildSlotShape.list,
+      },
+    ),
+
+    // Decoration / effects wrappers.
+    'BackdropFilter': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'RepaintBoundary': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'RotatedBox': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Banner': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'PhysicalModel': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'PhysicalShape': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ColorFiltered': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ImageFiltered': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ShaderMask': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Tooltip': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Badge': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+      namedConstructors: {
+        'count': WidgetSpec(
+          childSlots: {'child': ChildSlotShape.single},
+        ),
+      },
+    ),
+
+    // Builder family — callbacks are opaque, but recognizing the
+    // type stops the call from being a fully opaque root.
+    'Builder': WidgetSpec(),
+    'ValueListenableBuilder': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'ListenableBuilder': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'RestorableValueListenableBuilder': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'SelectableText': WidgetSpec(
+      positionalToProperty: <int, String>{0: 'data'},
+      namedConstructors: {
+        'rich': WidgetSpec(),
+      },
+    ),
+    'RichText': WidgetSpec(),
+
+    // Chip family.
+    'Chip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+        'deleteIcon': ChildSlotShape.single,
+      },
+    ),
+    'ActionChip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+      },
+    ),
+    'ChoiceChip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+      },
+    ),
+    'FilterChip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+      },
+    ),
+    'InputChip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+        'deleteIcon': ChildSlotShape.single,
+      },
+    ),
+    'RawChip': WidgetSpec(
+      childSlots: {
+        'avatar': ChildSlotShape.single,
+        'label': ChildSlotShape.single,
+        'deleteIcon': ChildSlotShape.single,
+      },
+    ),
+
+    // Misc commonly-seen Material widgets.
+    'ListTile': WidgetSpec(
+      childSlots: {
+        'leading': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'subtitle': ChildSlotShape.single,
+        'trailing': ChildSlotShape.single,
+      },
+    ),
+    'CheckboxListTile': WidgetSpec(
+      childSlots: {
+        'secondary': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'subtitle': ChildSlotShape.single,
+      },
+    ),
+    'RadioListTile': WidgetSpec(
+      childSlots: {
+        'secondary': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'subtitle': ChildSlotShape.single,
+      },
+    ),
+    'SwitchListTile': WidgetSpec(
+      childSlots: {
+        'secondary': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'subtitle': ChildSlotShape.single,
+      },
+    ),
+    'ExpansionTile': WidgetSpec(
+      childSlots: {
+        'leading': ChildSlotShape.single,
+        'title': ChildSlotShape.single,
+        'subtitle': ChildSlotShape.single,
+        'trailing': ChildSlotShape.single,
+        'children': ChildSlotShape.list,
+      },
+    ),
+    'ExpansionPanelList': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+      namedConstructors: {
+        'radio': WidgetSpec(
+          childSlots: {'children': ChildSlotShape.list},
+        ),
+      },
+    ),
+    'TextField': WidgetSpec(),
+    'TextFormField': WidgetSpec(),
+    'CupertinoTextField': WidgetSpec(),
+    'PopupMenuButton': WidgetSpec(
+      childSlots: {
+        'icon': ChildSlotShape.single,
+        'child': ChildSlotShape.single,
+      },
+    ),
+    'PopupMenuItem': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'DropdownButton': WidgetSpec(
+      childSlots: {
+        'hint': ChildSlotShape.single,
+        'icon': ChildSlotShape.single,
+      },
+    ),
+    'DropdownMenuItem': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'SnackBar': WidgetSpec(
+      childSlots: {'content': ChildSlotShape.single},
+    ),
+    'ButtonBar': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'OverflowBar': WidgetSpec(
+      childSlots: {'children': ChildSlotShape.list},
+    ),
+    'Divider': WidgetSpec(),
+    'VerticalDivider': WidgetSpec(),
+    'Spacer': WidgetSpec(),
+    'CircularProgressIndicator': WidgetSpec(),
+    'LinearProgressIndicator': WidgetSpec(),
+    'RefreshIndicator': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'Scrollbar': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
+    'CupertinoScrollbar': WidgetSpec(
+      childSlots: {'child': ChildSlotShape.single},
+    ),
   };
 
   static WidgetSpec? specFor(String className) => _known[className];

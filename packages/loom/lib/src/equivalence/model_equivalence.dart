@@ -1,5 +1,6 @@
 import '../model/list_slot_style.dart';
 import '../model/property_value.dart';
+import '../model/style_hints.dart';
 import '../model/node.dart';
 
 /// Structural model equivalence — the oracle the round-trip property test
@@ -22,6 +23,16 @@ class StructuralEquivalence {
   StructuralEquivalence._();
 
   static bool equal(WidgetTreeModel a, WidgetTreeModel b) =>
+      _modelNodesEqual(a.root, b.root);
+
+  /// Same as [equal] but for `RouteTreeModel`. Routes share the same
+  /// constructor-call shape as widgets (`RouteNode` mirrors `WidgetNode`)
+  /// so the same node-comparison engine handles them.
+  static bool equalRoutes(RouteTreeModel a, RouteTreeModel b) =>
+      _modelNodesEqual(a.root, b.root);
+
+  /// Same as [equal] but for `PipelineTreeModel`.
+  static bool equalPipelines(PipelineTreeModel a, PipelineTreeModel b) =>
       _modelNodesEqual(a.root, b.root);
 
   /// Compares two model nodes structurally. Different concrete types
@@ -58,70 +69,114 @@ class StructuralEquivalence {
       a.isMultiLine == b.isMultiLine;
 }
 
-bool _modelNodesEqual(ModelNode a, ModelNode b) => switch ((a, b)) {
-      (final WidgetNode a, final WidgetNode b) => _widgetNodesEqual(a, b),
-      (final OpaqueNode a, final OpaqueNode b) => a.sourceText == b.sourceText,
-      (final MethodReferenceNode a, final MethodReferenceNode b) =>
-        a.methodName == b.methodName && _modelNodesEqual(a.body, b.body),
-      _ => false,
-    };
+bool _modelNodesEqual(ModelNode a, ModelNode b) {
+  // Reject mismatched concrete types up-front. The switch below would do
+  // the same (each (Same, Same) case checks both halves), but pre-checking
+  // the runtime types makes the type-narrowing inside the switch arms
+  // easier to follow and keeps a hypothetical future sealed addition from
+  // silently being equal to itself by default.
+  if (a.runtimeType != b.runtimeType) return false;
+  return switch (a) {
+    final WidgetNode a => _constructorCallNodesEqual(
+        className: a.className,
+        namedConstructor: a.namedConstructor,
+        styleHints: a.styleHints,
+        properties: a.properties,
+        childSlots: a.childSlots,
+        childSlotStyles: a.childSlotStyles,
+        otherClassName: (b as WidgetNode).className,
+        otherNamedConstructor: b.namedConstructor,
+        otherStyleHints: b.styleHints,
+        otherProperties: b.properties,
+        otherChildSlots: b.childSlots,
+        otherChildSlotStyles: b.childSlotStyles,
+      ),
+    final RouteNode a => _constructorCallNodesEqual(
+        className: a.className,
+        namedConstructor: a.namedConstructor,
+        styleHints: a.styleHints,
+        properties: a.properties,
+        childSlots: a.childSlots,
+        childSlotStyles: a.childSlotStyles,
+        otherClassName: (b as RouteNode).className,
+        otherNamedConstructor: b.namedConstructor,
+        otherStyleHints: b.styleHints,
+        otherProperties: b.properties,
+        otherChildSlots: b.childSlots,
+        otherChildSlotStyles: b.childSlotStyles,
+      ),
+    final PipelineNode a => _constructorCallNodesEqual(
+        className: a.className,
+        namedConstructor: a.namedConstructor,
+        styleHints: a.styleHints,
+        properties: a.properties,
+        childSlots: a.childSlots,
+        childSlotStyles: a.childSlotStyles,
+        otherClassName: (b as PipelineNode).className,
+        otherNamedConstructor: b.namedConstructor,
+        otherStyleHints: b.styleHints,
+        otherProperties: b.properties,
+        otherChildSlots: b.childSlots,
+        otherChildSlotStyles: b.childSlotStyles,
+      ),
+    final OpaqueNode a => a.sourceText == (b as OpaqueNode).sourceText,
+    final MethodReferenceNode a =>
+      a.methodName == (b as MethodReferenceNode).methodName &&
+          _modelNodesEqual(a.body, b.body),
+  };
+}
 
-bool _widgetNodesEqual(WidgetNode a, WidgetNode b) {
-  if (a.className != b.className) {
-    return false;
-  }
-  if (a.namedConstructor != b.namedConstructor) {
-    return false;
-  }
-  if (a.styleHints != b.styleHints) {
-    return false;
-  }
-  if (a.properties.length != b.properties.length) {
-    return false;
-  }
-  for (final entry in a.properties.entries) {
-    final other = b.properties[entry.key];
-    if (other == null) {
-      return false;
-    }
+/// Shared structural-equality engine for the three constructor-call node
+/// kinds — `WidgetNode`, `RouteNode`, `PipelineNode`. Their fields are
+/// identical in shape, so the same logic compares them. This used to be
+/// `_widgetNodesEqual` alone; mirroring the unified visitor architecture
+/// (M6.1/6.2), the equivalence oracle is now also domain-agnostic.
+bool _constructorCallNodesEqual({
+  required String className,
+  required String? namedConstructor,
+  required StyleHints styleHints,
+  required Map<String, PropertyValue> properties,
+  required Map<String, List<ModelNode>> childSlots,
+  required Map<String, ListSlotStyle> childSlotStyles,
+  required String otherClassName,
+  required String? otherNamedConstructor,
+  required StyleHints otherStyleHints,
+  required Map<String, PropertyValue> otherProperties,
+  required Map<String, List<ModelNode>> otherChildSlots,
+  required Map<String, ListSlotStyle> otherChildSlotStyles,
+}) {
+  if (className != otherClassName) return false;
+  if (namedConstructor != otherNamedConstructor) return false;
+  if (styleHints != otherStyleHints) return false;
+  if (properties.length != otherProperties.length) return false;
+  for (final entry in properties.entries) {
+    final other = otherProperties[entry.key];
+    if (other == null) return false;
     if (!StructuralEquivalence.propertiesEqual(entry.value, other)) {
       return false;
     }
   }
-  if (a.childSlots.length != b.childSlots.length) {
-    return false;
-  }
-  for (final entry in a.childSlots.entries) {
-    final otherSlot = b.childSlots[entry.key];
-    if (otherSlot == null) {
-      return false;
-    }
-    if (entry.value.length != otherSlot.length) {
-      return false;
-    }
+  if (childSlots.length != otherChildSlots.length) return false;
+  for (final entry in childSlots.entries) {
+    final otherSlot = otherChildSlots[entry.key];
+    if (otherSlot == null) return false;
+    if (entry.value.length != otherSlot.length) return false;
     for (var i = 0; i < entry.value.length; i++) {
-      if (!_modelNodesEqual(entry.value[i], otherSlot[i])) {
-        return false;
-      }
+      if (!_modelNodesEqual(entry.value[i], otherSlot[i])) return false;
     }
   }
-  if (a.childSlotStyles.length != b.childSlotStyles.length) {
-    return false;
-  }
-  for (final entry in a.childSlotStyles.entries) {
-    final otherStyle = b.childSlotStyles[entry.key];
-    if (otherStyle == null) {
-      return false;
-    }
+  if (childSlotStyles.length != otherChildSlotStyles.length) return false;
+  for (final entry in childSlotStyles.entries) {
+    final otherStyle = otherChildSlotStyles[entry.key];
+    if (otherStyle == null) return false;
     // Empty lists may differ in isMultiLine/hasTrailingComma after
     // emptying (e.g., a multi-line `[\n  a,\n]` contracts to `[]` when
     // the only element is removed). Skip style comparison when the
     // corresponding slot is empty on both sides.
-    final aSlotEmpty = (a.childSlots[entry.key] ?? const <ModelNode>[]).isEmpty;
-    final bSlotEmpty = (b.childSlots[entry.key] ?? const <ModelNode>[]).isEmpty;
-    if (aSlotEmpty && bSlotEmpty) {
-      continue;
-    }
+    final aSlotEmpty = (childSlots[entry.key] ?? const <ModelNode>[]).isEmpty;
+    final bSlotEmpty =
+        (otherChildSlots[entry.key] ?? const <ModelNode>[]).isEmpty;
+    if (aSlotEmpty && bSlotEmpty) continue;
     if (!StructuralEquivalence.listSlotStylesEqual(entry.value, otherStyle)) {
       return false;
     }

@@ -1,9 +1,50 @@
+import 'package:path/path.dart' as p;
+
 import '../parsing/directives_parser.dart';
 import '../parsing/file_symbols_parser.dart';
 import 'directives.dart';
 import 'file_symbols.dart';
 import 'package_config.dart';
 import 'source_span.dart';
+
+/// Canonicalizes a caller-supplied file key to a URI form the kernel can
+/// reason about consistently.
+///
+/// Why this exists: `Uri.parse(r'C:\repos\app\lib\main.dart')` succeeds but
+/// interprets `C` as a one-letter URI scheme, leaving the path with
+/// backslashes the URI resolver treats as opaque. Resolving a relative
+/// import (`'helper.dart'`) against such a "URI" silently produces
+/// `c:helper.dart` instead of the actual sibling file, so cross-file
+/// resolution breaks invisibly on Windows. Fixing the kernel to canonicalize
+/// at every entry point means callers can pass keys in any form
+/// (raw Windows path, raw POSIX path, `file:///` URI, relative path) and
+/// the model stores and looks them up consistently.
+///
+/// Rules:
+///   * URI strings with a multi-char scheme (`file:`, `package:`, `dart:`,
+///     `https:`) — returned as-is.
+///   * Absolute paths (Windows `C:\foo` / `C:/foo`, POSIX `/foo`,
+///     UNC `\\server\share\foo`) — converted to a `file:///` URI via
+///     `path.toUri`.
+///   * Relative paths (`lib/main.dart`, `helper.dart`, also Windows-style
+///     `lib\helper.dart`) — backslashes are folded to forward slashes and
+///     the path is normalized, but no scheme is added; the result is still
+///     a relative URI string.
+String canonicalizeFileKey(String key) {
+  final parsed = Uri.tryParse(key);
+  // `parsed.scheme.length > 1` filters out the Windows-drive-letter
+  // false positive — `C:foo` parses with scheme `c`, length 1. Real
+  // URI schemes (`file`, `package`, `dart`, `http`, `https`) are all
+  // length >= 4, so this threshold is safe.
+  if (parsed != null && parsed.hasScheme && parsed.scheme.length > 1) {
+    return parsed.toString();
+  }
+  // Filesystem path. Use the platform's path context — on Windows this
+  // handles drive letters and backslashes; on POSIX it handles forward
+  // slashes. p.toUri produces a `file:///` URI for absolute paths and a
+  // relative URI for relative paths.
+  return p.toUri(p.normalize(key)).toString();
+}
 
 /// A modeled view of a Dart project — multiple files and the import
 /// graph between them.
@@ -44,8 +85,9 @@ class ProjectModel {
   }) {
     final files = <String, ProjectFile>{};
     for (final entry in sources.entries) {
-      files[entry.key] = ProjectFile(
-        path: entry.key,
+      final canonical = canonicalizeFileKey(entry.key);
+      files[canonical] = ProjectFile(
+        path: canonical,
         source: entry.value,
         directives: parseDirectives(entry.value),
       );
@@ -66,8 +108,10 @@ class ProjectModel {
   /// All files as an unordered iterable. Convenience.
   Iterable<ProjectFile> get allFiles => files.values;
 
-  /// Returns the `ProjectFile` at [path], or null if absent.
-  ProjectFile? operator [](String path) => files[path];
+  /// Returns the `ProjectFile` at [path], or null if absent. [path] is
+  /// canonicalized — callers can pass raw Windows paths, POSIX paths, or
+  /// `file:///` URIs interchangeably.
+  ProjectFile? operator [](String path) => files[canonicalizeFileKey(path)];
 
   /// Returns the set of file paths that import the file with [importerUri]
   /// from at least one of their imports. Uri matching is by string
@@ -90,7 +134,7 @@ class ProjectModel {
 
   /// Returns the set of import URIs that THIS file imports.
   Set<String> importsFrom(String path) {
-    final file = files[path];
+    final file = files[canonicalizeFileKey(path)];
     if (file == null) return const <String>{};
     return {for (final imp in file.directives.imports) imp.uri};
   }
@@ -117,22 +161,27 @@ class ProjectModel {
   /// Cycle-safe: if A exports B and B exports A, the recursion is
   /// bounded by a visited set.
   Set<String> exportedNamesOf(String path) {
-    return _exportedNamesOf(path, <String>{});
+    return _exportedNamesOf(canonicalizeFileKey(path), <String>{});
   }
 
   Set<String> _exportedNamesOf(String path, Set<String> visited) {
     if (visited.contains(path)) return const <String>{};
-    visited.add(path);
     final file = files[path];
     if (file == null) return const <String>{};
     final names = <String>{...file.symbols.names};
+    // Copy the visited set at each recursive call rather than sharing it
+    // across branches. A diamond chain (A re-exports through both B and D
+    // into C, with different combinators) needs both branches to walk
+    // through C independently and apply their own combinators; sharing
+    // would suppress the second branch.
+    final nextVisited = {...visited, path};
     for (final exp in file.directives.exports) {
       final resolvedUri = resolveImportUri(exp.uri, fromFile: path)?.toString();
       if (resolvedUri == null) continue;
       // Find the project file at the resolved URI.
       final targetPath = _findFileByUriString(resolvedUri);
       if (targetPath == null) continue;
-      final reExported = _exportedNamesOf(targetPath, visited);
+      final reExported = _exportedNamesOf(targetPath, nextVisited);
       names.addAll(_applyCombinators(reExported, exp.combinators));
     }
     return names;
@@ -150,14 +199,15 @@ class ProjectModel {
   ///     or whose files aren't in `files`.
   ///   - Local-scope names (function parameters, local vars).
   SymbolLocation? resolveSymbol(String name, {required String fromFile}) {
-    final file = files[fromFile];
+    final canonicalFrom = canonicalizeFileKey(fromFile);
+    final file = files[canonicalFrom];
     if (file == null) return null;
 
     // First, check if the file itself declares the name.
     final ownDecl = file.symbols.findDeclaration(name);
     if (ownDecl != null) {
       return SymbolLocation(
-        filePath: fromFile,
+        filePath: canonicalFrom,
         name: name,
         declarationNameSpan: ownDecl.nameSpan,
         declarationSpan: ownDecl.declarationSpan,
@@ -172,7 +222,7 @@ class ProjectModel {
       if (imp.prefix != null) continue;
 
       final resolvedUri =
-          resolveImportUri(imp.uri, fromFile: fromFile)?.toString();
+          resolveImportUri(imp.uri, fromFile: canonicalFrom)?.toString();
       if (resolvedUri == null) continue;
       final targetPath = _findFileByUriString(resolvedUri);
       if (targetPath == null) continue;
@@ -227,9 +277,11 @@ class ProjectModel {
   }
 
   /// Locates a project file whose path equals [uriString]. Returns
-  /// null if no match.
+  /// null if no match. Canonicalizes [uriString] so callers can pass
+  /// any equivalent form of the same path.
   String? _findFileByUriString(String uriString) {
-    if (files.containsKey(uriString)) return uriString;
+    final canonical = canonicalizeFileKey(uriString);
+    if (files.containsKey(canonical)) return canonical;
     return null;
   }
 
@@ -302,10 +354,14 @@ class ProjectModel {
       return uri;
     }
 
-    // Relative URI — resolve against fromFile.
+    // Relative URI — resolve against fromFile. Canonicalize first so
+    // raw Windows paths get a proper `file:///` scheme; otherwise
+    // `Uri.parse(r'C:\foo\main.dart')` would read `C` as the scheme and
+    // resolution would produce nonsense.
+    final canonicalFrom = canonicalizeFileKey(fromFile);
     final Uri fromUri;
     try {
-      fromUri = Uri.parse(fromFile);
+      fromUri = Uri.parse(canonicalFrom);
     } catch (_) {
       return null;
     }

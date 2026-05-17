@@ -45,6 +45,24 @@ void f() {}
       final symbols = parseFileSymbols(source);
       expect(symbols.names, equals({'a', 'b', 'c'}));
     });
+
+    test('surfaces analyzer parse diagnostics on malformed source', () {
+      // Regression: parseFileSymbols ignored result.errors entirely; the
+      // returned FileSymbols looked clean even for files with syntax
+      // errors. Now diagnostics are surfaced so callers (e.g. project-
+      // wide rename, code-genaware views) can refuse partial info.
+      const source = 'class A { void m() { @@@ } }';
+      final symbols = parseFileSymbols(source);
+      expect(symbols.diagnostics, isNotEmpty);
+      // The class itself is still error-recovered as a top-level decl.
+      expect(symbols.names, contains('A'));
+    });
+
+    test('clean source has empty diagnostics', () {
+      const source = 'class Clean {}\n';
+      final symbols = parseFileSymbols(source);
+      expect(symbols.diagnostics, isEmpty);
+    });
   });
 
   group('parseFileSymbols — top-level annotations (M10.0a)', () {

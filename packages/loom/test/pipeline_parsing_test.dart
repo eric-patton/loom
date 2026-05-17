@@ -125,4 +125,58 @@ void main() {
       expect(() => parsePipelineTree(source), throwsA(isA<ParseException>()));
     });
   });
+
+  // ----------------------------------------------------------------
+  // PipelineTreeNavigation — node_path API extended to pipeline trees.
+  // ----------------------------------------------------------------
+  group('PipelineTreeNavigation', () {
+    late PipelineTreeModel model;
+
+    setUpAll(() {
+      final source =
+          File('test/fixtures/pipeline_simple.dart').readAsStringSync();
+      model = parsePipelineTree(source);
+    });
+
+    test('nodeAt(empty) returns the Pipeline root', () {
+      final got = model.nodeAt(const <NodePathSegment>[]);
+      expect(got, isA<PipelineNode>());
+      expect((got! as PipelineNode).className, equals('Pipeline'));
+    });
+
+    test('nodeAt descends into a step', () {
+      final got = model.nodeAt(const [(slot: 'steps', index: 0)]);
+      expect(got, isA<PipelineNode>());
+      expect((got! as PipelineNode).className, equals('ValidateInput'));
+    });
+
+    test('withProperty preserves PipelineNode subtype on rebuild', () {
+      final updated = model.withProperty(
+        const <NodePathSegment>[],
+        'name',
+        const StringLiteralValue(
+          value: 'renamed',
+          span: SourceSpan(offset: 0, length: 0),
+        ),
+      );
+      expect(updated.root, isA<PipelineNode>());
+      final newRoot = updated.root as PipelineNode;
+      final name = newRoot.properties['name']! as StringLiteralValue;
+      expect(name.value, equals('renamed'));
+      // steps slot unchanged.
+      expect(newRoot.childSlots['steps']!.length,
+          equals((model.root as PipelineNode).childSlots['steps']!.length));
+    });
+
+    test('walk traverses all PipelineNodes', () {
+      final entries = model.walk();
+      final names = entries
+          .map((e) => e.node)
+          .whereType<PipelineNode>()
+          .map((p) => p.className)
+          .toList();
+      // Original fixture has Pipeline + ValidateInput + Transform + LogError.
+      expect(names, containsAll(['Pipeline', 'ValidateInput']));
+    });
+  });
 }

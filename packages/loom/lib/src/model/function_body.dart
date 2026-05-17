@@ -18,10 +18,10 @@ export 'node.dart' show ParseDiagnostic;
 /// sequence of typed statements — and forcing them into either existing
 /// hierarchy would dilute the semantics of both.
 class FunctionBodyModel {
-  const FunctionBodyModel({
+  FunctionBodyModel({
     required this.body,
-    this.diagnostics = const <ParseDiagnostic>[],
-  });
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  }) : diagnostics = List.unmodifiable(diagnostics);
 
   /// The function's top-level statement block. Always present.
   final StatementBlock body;

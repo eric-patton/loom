@@ -97,6 +97,17 @@ void main() {
       expect(children(root)[0].styleHints.hasTrailingComma, isFalse);
     });
 
+    test('multi-line Column captures isMultiLine; single-line Text does not',
+        () {
+      // The Column in simple_widget.dart spans multiple lines; its single
+      // children render on separate lines. Each individual Text(...) call
+      // fits on one line.
+      expect(root.styleHints.isMultiLine, isTrue,
+          reason: 'Column(...) spans multiple lines');
+      expect(children(root)[0].styleHints.isMultiLine, isFalse,
+          reason: 'first Text("Hello, world!") fits on one line');
+    });
+
     test('every node has a valid SourceSpan', () {
       final allNodes = <WidgetNode>[];
       void collect(WidgetNode node) {
@@ -563,6 +574,164 @@ class App extends StatelessWidget {
       expect(newSource.contains("'Updated title'"), isTrue);
       // The call site `_buildTitle()` text in build() is untouched.
       expect(newSource.contains('_buildTitle()'), isTrue);
+    });
+  });
+
+  group('type-argumented constructor calls fall to OpaqueNode', () {
+    // Regression: tryExtractCall didn't check for type arguments on
+    // InstanceCreationExpression or MethodInvocation. The serializer doesn't
+    // carry type-arg info, so a modeled type-argumented constructor would
+    // silently lose its `<...>` on re-emission — a round-trip violation.
+    // Now they fall through to OpaqueNode and the bytes survive verbatim.
+
+    test('Class<T>() InstanceCreation goes opaque (root)', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox<int>();
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      expect(
+        model.root,
+        isA<OpaqueNode>(),
+        reason: 'SizedBox<int>() must NOT model as SizedBox WidgetNode',
+      );
+    });
+
+    test('Class<T>() in a children slot stays opaque', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [SizedBox<int>()]);
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('Column'));
+      final child = root.childSlots['children']!.first;
+      expect(child, isA<OpaqueNode>());
+    });
+
+    test('Class<T>.named() InstanceCreation goes opaque', () {
+      // Currently SizedBox.expand has no type args in framework; but parsing
+      // intentionally rejects the type-args + named-ctor combo on principle.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox<int>.expand(child: const Text('hi'));
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      expect(model.root, isA<OpaqueNode>());
+    });
+
+    test('empty-edit idempotence holds on a type-argumented call', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox<int>();
+  }
+}
+''';
+      // Opaque root means the bytes are preserved verbatim — empty-edit
+      // idempotence is trivial via applySourceEdits's empty-list path.
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // Negative numeric literals: `Container(width: -4)` /
+  // `EdgeInsets.all(-8.0)` previously fell to OpaquePropertyValue,
+  // blocking the editor's property inspector from exposing them.
+  // ----------------------------------------------------------------
+  group('negative numeric literals', () {
+    test('negative integer in a property → NumLiteralValue(-8)', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: -8);
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.className, equals('Container'));
+      final width = root.properties['width'];
+      expect(width, isA<NumLiteralValue>());
+      final n = width! as NumLiteralValue;
+      expect(n.value, equals(-8));
+      expect(n.isDouble, isFalse);
+    });
+
+    test('negative double in a property → NumLiteralValue(-4.5, isDouble=true)',
+        () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: -4.5);
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      final width = root.properties['width']! as NumLiteralValue;
+      expect(width.value, equals(-4.5));
+      expect(width.isDouble, isTrue);
+    });
+
+    test('EdgeInsets.all(-8.0) is recognized as EdgeInsetsAllValue', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(padding: const EdgeInsets.all(-8.0), child: const Text('x'));
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      final padding = root.properties['padding'];
+      expect(padding, isA<EdgeInsetsAllValue>());
+      final p = padding! as EdgeInsetsAllValue;
+      expect(p.amount, equals(-8.0));
+      expect(p.amountIsDouble, isTrue);
+    });
+
+    test('round-trip preserves negative literal bytes verbatim', () {
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: -8, height: -4.5);
+  }
+}
+''';
+      expect(applySourceEdits(source, const <SourceEdit>[]), equals(source));
+    });
+
+    test('non-minus prefix expressions still fall to opaque', () {
+      // `!flag`, `~bits`, `++i` aren't numeric literals — keep them opaque.
+      const source = '''
+class App extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: ~0);
+  }
+}
+''';
+      final model = parseWidgetTree(source);
+      final root = model.root as WidgetNode;
+      expect(root.properties['width'], isA<OpaquePropertyValue>());
     });
   });
 }

@@ -19,6 +19,13 @@ import 'annotation_capture.dart';
 /// `resolveSymbol` op (M9.3).
 FileSymbols parseFileSymbols(String source) {
   final result = parseString(content: source, throwIfDiagnostics: false);
+  final diagnostics = <ParseDiagnostic>[
+    for (final error in result.errors)
+      ParseDiagnostic(
+        span: SourceSpan(offset: error.offset, length: error.length),
+        message: error.message,
+      ),
+  ];
   final declarations = <FileSymbolDeclaration>[];
 
   for (final decl in result.unit.declarations) {
@@ -66,7 +73,7 @@ FileSymbols parseFileSymbols(String source) {
     // ClassTypeAlias (`class Foo = A with B;`) — could add later.
   }
 
-  return FileSymbols(declarations: declarations);
+  return FileSymbols(declarations: declarations, diagnostics: diagnostics);
 }
 
 FileSymbolDeclaration _makeSymbol(

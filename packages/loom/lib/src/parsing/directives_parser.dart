@@ -72,10 +72,7 @@ DirectiveNode? _convertDirective(Directive d, String source) {
         offset: d.importKeyword.offset,
         length: d.importKeyword.length,
       ),
-      uri: _stripQuotes(source.substring(
-        uri.offset,
-        uri.offset + uri.length,
-      )),
+      uri: _decodeUriLiteral(uri, source),
       uriSpan: SourceSpan(offset: uri.offset, length: uri.length),
       deferredKeywordSpan: d.deferredKeyword == null
           ? null
@@ -107,10 +104,7 @@ DirectiveNode? _convertDirective(Directive d, String source) {
         offset: d.exportKeyword.offset,
         length: d.exportKeyword.length,
       ),
-      uri: _stripQuotes(source.substring(
-        uri.offset,
-        uri.offset + uri.length,
-      )),
+      uri: _decodeUriLiteral(uri, source),
       uriSpan: SourceSpan(offset: uri.offset, length: uri.length),
       combinators: [
         for (final c in d.combinators) _convertCombinator(c, source),
@@ -126,10 +120,7 @@ DirectiveNode? _convertDirective(Directive d, String source) {
         offset: d.partKeyword.offset,
         length: d.partKeyword.length,
       ),
-      uri: _stripQuotes(source.substring(
-        uri.offset,
-        uri.offset + uri.length,
-      )),
+      uri: _decodeUriLiteral(uri, source),
       uriSpan: SourceSpan(offset: uri.offset, length: uri.length),
       sourceSpan: span,
     );
@@ -159,11 +150,7 @@ DirectiveNode? _convertDirective(Directive d, String source) {
               offset: libraryName.offset,
               length: libraryName.length,
             ),
-      uri: uri == null
-          ? null
-          : _stripQuotes(
-              source.substring(uri.offset, uri.offset + uri.length),
-            ),
+      uri: uri == null ? null : _decodeUriLiteral(uri, source),
       uriSpan: uri == null
           ? null
           : SourceSpan(offset: uri.offset, length: uri.length),
@@ -213,10 +200,41 @@ CombinatorNode _convertCombinator(Combinator c, String source) {
   throw StateError('Unknown combinator type: ${c.runtimeType}');
 }
 
-String _stripQuotes(String literal) {
-  if (literal.length >= 2 &&
-      (literal.startsWith("'") || literal.startsWith('"'))) {
-    return literal.substring(1, literal.length - 1);
+/// Returns the decoded URI string for a directive URI literal.
+///
+/// Prefers the analyzer's already-decoded `SimpleStringLiteral.value` —
+/// it handles raw (`r'...'`) and triple-quoted (`'''...'''` / `"""..."""`)
+/// forms, plus escape sequences, correctly. Falls back to a substring
+/// strip for non-`SimpleStringLiteral` shapes (`AdjacentStrings`,
+/// `StringInterpolation`) which aren't valid URIs but might appear in
+/// malformed/error-recovered source.
+String _decodeUriLiteral(StringLiteral uri, String source) {
+  if (uri is SimpleStringLiteral) {
+    return uri.value;
   }
-  return literal;
+  // Defensive fallback: strip outermost single or double quotes (any count).
+  // Real directive URIs are always SimpleStringLiteral so this rarely runs.
+  final raw = source.substring(uri.offset, uri.offset + uri.length);
+  return _stripOuterQuotes(raw);
+}
+
+String _stripOuterQuotes(String literal) {
+  if (literal.isEmpty) return literal;
+  // Match opening quote run (`'`, `'''`, `"`, `"""`, with optional `r` prefix).
+  var start = 0;
+  if (literal.startsWith('r')) {
+    start = 1;
+  }
+  if (start >= literal.length) return literal;
+  final ch = literal[start];
+  if (ch != "'" && ch != '"') return literal;
+  // Count run.
+  var run = 0;
+  while (start + run < literal.length && literal[start + run] == ch) {
+    run++;
+  }
+  if (run >= 3) run = 3;
+  // Strip `run` chars from start and end.
+  if (literal.length < start + run + run) return literal;
+  return literal.substring(start + run, literal.length - run);
 }

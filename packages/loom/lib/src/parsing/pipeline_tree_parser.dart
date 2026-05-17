@@ -61,12 +61,16 @@ PipelineTreeModel parsePipelineTree(String source) {
     for (final member in declaration.body.members) {
       if (member is MethodDeclaration) {
         final returnExpr = extractMethodReturnExpression(member);
-        if (returnExpr != null &&
+        final isPipelineRootCandidate =
+            returnExpr != null && _isPipelineRoot(returnExpr, rootClassNames);
+        if (isPipelineRootCandidate &&
             rootMethod == null &&
-            rootFieldInitializer == null &&
-            _isPipelineRoot(returnExpr, rootClassNames)) {
+            rootFieldInitializer == null) {
           rootMethod = member;
-        } else {
+        } else if (!isPipelineRootCandidate) {
+          // Mirror parseRouteTree: route/pipeline-root-shaped sibling
+          // methods are independent roots, not helpers — don't register
+          // them as classMethods.
           classMethods[member.name.lexeme] = member;
         }
       } else if (member is FieldDeclaration &&
@@ -112,9 +116,22 @@ PipelineTreeModel parsePipelineTree(String source) {
 
 bool _isPipelineRoot(Expression expr, Set<String> rootClassNames) {
   if (expr is InstanceCreationExpression) {
-    return rootClassNames.contains(expr.constructorName.type.name.lexeme);
+    final type = expr.constructorName.type;
+    // Type-argumented or prefixed calls go opaque per BaseVisitor's policy;
+    // don't claim them as a tree root (see parseRouteTree's _isRouteRoot for
+    // the rationale).
+    if (type.typeArguments != null) {
+      return false;
+    }
+    if (type.importPrefix != null) {
+      return false;
+    }
+    return rootClassNames.contains(type.name.lexeme);
   }
   if (expr is MethodInvocation) {
+    if (expr.typeArguments != null) {
+      return false;
+    }
     final target = expr.target;
     if (target == null) {
       return rootClassNames.contains(expr.methodName.name);

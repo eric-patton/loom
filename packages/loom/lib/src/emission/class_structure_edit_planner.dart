@@ -331,6 +331,24 @@ class ClassStructureEditPlanner {
     }
 
     // M7.4: section creation for `named` / `positionalOptional`.
+    //
+    // Dart parameter lists allow AT MOST ONE of `[...]` or `{...}` —
+    // these sections are mutually exclusive. If we're being asked to
+    // create a `named` section but a `positionalOptional` section
+    // already exists (or vice versa), the result would be syntactically
+    // invalid: the new bracket-section would land inside the existing
+    // one. Refuse rather than emit something that won't reparse.
+    final incompatibleSection = section == ParameterSection.named
+        ? ParameterSection.positionalOptional
+        : ParameterSection.named;
+    if (parameters.any((p) => _sectionOf(p) == incompatibleSection)) {
+      throw ArgumentError(
+        'Cannot add a ${section.name} parameter: the parameter list '
+        'already has a ${incompatibleSection.name} section, and Dart '
+        'allows at most one of `[...]` or `{...}` per list.',
+      );
+    }
+
     final (open, close) =
         section == ParameterSection.named ? ('{', '}') : ('[', ']');
     final bracketed = '$open$newParameterSource$close';
@@ -345,7 +363,9 @@ class ClassStructureEditPlanner {
     }
 
     // List has positional params; append `, {newParam}` / `, [newParam]`
-    // after the last param.
+    // after the last param. (At this point we've ruled out the
+    // mutually-exclusive case above, so `parameters` is all
+    // positional-required.)
     final lastParam = parameters.last;
     return SourceEdit(
       offset: lastParam.sourceSpan.end,
@@ -771,7 +791,7 @@ class ClassStructureEditPlanner {
     required AnnotationNode annotation,
     required String source,
   }) {
-    final start = annotation.sourceSpan.offset;
+    var start = annotation.sourceSpan.offset;
     var end = annotation.sourceSpan.end;
     // Extend over trailing horizontal whitespace + at most one newline.
     while (end < source.length) {
@@ -785,6 +805,7 @@ class ClassStructureEditPlanner {
         break;
       }
     }
+    start = _trimLeadingIndentForFullLineRemoval(source, start);
     return SourceEdit(
       offset: start,
       length: end - start,
@@ -830,7 +851,7 @@ class ClassStructureEditPlanner {
     required ClassMember member,
     required String source,
   }) {
-    final start = member.sourceSpan.offset;
+    var start = member.sourceSpan.offset;
     var end = member.sourceSpan.offset + member.sourceSpan.length;
     // Extend over trailing horizontal whitespace + one newline so the
     // gap collapses cleanly. Stops at the first non-whitespace byte.
@@ -845,6 +866,7 @@ class ClassStructureEditPlanner {
         break;
       }
     }
+    start = _trimLeadingIndentForFullLineRemoval(source, start);
     return SourceEdit(
       offset: start,
       length: end - start,
@@ -1129,4 +1151,34 @@ class ClassStructureEditPlanner {
     }
     return source.substring(lineStart, i);
   }
+}
+
+/// Backward-extends a removal's `start` offset over any horizontal
+/// whitespace that immediately precedes it on the same line, but ONLY
+/// when the removed range sits on its own line (i.e., the leading
+/// whitespace runs straight back to a newline or the file start with
+/// nothing else on the line). For inline removals (something else on
+/// the same line before [start]), the offset is unchanged — the existing
+/// content's trailing space stays where it is.
+///
+/// Why: removers consume trailing whitespace + one newline; without this
+/// helper they leave the LEADING indent untouched, so the next line's
+/// own indent doubles up and the diff is no longer minimal.
+int _trimLeadingIndentForFullLineRemoval(String source, int start) {
+  var probe = start;
+  while (probe > 0) {
+    final ch = source.codeUnitAt(probe - 1);
+    if (ch == 0x20 || ch == 0x09) {
+      probe--;
+    } else {
+      break;
+    }
+  }
+  // If we ran straight back to a newline (or the start of the file with
+  // no intervening non-whitespace), this is an own-line removal; consume
+  // the indent. Otherwise leave `start` alone.
+  if (probe == 0 || source.codeUnitAt(probe - 1) == 0x0A) {
+    return probe;
+  }
+  return start;
 }

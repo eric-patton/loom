@@ -1,16 +1,28 @@
 import 'annotation.dart';
+import 'node.dart' show ParseDiagnostic;
 import 'source_span.dart';
 
 export 'annotation.dart';
+export 'node.dart' show ParseDiagnostic;
 
 /// Snapshot of the top-level names declared in a single Dart file.
 /// Built by `parseFileSymbols`.
 class FileSymbols {
-  FileSymbols({required List<FileSymbolDeclaration> declarations})
-      : declarations = List.unmodifiable(declarations);
+  FileSymbols({
+    required List<FileSymbolDeclaration> declarations,
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  })  : declarations = List.unmodifiable(declarations),
+        diagnostics = List.unmodifiable(diagnostics);
 
   /// Top-level declarations in source order.
   final List<FileSymbolDeclaration> declarations;
+
+  /// Analyzer parse diagnostics surfaced while building this snapshot.
+  /// Mirrors the pattern on `WidgetTreeModel.diagnostics`, etc. — a
+  /// non-empty list means the source had syntax errors and the
+  /// declaration list may be partial (whatever the analyzer
+  /// error-recovered).
+  final List<ParseDiagnostic> diagnostics;
 
   /// Returns the declared names (without spans). Computed eagerly
   /// since this is the most-used view.
@@ -26,7 +38,8 @@ class FileSymbols {
   }
 
   @override
-  String toString() => 'FileSymbols(${declarations.length} declaration(s))';
+  String toString() => 'FileSymbols(${declarations.length} declaration(s)'
+      '${diagnostics.isEmpty ? '' : ', ${diagnostics.length} diagnostic(s)'})';
 }
 
 /// One top-level declaration's metadata. Doesn't carry the full AST —

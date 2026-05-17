@@ -99,6 +99,28 @@ class WidgetVisitor extends BaseVisitor {
         span: call.span,
       );
     }
+    // Negative literals: `EdgeInsets.all(-8)` is parsed as
+    // PrefixExpression('-', IntegerLiteral(8)) rather than a single signed
+    // literal. Recognize the shape so the editor sees a structured value.
+    if (arg is PrefixExpression && arg.operator.lexeme == '-') {
+      final inner = arg.operand;
+      if (inner is IntegerLiteral) {
+        final v = inner.value;
+        if (v == null) return null;
+        return EdgeInsetsAllValue(
+          amount: -v,
+          amountIsDouble: false,
+          span: call.span,
+        );
+      }
+      if (inner is DoubleLiteral) {
+        return EdgeInsetsAllValue(
+          amount: -inner.value,
+          amountIsDouble: true,
+          span: call.span,
+        );
+      }
+    }
     return null;
   }
 

@@ -83,6 +83,132 @@ void unused() {}
     });
   });
 
+  group('ProjectModel — exportedNamesOf', () {
+    test('diamond re-export: name visible via either of two paths', () {
+      // Regression: _exportedNamesOf shared its visited set across recursive
+      // branches, so when A re-exported the same library via two intermediate
+      // barrels (B and D, with different show clauses), only the first path
+      // contributed names. Both branches must walk through the shared library
+      // independently to apply their own combinators.
+      final project = ProjectModel.fromSources({
+        'a.dart': "export 'b.dart';\nexport 'd.dart';\n",
+        'b.dart': "export 'c.dart' show First;\n",
+        'd.dart': "export 'c.dart' show Second;\n",
+        'c.dart': '''
+class First {}
+class Second {}
+''',
+      });
+      final exported = project.exportedNamesOf('a.dart');
+      expect(exported, contains('First'));
+      expect(exported, contains('Second'));
+    });
+  });
+
+  group('ProjectModel — Windows path canonicalization', () {
+    // `Uri.parse(r'C:\foo\bar.dart')` succeeds but interprets `C` as a
+    // one-letter URI scheme, and silently corrupts relative-import math.
+    // ProjectModel canonicalizes keys at every entry point so callers can
+    // pass raw Windows paths, POSIX paths, or `file:///` URIs interchangeably.
+
+    test('canonicalizeFileKey: Windows absolute path → file:/// URI', () {
+      final canonical = canonicalizeFileKey(r'C:\proj\lib\main.dart');
+      expect(canonical, startsWith('file:///'));
+      // Same path passed twice — same key.
+      final canonical2 = canonicalizeFileKey(r'C:\proj\lib\main.dart');
+      expect(canonical2, equals(canonical));
+    });
+
+    test(
+        'canonicalizeFileKey: forward and back slashes for same Windows path '
+        'collapse to one canonical form', () {
+      final a = canonicalizeFileKey(r'C:\proj\lib\main.dart');
+      final b = canonicalizeFileKey('C:/proj/lib/main.dart');
+      expect(a, equals(b));
+    });
+
+    test('canonicalizeFileKey: an already-canonical file:/// URI is preserved',
+        () {
+      const uri = 'file:///C:/proj/main.dart';
+      expect(canonicalizeFileKey(uri), equals(uri));
+    });
+
+    test('canonicalizeFileKey: package: and dart: URIs are preserved as-is',
+        () {
+      expect(canonicalizeFileKey('package:foo/bar.dart'),
+          equals('package:foo/bar.dart'));
+      expect(canonicalizeFileKey('dart:core'), equals('dart:core'));
+    });
+
+    test('canonicalizeFileKey: relative path normalized but kept relative', () {
+      expect(canonicalizeFileKey('lib/main.dart'), equals('lib/main.dart'));
+      // The path package folds `./` and double separators.
+      expect(canonicalizeFileKey('lib/./main.dart'), equals('lib/main.dart'));
+    });
+
+    test('files map is keyed by canonical form', () {
+      final project = ProjectModel.fromSources({
+        r'C:\proj\main.dart': "import 'helper.dart';\nvoid main() {}\n",
+        r'C:\proj\helper.dart': 'const x = 1;\n',
+      });
+      // Lookup by raw Windows path — should work.
+      expect(project[r'C:\proj\main.dart'], isNotNull);
+      // Lookup by canonical URI — should also work.
+      expect(project[canonicalizeFileKey(r'C:\proj\main.dart')], isNotNull);
+      // The keys stored are canonical (file:/// URIs).
+      for (final key in project.files.keys) {
+        expect(key, startsWith('file:///'));
+      }
+    });
+
+    test('cross-file import resolution works with Windows-style keys', () {
+      // The bug this guards: Uri.parse(r'C:\proj\main.dart').resolveUri(
+      // Uri.parse('helper.dart')) silently produces c:helper.dart because
+      // backslashes aren't path separators in URI semantics. With
+      // canonicalization, both the keys and the resolved URI live in the
+      // same `file:///` space, so resolveImportUri actually finds helper.dart.
+      final project = ProjectModel.fromSources({
+        r'C:\proj\main.dart': "import 'helper.dart';\nvoid main() {}\n",
+        r'C:\proj\helper.dart': 'String hi() => "hi";\n',
+      });
+      final resolved = project.resolveImportUri(
+        'helper.dart',
+        fromFile: r'C:\proj\main.dart',
+      );
+      expect(resolved, isNotNull);
+      // The resolved URI must match the canonical key of helper.dart.
+      expect(
+        resolved.toString(),
+        equals(canonicalizeFileKey(r'C:\proj\helper.dart')),
+      );
+    });
+
+    test('resolveSymbol works across files keyed by Windows-style paths', () {
+      final project = ProjectModel.fromSources({
+        r'C:\proj\main.dart': "import 'helper.dart';\nvoid main() {}\n",
+        r'C:\proj\helper.dart': 'class Helper {}\n',
+      });
+      final loc = project.resolveSymbol(
+        'Helper',
+        fromFile: r'C:\proj\main.dart',
+      );
+      expect(loc, isNotNull);
+      expect(
+          loc!.filePath, equals(canonicalizeFileKey(r'C:\proj\helper.dart')));
+      expect(loc.name, equals('Helper'));
+    });
+
+    test('exportedNamesOf transitively walks barrels keyed by Windows paths',
+        () {
+      final project = ProjectModel.fromSources({
+        r'C:\proj\barrel.dart': "export 'card.dart';\n",
+        r'C:\proj\card.dart': 'class MyCard {}\n',
+      });
+      final names = project.exportedNamesOf(r'C:\proj\barrel.dart');
+      expect(names, contains('MyCard'));
+    });
+  });
+
   group('ProjectModel — parse diagnostics surface per file', () {
     test('filesWithDiagnostics flags syntactically broken files', () {
       final project = ProjectModel.fromSources({

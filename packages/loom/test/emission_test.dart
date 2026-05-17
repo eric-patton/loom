@@ -1053,5 +1053,87 @@ class App extends StatelessWidget {
         );
       },
     );
+
+    test('unknown slot key with children throws ArgumentError', () {
+      // Regression: ConstructorCallSerializer used to silently treat
+      // unknown slot keys as single-shaped, dropping all but the first
+      // child. Visitor never produces this shape, but a hand-built node
+      // (or a local-catalog spec missing the slot) could. Throw instead.
+      final bogus = WidgetNode(
+        className: 'Text',
+        properties: const {},
+        // 'children' is NOT declared on Text's catalog spec.
+        childSlots: {
+          'children': [
+            WidgetNode(
+              className: 'Text',
+              properties: const {
+                'data': StringLiteralValue(value: 'a', span: _span),
+              },
+              childSlots: const {},
+              sourceSpan: _span,
+              styleHints: const StyleHints(),
+            ),
+          ],
+        },
+        sourceSpan: _span,
+        styleHints: const StyleHints(),
+      );
+      expect(() => WidgetSerializer.serialize(bogus), throwsArgumentError);
+    });
+
+    test('single-shaped slot with multiple children throws ArgumentError', () {
+      // Regression: ConstructorCallSerializer used to silently emit only
+      // the first child when a single-shaped slot somehow had multiple
+      // children, dropping siblings. Now: throws.
+      final bogus = WidgetNode(
+        className: 'Padding',
+        properties: const {},
+        // Padding.child is single-shaped; two entries is invariant break.
+        childSlots: {
+          'child': [
+            WidgetNode(
+              className: 'Text',
+              properties: const {
+                'data': StringLiteralValue(value: 'a', span: _span),
+              },
+              childSlots: const {},
+              sourceSpan: _span,
+              styleHints: const StyleHints(),
+            ),
+            WidgetNode(
+              className: 'Text',
+              properties: const {
+                'data': StringLiteralValue(value: 'b', span: _span),
+              },
+              childSlots: const {},
+              sourceSpan: _span,
+              styleHints: const StyleHints(),
+            ),
+          ],
+        },
+        sourceSpan: _span,
+        styleHints: const StyleHints(),
+      );
+      expect(() => WidgetSerializer.serialize(bogus), throwsArgumentError);
+    });
+
+    test('unknown slot key with EMPTY child list is harmless (no throw)', () {
+      // Hand-built nodes that pre-declare an empty unknown slot (perhaps
+      // from a model template) shouldn't be punished — the slot
+      // contributes nothing to the output.
+      final ok = WidgetNode(
+        className: 'Text',
+        properties: const {
+          'data': StringLiteralValue(value: 'hi', span: _span),
+        },
+        childSlots: const {
+          'mysterySlot': <ModelNode>[],
+        },
+        sourceSpan: _span,
+        styleHints: const StyleHints(),
+      );
+      expect(WidgetSerializer.serialize(ok), equals("Text('hi')"));
+    });
   });
 }

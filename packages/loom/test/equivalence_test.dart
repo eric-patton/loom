@@ -165,4 +165,86 @@ void main() {
       expect(StructuralEquivalence.propertiesEqual(a, b), isFalse);
     });
   });
+
+  group('StructuralEquivalence — Route/Pipeline coverage', () {
+    test('two structurally identical RouteNodes compare equal', () {
+      // Regression: _modelNodesEqual used to fall through to `_ => false`
+      // for any non-Widget/Opaque/MethodRef pair, so even identical
+      // RouteNodes compared as not equal.
+      final a = RouteNode(
+        className: 'GoRoute',
+        properties: const {
+          'path': StringLiteralValue(value: '/', span: _someSpan),
+        },
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      final b = RouteNode(
+        className: 'GoRoute',
+        properties: const {
+          'path': StringLiteralValue(value: '/', span: _someSpan),
+        },
+        childSlots: const {},
+        sourceSpan: const SourceSpan(offset: 100, length: 20),
+        styleHints: const StyleHints(),
+      );
+      expect(StructuralEquivalence.nodesEqual(a, b), isTrue);
+    });
+
+    test('two structurally identical PipelineNodes compare equal', () {
+      final a = PipelineNode(
+        className: 'ValidateInput',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      final b = PipelineNode(
+        className: 'ValidateInput',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: const SourceSpan(offset: 50, length: 10),
+        styleHints: const StyleHints(),
+      );
+      expect(StructuralEquivalence.nodesEqual(a, b), isTrue);
+    });
+
+    test('different namedConstructor on RouteNode -> not equal', () {
+      final a = RouteNode(
+        className: 'GoRoute',
+        namedConstructor: 'named',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      final b = RouteNode(
+        className: 'GoRoute',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      expect(StructuralEquivalence.nodesEqual(a, b), isFalse);
+    });
+
+    test('cross-domain node pairs (WidgetNode vs RouteNode) are not equal', () {
+      final widget = WidgetNode(
+        className: 'Text',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      final route = RouteNode(
+        className: 'Text',
+        properties: const {},
+        childSlots: const {},
+        sourceSpan: _someSpan,
+        styleHints: const StyleHints(),
+      );
+      expect(StructuralEquivalence.nodesEqual(widget, route), isFalse);
+    });
+  });
 }

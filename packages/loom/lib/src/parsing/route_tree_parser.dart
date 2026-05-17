@@ -71,12 +71,18 @@ RouteTreeModel parseRouteTree(String source) {
     for (final member in declaration.body.members) {
       if (member is MethodDeclaration) {
         final returnExpr = extractMethodReturnExpression(member);
-        if (returnExpr != null &&
+        final isRouteRootCandidate =
+            returnExpr != null && _isRouteRoot(returnExpr, rootClassNames);
+        if (isRouteRootCandidate &&
             rootMethod == null &&
-            rootFieldInitializer == null &&
-            _isRouteRoot(returnExpr, rootClassNames)) {
+            rootFieldInitializer == null) {
           rootMethod = member;
-        } else {
+        } else if (!isRouteRootCandidate) {
+          // Only NON-route-root methods go to classMethods. A sibling method
+          // that itself returns a route root is an independent root, not a
+          // helper — registering it as a helper would let the visitor
+          // resolve a call to it as a MethodReferenceNode pointing at the
+          // wrong subtree.
           classMethods[member.name.lexeme] = member;
         }
       } else if (member is FieldDeclaration &&
@@ -123,17 +129,26 @@ RouteTreeModel parseRouteTree(String source) {
 bool _isRouteRoot(Expression expr, Set<String> rootClassNames) {
   if (expr is InstanceCreationExpression) {
     final type = expr.constructorName.type;
-    final prefixToken = type.importPrefix;
-    // `prefix.GoRouter(...)` → prefix is the import alias, not the class
-    // name. The class name itself is the local name, which is what
-    // RouteCatalog keys on. (Matches how the visitor resolves prefixed
-    // constructors: when an importPrefix is present, the local name is
-    // the named constructor; we still want the catalog lookup keyed by
-    // the class.)
-    final name = prefixToken == null ? type.name.lexeme : type.name.lexeme;
-    return rootClassNames.contains(name);
+    // Type-argumented calls (`GoRouter<int>(...)`) round-trip opaquely
+    // (BaseVisitor.tryExtractCall returns null for them), so they can't
+    // produce a RouteNode root — don't claim them here.
+    if (type.typeArguments != null) {
+      return false;
+    }
+    if (type.importPrefix != null) {
+      // `prefix.GoRouter(...)` — without resolved types we can't tell
+      // whether `prefix` is an import alias or a class. The visitor
+      // treats it as `className=prefix, namedConstructor=GoRouter`,
+      // which won't resolve in `RouteCatalog`. Don't classify this as a
+      // route root; let it fall through to the visitor's opaque path.
+      return false;
+    }
+    return rootClassNames.contains(type.name.lexeme);
   }
   if (expr is MethodInvocation) {
+    if (expr.typeArguments != null) {
+      return false;
+    }
     final target = expr.target;
     if (target == null) {
       return rootClassNames.contains(expr.methodName.name);

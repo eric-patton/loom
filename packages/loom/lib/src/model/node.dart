@@ -208,10 +208,10 @@ class WidgetNode extends ModelNode {
 /// can show a "this file has syntax errors" warning or refuse edits
 /// while a file is mid-edit and not parseable.
 class WidgetTreeModel {
-  const WidgetTreeModel({
+  WidgetTreeModel({
     required this.root,
-    this.diagnostics = const <ParseDiagnostic>[],
-  });
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  }) : diagnostics = List.unmodifiable(diagnostics);
 
   final ModelNode root;
 
@@ -219,6 +219,10 @@ class WidgetTreeModel {
   /// when the source had syntax errors; the model still reflects what
   /// could be error-recovered, but downstream callers may want to
   /// refuse edits or show a warning until the diagnostics list is empty.
+  ///
+  /// Defensive copy: passed-in lists are wrapped via `List.unmodifiable`
+  /// so the model's view can't be mutated after construction. Mirrors
+  /// the unmodifiable wrapping on `WidgetNode.properties` / `childSlots`.
   final List<ParseDiagnostic> diagnostics;
 
   @override
@@ -314,10 +318,10 @@ class RouteNode extends ModelNode {
 /// on `MethodReferenceNode` or `OpaqueNode` at the root when the route
 /// expression isn't a direct constructor call.
 class RouteTreeModel {
-  const RouteTreeModel({
+  RouteTreeModel({
     required this.root,
-    this.diagnostics = const <ParseDiagnostic>[],
-  });
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  }) : diagnostics = List.unmodifiable(diagnostics);
 
   final ModelNode root;
   final List<ParseDiagnostic> diagnostics;
@@ -390,10 +394,10 @@ class PipelineNode extends ModelNode {
 /// Public root of the pipeline-tree visual model. Same role as
 /// `WidgetTreeModel` / `RouteTreeModel` for the pipeline DSL.
 class PipelineTreeModel {
-  const PipelineTreeModel({
+  PipelineTreeModel({
     required this.root,
-    this.diagnostics = const <ParseDiagnostic>[],
-  });
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  }) : diagnostics = List.unmodifiable(diagnostics);
 
   final ModelNode root;
   final List<ParseDiagnostic> diagnostics;

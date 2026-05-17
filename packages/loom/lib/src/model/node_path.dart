@@ -1,5 +1,8 @@
+import 'list_slot_style.dart';
 import 'node.dart';
 import 'property_value.dart';
+import 'source_span.dart';
+import 'style_hints.dart';
 
 /// One step along a path through the model: which child slot to descend
 /// into, and which index within that slot.
@@ -53,7 +56,7 @@ extension NodeNavigation on WidgetTreeModel {
     int index,
     ModelNode newChild,
   ) {
-    _requireListSlotParent(parentPath, slot);
+    _requireListSlotParent(root, parentPath, slot);
     return WidgetTreeModel(
       root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
         if (index < 0 || index > current.length) {
@@ -74,7 +77,7 @@ extension NodeNavigation on WidgetTreeModel {
   /// Returns a new model with the child at `parentPath / slot[index]`
   /// removed. Throws `ArgumentError` if the slot is not list-shaped.
   WidgetTreeModel removeChild(NodePath parentPath, String slot, int index) {
-    _requireListSlotParent(parentPath, slot);
+    _requireListSlotParent(root, parentPath, slot);
     return WidgetTreeModel(
       root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
         if (index < 0 || index >= current.length) {
@@ -100,58 +103,13 @@ extension NodeNavigation on WidgetTreeModel {
     int from,
     int to,
   ) {
-    _requireListSlotParent(parentPath, slot);
+    _requireListSlotParent(root, parentPath, slot);
     return WidgetTreeModel(
       root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
-        if (from < 0 || from >= current.length) {
-          throw ArgumentError(
-            'Move source $from out of range [0, ${current.length})',
-          );
-        }
-        if (to < 0 || to >= current.length) {
-          throw ArgumentError(
-            'Move destination $to out of range [0, ${current.length})',
-          );
-        }
-        if (from == to) {
-          return current;
-        }
-        final mutable = <ModelNode>[...current];
-        final moved = mutable.removeAt(from);
-        mutable.insert(to, moved);
-        return mutable;
+        return _moveInList(current, from, to);
       }),
       diagnostics: diagnostics,
     );
-  }
-
-  /// Guards `insertChild` / `removeChild` / `moveChild`: the model-level
-  /// structural-edit API operates only on list-shaped slots (those with
-  /// a captured `ListSlotStyle`). Single-shaped slots (e.g. `child:`)
-  /// and slots whose source expression isn't a list literal (e.g.
-  /// `children: spread()`, which the visitor captures as a single
-  /// `OpaqueNode` with no `ListSlotStyle`) are rejected here so the
-  /// model and `EditPlanner` agree on what's editable — otherwise the
-  /// model would accept a mutation that the planner refuses to
-  /// serialize back to source.
-  void _requireListSlotParent(NodePath parentPath, String slot) {
-    final node = nodeAt(parentPath);
-    if (node == null) {
-      throw ArgumentError('parentPath does not resolve to any node');
-    }
-    if (node is! WidgetNode) {
-      throw ArgumentError(
-        'parentPath resolves to ${node.runtimeType}, not a WidgetNode',
-      );
-    }
-    if (!node.childSlotStyles.containsKey(slot)) {
-      throw ArgumentError(
-        '${node.className}.$slot is not a list-shaped slot; '
-        'structural edits require a list-shaped slot. Single-shaped '
-        'slots and slots whose source expression is not a list literal '
-        '(e.g. children: spread()) cannot be structurally edited.',
-      );
-    }
   }
 
   /// Walks the tree in pre-order and yields one entry per node, paired
@@ -165,65 +123,371 @@ extension NodeNavigation on WidgetTreeModel {
   }
 }
 
+/// Same surface as `NodeNavigation` (above) but for `RouteTreeModel`.
+///
+/// `RouteNode`, `WidgetNode`, and `PipelineNode` share the same
+/// constructor-call shape (className + namedConstructor + properties +
+/// childSlots + styleHints), so the underlying helpers operate uniformly
+/// on any of the three; only the wrapping model type and the leading
+/// type-guard differ.
+extension RouteTreeNavigation on RouteTreeModel {
+  ModelNode? nodeAt(NodePath path) => _nodeAt(root, path);
+
+  RouteTreeModel withProperty(
+    NodePath path,
+    String propName,
+    PropertyValue value,
+  ) =>
+      RouteTreeModel(
+        root: _withPropertyOnModelNode(root, path, propName, value),
+        diagnostics: diagnostics,
+      );
+
+  RouteTreeModel insertChild(
+    NodePath parentPath,
+    String slot,
+    int index,
+    ModelNode newChild,
+  ) {
+    _requireListSlotParent(root, parentPath, slot);
+    return RouteTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        if (index < 0 || index > current.length) {
+          throw ArgumentError(
+            'Insert index $index out of range [0, ${current.length}]',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          newChild,
+          ...current.sublist(index),
+        ];
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  RouteTreeModel removeChild(NodePath parentPath, String slot, int index) {
+    _requireListSlotParent(root, parentPath, slot);
+    return RouteTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        if (index < 0 || index >= current.length) {
+          throw ArgumentError(
+            'Remove index $index out of range [0, ${current.length})',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          ...current.sublist(index + 1),
+        ];
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  RouteTreeModel moveChild(
+    NodePath parentPath,
+    String slot,
+    int from,
+    int to,
+  ) {
+    _requireListSlotParent(root, parentPath, slot);
+    return RouteTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        return _moveInList(current, from, to);
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  List<({NodePath path, ModelNode node})> walk() {
+    final out = <({NodePath path, ModelNode node})>[];
+    _walk(root, const <NodePathSegment>[], out);
+    return out;
+  }
+}
+
+/// Same surface as `NodeNavigation`, for `PipelineTreeModel`.
+extension PipelineTreeNavigation on PipelineTreeModel {
+  ModelNode? nodeAt(NodePath path) => _nodeAt(root, path);
+
+  PipelineTreeModel withProperty(
+    NodePath path,
+    String propName,
+    PropertyValue value,
+  ) =>
+      PipelineTreeModel(
+        root: _withPropertyOnModelNode(root, path, propName, value),
+        diagnostics: diagnostics,
+      );
+
+  PipelineTreeModel insertChild(
+    NodePath parentPath,
+    String slot,
+    int index,
+    ModelNode newChild,
+  ) {
+    _requireListSlotParent(root, parentPath, slot);
+    return PipelineTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        if (index < 0 || index > current.length) {
+          throw ArgumentError(
+            'Insert index $index out of range [0, ${current.length}]',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          newChild,
+          ...current.sublist(index),
+        ];
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  PipelineTreeModel removeChild(NodePath parentPath, String slot, int index) {
+    _requireListSlotParent(root, parentPath, slot);
+    return PipelineTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        if (index < 0 || index >= current.length) {
+          throw ArgumentError(
+            'Remove index $index out of range [0, ${current.length})',
+          );
+        }
+        return <ModelNode>[
+          ...current.sublist(0, index),
+          ...current.sublist(index + 1),
+        ];
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  PipelineTreeModel moveChild(
+    NodePath parentPath,
+    String slot,
+    int from,
+    int to,
+  ) {
+    _requireListSlotParent(root, parentPath, slot);
+    return PipelineTreeModel(
+      root: _modifySlotOnModelNode(root, parentPath, slot, (current) {
+        return _moveInList(current, from, to);
+      }),
+      diagnostics: diagnostics,
+    );
+  }
+
+  List<({NodePath path, ModelNode node})> walk() {
+    final out = <({NodePath path, ModelNode node})>[];
+    _walk(root, const <NodePathSegment>[], out);
+    return out;
+  }
+}
+
+/// Read-only view of the fields shared by every constructor-call node
+/// (`WidgetNode`, `RouteNode`, `PipelineNode`). Used by the navigation
+/// helpers to walk/rebuild without caring which concrete type they have.
+class _CallView {
+  _CallView({
+    required this.className,
+    required this.namedConstructor,
+    required this.properties,
+    required this.childSlots,
+    required this.childSlotStyles,
+    required this.sourceSpan,
+    required this.styleHints,
+  });
+
+  final String className;
+  final String? namedConstructor;
+  final Map<String, PropertyValue> properties;
+  final Map<String, List<ModelNode>> childSlots;
+  final Map<String, ListSlotStyle> childSlotStyles;
+  final SourceSpan sourceSpan;
+  final StyleHints styleHints;
+}
+
+_CallView? _viewOf(ModelNode node) => switch (node) {
+      final WidgetNode w => _CallView(
+          className: w.className,
+          namedConstructor: w.namedConstructor,
+          properties: w.properties,
+          childSlots: w.childSlots,
+          childSlotStyles: w.childSlotStyles,
+          sourceSpan: w.sourceSpan,
+          styleHints: w.styleHints,
+        ),
+      final RouteNode r => _CallView(
+          className: r.className,
+          namedConstructor: r.namedConstructor,
+          properties: r.properties,
+          childSlots: r.childSlots,
+          childSlotStyles: r.childSlotStyles,
+          sourceSpan: r.sourceSpan,
+          styleHints: r.styleHints,
+        ),
+      final PipelineNode p => _CallView(
+          className: p.className,
+          namedConstructor: p.namedConstructor,
+          properties: p.properties,
+          childSlots: p.childSlots,
+          childSlotStyles: p.childSlotStyles,
+          sourceSpan: p.sourceSpan,
+          styleHints: p.styleHints,
+        ),
+      _ => null,
+    };
+
+/// Rebuilds a constructor-call node, preserving its concrete subtype
+/// (so a `RouteNode` parent stays a `RouteNode` after a child edit).
+ModelNode _rebuildCall(
+  ModelNode original, {
+  required Map<String, PropertyValue> properties,
+  required Map<String, List<ModelNode>> childSlots,
+}) {
+  return switch (original) {
+    final WidgetNode w => WidgetNode(
+        className: w.className,
+        namedConstructor: w.namedConstructor,
+        properties: properties,
+        childSlots: childSlots,
+        childSlotStyles: w.childSlotStyles,
+        sourceSpan: w.sourceSpan,
+        styleHints: w.styleHints,
+      ),
+    final RouteNode r => RouteNode(
+        className: r.className,
+        namedConstructor: r.namedConstructor,
+        properties: properties,
+        childSlots: childSlots,
+        childSlotStyles: r.childSlotStyles,
+        sourceSpan: r.sourceSpan,
+        styleHints: r.styleHints,
+      ),
+    final PipelineNode p => PipelineNode(
+        className: p.className,
+        namedConstructor: p.namedConstructor,
+        properties: properties,
+        childSlots: childSlots,
+        childSlotStyles: p.childSlotStyles,
+        sourceSpan: p.sourceSpan,
+        styleHints: p.styleHints,
+      ),
+    _ => throw StateError(
+        'Not a constructor-call node: ${original.runtimeType}',
+      ),
+  };
+}
+
+/// Guards `insertChild` / `removeChild` / `moveChild`: the model-level
+/// structural-edit API operates only on list-shaped slots (those with
+/// a captured `ListSlotStyle`). Single-shaped slots (e.g. `child:`)
+/// and slots whose source expression isn't a list literal (e.g.
+/// `children: spread()`, which the visitor captures as a single
+/// `OpaqueNode` with no `ListSlotStyle`) are rejected here so the
+/// model and `EditPlanner` agree on what's editable — otherwise the
+/// model would accept a mutation that the planner refuses to
+/// serialize back to source.
+void _requireListSlotParent(ModelNode root, NodePath parentPath, String slot) {
+  final node = _nodeAt(root, parentPath);
+  if (node == null) {
+    throw ArgumentError('parentPath does not resolve to any node');
+  }
+  final view = _viewOf(node);
+  if (view == null) {
+    throw ArgumentError(
+      'parentPath resolves to ${node.runtimeType}, not a '
+      'constructor-call node (WidgetNode/RouteNode/PipelineNode)',
+    );
+  }
+  if (!view.childSlotStyles.containsKey(slot)) {
+    throw ArgumentError(
+      '${view.className}.$slot is not a list-shaped slot; '
+      'structural edits require a list-shaped slot. Single-shaped '
+      'slots and slots whose source expression is not a list literal '
+      '(e.g. children: spread()) cannot be structurally edited.',
+    );
+  }
+}
+
+List<ModelNode> _moveInList(List<ModelNode> current, int from, int to) {
+  if (from < 0 || from >= current.length) {
+    throw ArgumentError(
+      'Move source $from out of range [0, ${current.length})',
+    );
+  }
+  if (to < 0 || to >= current.length) {
+    throw ArgumentError(
+      'Move destination $to out of range [0, ${current.length})',
+    );
+  }
+  if (from == to) return current;
+  final mutable = <ModelNode>[...current];
+  final moved = mutable.removeAt(from);
+  mutable.insert(to, moved);
+  return mutable;
+}
+
 ModelNode? _nodeAt(ModelNode start, NodePath path) {
   ModelNode current = start;
   for (final segment in path) {
-    if (current is WidgetNode) {
-      final slot = current.childSlots[segment.slot];
+    final view = _viewOf(current);
+    if (view != null) {
+      final slot = view.childSlots[segment.slot];
       if (slot == null || segment.index < 0 || segment.index >= slot.length) {
         return null;
       }
       current = slot[segment.index];
-    } else if (current is MethodReferenceNode) {
+      continue;
+    }
+    if (current is MethodReferenceNode) {
       if (segment.slot != _methodBodySlot || segment.index != 0) {
         return null;
       }
       current = current.body;
-    } else {
-      // OpaqueNode: cannot descend.
-      return null;
+      continue;
     }
+    // OpaqueNode: cannot descend.
+    return null;
   }
   return current;
 }
 
-WidgetNode _withProperty(
-  WidgetNode node,
+ModelNode _withCallProperty(
+  ModelNode node,
   NodePath path,
   String propName,
   PropertyValue value,
 ) {
+  final view = _viewOf(node);
+  if (view == null) {
+    throw StateError('not a constructor-call node: ${node.runtimeType}');
+  }
   if (path.isEmpty) {
-    if (!node.properties.containsKey(propName)) {
+    if (!view.properties.containsKey(propName)) {
       throw ArgumentError(
-        '${node.className} has no property "$propName" to update',
+        '${view.className} has no property "$propName" to update',
       );
     }
     final newProps = <String, PropertyValue>{
-      ...node.properties,
+      ...view.properties,
       propName: value,
     };
-    return WidgetNode(
-      className: node.className,
-      namedConstructor: node.namedConstructor,
-      properties: newProps,
-      childSlots: node.childSlots,
-      childSlotStyles: node.childSlotStyles,
-      sourceSpan: node.sourceSpan,
-      styleHints: node.styleHints,
-    );
+    return _rebuildCall(node,
+        properties: newProps, childSlots: view.childSlots);
   }
   final segment = path.first;
   final rest = path.sublist(1);
-  final slot = node.childSlots[segment.slot];
+  final slot = view.childSlots[segment.slot];
   if (slot == null) {
     throw ArgumentError(
-      '${node.className} has no slot "${segment.slot}"',
+      '${view.className} has no slot "${segment.slot}"',
     );
   }
   if (segment.index < 0 || segment.index >= slot.length) {
     throw ArgumentError(
-      'Index ${segment.index} out of range for ${node.className}.${segment.slot} (length ${slot.length})',
+      'Index ${segment.index} out of range for ${view.className}.${segment.slot} (length ${slot.length})',
     );
   }
   final descendingInto = slot[segment.index];
@@ -239,17 +503,10 @@ WidgetNode _withProperty(
     ...slot.sublist(segment.index + 1),
   ];
   final newSlots = <String, List<ModelNode>>{
-    ...node.childSlots,
+    ...view.childSlots,
     segment.slot: updatedSlot,
   };
-  return WidgetNode(
-    className: node.className,
-    properties: node.properties,
-    childSlots: newSlots,
-    childSlotStyles: node.childSlotStyles,
-    sourceSpan: node.sourceSpan,
-    styleHints: node.styleHints,
-  );
+  return _rebuildCall(node, properties: view.properties, childSlots: newSlots);
 }
 
 ModelNode _withPropertyOnModelNode(
@@ -258,9 +515,10 @@ ModelNode _withPropertyOnModelNode(
   String propName,
   PropertyValue value,
 ) {
+  if (_viewOf(node) != null) {
+    return _withCallProperty(node, path, propName, value);
+  }
   switch (node) {
-    case final WidgetNode w:
-      return _withProperty(w, path, propName, value);
     case final MethodReferenceNode m:
       if (path.isEmpty) {
         // Can't set a property directly on a MethodReferenceNode — its
@@ -293,57 +551,55 @@ ModelNode _withPropertyOnModelNode(
       throw const OpaqueEditException(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
+    case WidgetNode():
     case RouteNode():
     case PipelineNode():
-      // M6.1+: ModelNode is sealed across all domain catalogs. node_path's
-      // navigation is widget-tree-scoped today; non-widget-tree navigation
-      // would mirror this scaffolding with the relevant node type.
-      // Deferred until a downstream consumer asks.
-      throw ArgumentError(
-        'NodePath navigation does not support non-widget nodes',
-      );
+      // Already handled by the _viewOf check above; the analyzer
+      // doesn't statically know that, so this branch is unreachable
+      // but required for exhaustive switch on `ModelNode`.
+      throw StateError('unreachable: view-bearing case');
   }
 }
 
-WidgetNode _modifySlot(
-  WidgetNode node,
+ModelNode _modifyCallSlot(
+  ModelNode node,
   NodePath path,
   String slotName,
   List<ModelNode> Function(List<ModelNode> current) transform,
 ) {
+  final view = _viewOf(node);
+  if (view == null) {
+    throw StateError('not a constructor-call node: ${node.runtimeType}');
+  }
   if (path.isEmpty) {
-    final current = node.childSlots[slotName];
+    final current = view.childSlots[slotName];
     if (current == null) {
       throw ArgumentError(
-        '${node.className} has no slot "$slotName"',
+        '${view.className} has no slot "$slotName"',
       );
     }
     final updated = transform(current);
     final newSlots = <String, List<ModelNode>>{
-      ...node.childSlots,
+      ...view.childSlots,
       slotName: updated,
     };
-    return WidgetNode(
-      className: node.className,
-      namedConstructor: node.namedConstructor,
-      properties: node.properties,
+    return _rebuildCall(
+      node,
+      properties: view.properties,
       childSlots: newSlots,
-      childSlotStyles: node.childSlotStyles,
-      sourceSpan: node.sourceSpan,
-      styleHints: node.styleHints,
     );
   }
   final segment = path.first;
   final rest = path.sublist(1);
-  final descend = node.childSlots[segment.slot];
+  final descend = view.childSlots[segment.slot];
   if (descend == null) {
     throw ArgumentError(
-      '${node.className} has no slot "${segment.slot}"',
+      '${view.className} has no slot "${segment.slot}"',
     );
   }
   if (segment.index < 0 || segment.index >= descend.length) {
     throw ArgumentError(
-      'Index ${segment.index} out of range for ${node.className}.${segment.slot}',
+      'Index ${segment.index} out of range for ${view.className}.${segment.slot}',
     );
   }
   final descendingInto = descend[segment.index];
@@ -359,17 +615,10 @@ WidgetNode _modifySlot(
     ...descend.sublist(segment.index + 1),
   ];
   final newSlots = <String, List<ModelNode>>{
-    ...node.childSlots,
+    ...view.childSlots,
     segment.slot: updatedSlot,
   };
-  return WidgetNode(
-    className: node.className,
-    properties: node.properties,
-    childSlots: newSlots,
-    childSlotStyles: node.childSlotStyles,
-    sourceSpan: node.sourceSpan,
-    styleHints: node.styleHints,
-  );
+  return _rebuildCall(node, properties: view.properties, childSlots: newSlots);
 }
 
 ModelNode _modifySlotOnModelNode(
@@ -378,9 +627,10 @@ ModelNode _modifySlotOnModelNode(
   String slotName,
   List<ModelNode> Function(List<ModelNode> current) transform,
 ) {
+  if (_viewOf(node) != null) {
+    return _modifyCallSlot(node, path, slotName, transform);
+  }
   switch (node) {
-    case final WidgetNode w:
-      return _modifySlot(w, path, slotName, transform);
     case final MethodReferenceNode m:
       if (path.isEmpty) {
         throw ArgumentError(
@@ -410,11 +660,10 @@ ModelNode _modifySlotOnModelNode(
       throw const OpaqueEditException(
         'path descends into an OpaqueNode; opaque content is not editable',
       );
+    case WidgetNode():
     case RouteNode():
     case PipelineNode():
-      throw ArgumentError(
-        'NodePath navigation does not support non-widget nodes',
-      );
+      throw StateError('unreachable: view-bearing case');
   }
 }
 
@@ -424,27 +673,27 @@ void _walk(
   List<({NodePath path, ModelNode node})> out,
 ) {
   out.add((path: pathSoFar, node: node));
-  switch (node) {
-    case final WidgetNode w:
-      for (final slotEntry in w.childSlots.entries) {
-        for (var i = 0; i < slotEntry.value.length; i++) {
-          final segment = (slot: slotEntry.key, index: i);
-          _walk(slotEntry.value[i], [...pathSoFar, segment], out);
-        }
+  final view = _viewOf(node);
+  if (view != null) {
+    for (final slotEntry in view.childSlots.entries) {
+      for (var i = 0; i < slotEntry.value.length; i++) {
+        final segment = (slot: slotEntry.key, index: i);
+        _walk(slotEntry.value[i], [...pathSoFar, segment], out);
       }
+    }
+    return;
+  }
+  switch (node) {
     case final MethodReferenceNode m:
       const segment = (slot: _methodBodySlot, index: 0);
       _walk(m.body, [...pathSoFar, segment], out);
     case OpaqueNode():
       // Leaf.
       break;
+    case WidgetNode():
     case RouteNode():
     case PipelineNode():
-      // M6.1+: `_walk` is widget-tree-scoped today. A non-widget-tree walk
-      // would mirror this scaffolding using the relevant catalog's slot
-      // map. Deferred until a downstream consumer asks.
-      throw ArgumentError(
-        'NodePath walk does not support non-widget nodes',
-      );
+      // Already covered by the _viewOf check above.
+      break;
   }
 }

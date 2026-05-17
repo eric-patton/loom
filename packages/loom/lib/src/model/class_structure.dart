@@ -22,10 +22,10 @@ export 'node.dart' show ParseDiagnostic;
 /// introduce a shared `LoomModel` umbrella; for now, separate hierarchies
 /// are the honest representation.
 class ClassStructureModel {
-  const ClassStructureModel({
+  ClassStructureModel({
     required this.root,
-    this.diagnostics = const <ParseDiagnostic>[],
-  });
+    List<ParseDiagnostic> diagnostics = const <ParseDiagnostic>[],
+  }) : diagnostics = List.unmodifiable(diagnostics);
 
   final ClassStructureNode root;
   final List<ParseDiagnostic> diagnostics;

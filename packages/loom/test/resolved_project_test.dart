@@ -362,8 +362,10 @@ environment:
       }
     });
 
-    test('throws StateError for a path outside any included root', () async {
-      // Create the project rooted at tempDir.
+    test('returns null for a path outside any included root', () async {
+      // Per docstring: "or null if the file cannot be resolved (not in any
+      // context, ...)" — previously this threw StateError, contradicting
+      // the doc. Now it returns null.
       Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
       File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
 name: example
@@ -382,16 +384,202 @@ environment:
 
         final project = ResolvedProject.open(includedPaths: [tempDir.path]);
         try {
-          // `contextFor` throws StateError when path isn't in any context.
-          expect(
-            () => project.getResolvedUnit(outside.absolute.path),
-            throwsA(isA<StateError>()),
-          );
+          final result = await project.getResolvedUnit(outside.absolute.path);
+          expect(result, isNull);
         } finally {
           await project.dispose();
         }
       } finally {
         if (otherDir.existsSync()) await otherDir.delete(recursive: true);
+      }
+    });
+
+    test('dispose is idempotent', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      File(p.join(tempDir.path, 'lib', 'a.dart'))
+          .writeAsStringSync('class A {}');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      await project.dispose();
+      // Second dispose must not throw.
+      await project.dispose();
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // OverlayResourceProvider integration — UI editor needs type-aware
+  // queries on in-memory edits without writing to disk.
+  // ----------------------------------------------------------------
+  group('ResolvedProject — overlays', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('loom_overlay_');
+    });
+
+    tearDown(() async {
+      if (tempDir.existsSync()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('setOverlay shadows disk contents for subsequent resolution',
+        () async {
+      final libDir = Directory(p.join(tempDir.path, 'lib'))
+        ..createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(libDir.path, 'a.dart'))
+        ..writeAsStringSync('int answer() => 42;');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        // Initial state: disk says `answer()` returns int.
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'answer',
+          ),
+          equals('int'),
+        );
+
+        // Overlay: pretend the file actually returns String.
+        await project.setOverlay(
+          file.absolute.path,
+          'String answer() => "x";',
+        );
+
+        // Now resolution should see the overlay's return type.
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'answer',
+          ),
+          equals('String'),
+        );
+
+        // Disk is untouched.
+        expect(file.readAsStringSync(), equals('int answer() => 42;'));
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('removeOverlay reverts to disk contents', () async {
+      final libDir = Directory(p.join(tempDir.path, 'lib'))
+        ..createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(libDir.path, 'a.dart'))
+        ..writeAsStringSync('int answer() => 42;');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        await project.setOverlay(
+          file.absolute.path,
+          'String answer() => "x";',
+        );
+        expect(project.hasOverlay(file.absolute.path), isTrue);
+
+        await project.removeOverlay(file.absolute.path);
+        expect(project.hasOverlay(file.absolute.path), isFalse);
+
+        // Resolution should now see disk again.
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'answer',
+          ),
+          equals('int'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('overlay updates compose — sequential setOverlay calls work',
+        () async {
+      final libDir = Directory(p.join(tempDir.path, 'lib'))
+        ..createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final file = File(p.join(libDir.path, 'a.dart'))
+        ..writeAsStringSync('int v = 0;');
+
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        await project.setOverlay(file.absolute.path, 'String v = "a";');
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'v',
+          ),
+          equals('String'),
+        );
+
+        await project.setOverlay(file.absolute.path, 'double v = 1.0;');
+        expect(
+          await project.typeOfTopLevelDeclaration(
+            filePath: file.absolute.path,
+            name: 'v',
+          ),
+          equals('double'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('removeOverlay on a path with no overlay is a silent no-op', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        // Should not throw.
+        await project.removeOverlay(
+          p.join(tempDir.path, 'lib', 'never_set.dart'),
+        );
+      } finally {
+        await project.dispose();
+      }
+    });
+
+    test('setOverlay on a path outside any included root is silent', () async {
+      Directory(p.join(tempDir.path, 'lib')).createSync(recursive: true);
+      File(p.join(tempDir.path, 'pubspec.yaml')).writeAsStringSync('''
+name: example
+environment:
+  sdk: ^3.5.0
+''');
+      final project = ResolvedProject.open(includedPaths: [tempDir.path]);
+      try {
+        // No throw. The setOverlay records the overlay even though
+        // there's no context to notify — matches getResolvedUnit's null
+        // behavior for out-of-context paths.
+        await project.setOverlay(
+          p.join(tempDir.path, '..', 'outside.dart'),
+          'class X {}',
+        );
+      } finally {
+        await project.dispose();
       }
     });
   });

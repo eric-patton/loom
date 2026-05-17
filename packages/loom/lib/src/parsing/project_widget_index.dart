@@ -44,7 +44,14 @@ class ProjectWidgetIndex {
   factory ProjectWidgetIndex.build(ProjectModel project) {
     final widgetsPerFile = <String, Map<String, WidgetSpec>>{};
     for (final entry in project.files.entries) {
-      final unit = parseString(content: entry.value.source).unit;
+      // `throwIfDiagnostics: false` keeps the index tolerant of files with
+      // syntax errors — matches the rest of the kernel's "degrade gracefully"
+      // posture and `ProjectModel.fromSources`' own behavior. Without it, a
+      // single malformed file in the project crashes the index build.
+      final unit = parseString(
+        content: entry.value.source,
+        throwIfDiagnostics: false,
+      ).unit;
       final widgets = discoverIntraFileWidgets(unit);
       if (widgets.isNotEmpty) {
         widgetsPerFile[entry.key] = widgets;
@@ -56,21 +63,66 @@ class ProjectWidgetIndex {
     );
   }
 
+  /// Rebuilds the index for a single file's new source, sharing every
+  /// other file's already-computed widget map with the returned index.
+  ///
+  /// Use case: a visual editor that edits one file at a time can call
+  /// this on every save / debounced edit instead of paying the
+  /// `ProjectWidgetIndex.build` cost (which scans every file in the
+  /// project) per keystroke. The returned index keeps the same
+  /// underlying `ProjectModel` reference, so callers must keep that
+  /// model in sync separately — typically by also recreating it from
+  /// updated sources before rebuilding the index against the new model.
+  ///
+  /// [filePath] is canonicalized so callers can pass raw Windows paths,
+  /// POSIX paths, or `file:///` URIs interchangeably.
+  ///
+  /// If [filePath] is not present in the project, the returned index
+  /// drops the file's existing widgets (if any) but is otherwise
+  /// identical — the same semantics as if the file was deleted.
+  ProjectWidgetIndex rebuildFile(String filePath, String newSource) {
+    final canonical = canonicalizeFileKey(filePath);
+    // Re-parse the single file's widgets.
+    final unit = parseString(
+      content: newSource,
+      throwIfDiagnostics: false,
+    ).unit;
+    final widgets = discoverIntraFileWidgets(unit);
+    // Share every other entry; replace this file's entry with the new map
+    // (or drop it if the new file has no widgets).
+    final updated = <String, Map<String, WidgetSpec>>{
+      ..._widgetsPerFile,
+    };
+    if (widgets.isEmpty) {
+      updated.remove(canonical);
+    } else {
+      updated[canonical] = widgets;
+    }
+    return ProjectWidgetIndex._(
+      widgetsPerFile: updated,
+      project: _project,
+    );
+  }
+
   final Map<String, Map<String, WidgetSpec>> _widgetsPerFile;
   final ProjectModel _project;
 
   /// Widgets declared directly in [filePath] (without considering
-  /// re-exports from other files). Convenience accessor.
+  /// re-exports from other files). Convenience accessor. [filePath]
+  /// is canonicalized.
   Map<String, WidgetSpec> widgetsIn(String filePath) =>
-      _widgetsPerFile[filePath] ?? const <String, WidgetSpec>{};
+      _widgetsPerFile[canonicalizeFileKey(filePath)] ??
+      const <String, WidgetSpec>{};
 
   /// Widgets visible from [filePath] via its imports — intended for the
   /// parser's `localCatalog` fallback. Intra-file widgets are NOT
   /// included here (the parser already discovers those independently);
   /// only widgets imported from other project files appear in this map.
+  /// [filePath] is canonicalized.
   Map<String, WidgetSpec> widgetsVisibleFrom(String filePath) {
+    final canonicalFrom = canonicalizeFileKey(filePath);
     final result = <String, WidgetSpec>{};
-    final file = _project.files[filePath];
+    final file = _project.files[canonicalFrom];
     if (file == null) return result;
 
     for (final imp in file.directives.imports) {
@@ -80,9 +132,9 @@ class ProjectWidgetIndex {
       if (imp.prefix != null) continue;
 
       final resolvedUri =
-          _project.resolveImportUri(imp.uri, fromFile: filePath);
+          _project.resolveImportUri(imp.uri, fromFile: canonicalFrom);
       if (resolvedUri == null) continue;
-      final targetPath = resolvedUri.toString();
+      final targetPath = canonicalizeFileKey(resolvedUri.toString());
       if (!_project.files.containsKey(targetPath)) continue;
 
       final exported = _widgetsExportedBy(targetPath, <String>{});
@@ -95,24 +147,31 @@ class ProjectWidgetIndex {
 
   /// Widgets that file [path] exposes to consumers — its own declarations
   /// plus widgets transitively re-exported through `export 'foo.dart';`
-  /// directives. Cycle-safe via the [visited] set.
+  /// directives. Cycle-safe.
+  ///
+  /// `visited` is the chain of paths currently being traversed (used for
+  /// cycle detection). It is COPIED at every recursive call, not shared,
+  /// so a diamond chain (A re-exports through both B and D into C with
+  /// different combinators) doesn't suppress the second branch — both
+  /// branches must walk through C independently to apply their own
+  /// combinators correctly.
   Map<String, WidgetSpec> _widgetsExportedBy(
     String path,
     Set<String> visited,
   ) {
     if (visited.contains(path)) return const <String, WidgetSpec>{};
-    visited.add(path);
 
     final result = <String, WidgetSpec>{...?_widgetsPerFile[path]};
 
     final file = _project.files[path];
     if (file == null) return result;
 
+    final nextVisited = {...visited, path};
     for (final exp in file.directives.exports) {
       final resolvedUri = _project.resolveImportUri(exp.uri, fromFile: path);
       if (resolvedUri == null) continue;
-      final targetPath = resolvedUri.toString();
-      final reExported = _widgetsExportedBy(targetPath, visited);
+      final targetPath = canonicalizeFileKey(resolvedUri.toString());
+      final reExported = _widgetsExportedBy(targetPath, nextVisited);
       final filtered = _applyCombinators(reExported, exp.combinators);
       result.addAll(filtered);
     }

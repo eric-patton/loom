@@ -220,7 +220,7 @@ class FunctionBodyEditPlanner {
     required StatementNode statement,
     required String source,
   }) {
-    final start = statement.sourceSpan.offset;
+    var start = statement.sourceSpan.offset;
     var end = statement.sourceSpan.offset + statement.sourceSpan.length;
     while (end < source.length) {
       final ch = source.codeUnitAt(end);
@@ -233,6 +233,7 @@ class FunctionBodyEditPlanner {
         break;
       }
     }
+    start = _trimLeadingIndentForFullLineRemoval(source, start);
     return SourceEdit(
       offset: start,
       length: end - start,
@@ -1313,7 +1314,7 @@ class FunctionBodyEditPlanner {
     required SwitchMemberNode member,
     required String source,
   }) {
-    final start = member.sourceSpan.offset;
+    var start = member.sourceSpan.offset;
     var end = member.sourceSpan.offset + member.sourceSpan.length;
     while (end < source.length) {
       final ch = source.codeUnitAt(end);
@@ -1326,6 +1327,7 @@ class FunctionBodyEditPlanner {
         break;
       }
     }
+    start = _trimLeadingIndentForFullLineRemoval(source, start);
     return SourceEdit(
       offset: start,
       length: end - start,
@@ -1844,6 +1846,26 @@ class FunctionBodyEditPlanner {
     }
     return source.substring(lineStart, i);
   }
+}
+
+/// See `class_structure_edit_planner.dart` for full rationale. Duplicated
+/// here rather than promoted to a shared utility because the helper is
+/// trivial and adding cross-file imports for two-line logic obscures
+/// more than it shares.
+int _trimLeadingIndentForFullLineRemoval(String source, int start) {
+  var probe = start;
+  while (probe > 0) {
+    final ch = source.codeUnitAt(probe - 1);
+    if (ch == 0x20 || ch == 0x09) {
+      probe--;
+    } else {
+      break;
+    }
+  }
+  if (probe == 0 || source.codeUnitAt(probe - 1) == 0x0A) {
+    return probe;
+  }
+  return start;
 }
 
 /// AST visitor that collects `SimpleIdentifier` nodes whose `name`

@@ -370,6 +370,30 @@ abstract class BaseVisitor {
     if (expr is NullLiteral) {
       return NullLiteralValue(span: span(expr));
     }
+    // Negative numeric literals: `EdgeInsets.only(left: -8)` is parsed as
+    // `PrefixExpression(-, IntegerLiteral(8))` rather than a single signed
+    // literal. Recognize this shape so the editor can show / edit a numeric
+    // inspector. Other prefix ops (`+`, `!`, `~`, `--`) fall through to opaque.
+    if (expr is PrefixExpression && expr.operator.lexeme == '-') {
+      final operand = expr.operand;
+      if (operand is IntegerLiteral) {
+        final v = operand.value;
+        if (v != null) {
+          return NumLiteralValue(
+            value: -v,
+            isDouble: false,
+            span: span(expr),
+          );
+        }
+      }
+      if (operand is DoubleLiteral) {
+        return NumLiteralValue(
+          value: -operand.value,
+          isDouble: true,
+          span: span(expr),
+        );
+      }
+    }
     if (expr is PrefixedIdentifier) {
       return EnumReferenceValue(
         typeName: expr.prefix.name,
@@ -390,13 +414,24 @@ abstract class BaseVisitor {
 
   StyleHints _hintsFromCall(CallInfo call) {
     final kw = call.keyword?.keyword;
-    final rightParen = call.argumentList.rightParenthesis;
+    final argList = call.argumentList;
+    final leftParen = argList.leftParenthesis;
+    final rightParen = argList.rightParenthesis;
     final prev = rightParen.previous;
     final hasTrailingComma = prev != null && prev.lexeme == ',';
+    // Multi-line: the argument list spans more than one source line.
+    // Determined by checking whether the source range from `(` to `)`
+    // contains a newline. Cheaper than threading LineInfo through every
+    // visitor and exactly captures what the editor needs (whether the
+    // user wrote a "tall" call versus a "wide" one).
+    final spanStart = leftParen.offset;
+    final spanEnd = rightParen.end;
+    final isMultiLine = source.substring(spanStart, spanEnd).contains('\n');
     return StyleHints(
       hasConst: kw == Keyword.CONST,
       hasNew: kw == Keyword.NEW,
       hasTrailingComma: hasTrailingComma,
+      isMultiLine: isMultiLine,
     );
   }
 
@@ -406,9 +441,20 @@ abstract class BaseVisitor {
   /// Normalizes the two AST shapes a constructor-call-without-resolution
   /// can take: `InstanceCreationExpression` when `const`/`new` is present,
   /// else `MethodInvocation`. Returns null for anything else.
+  ///
+  /// Type-argumented calls (`Foo<int>(...)`, `Foo.named<int>(...)`,
+  /// `f.method<int>(...)`) deliberately return null so the caller falls
+  /// back to `OpaqueNode`. The serializer doesn't carry type-argument
+  /// information through the model, so a modeled type-argumented call
+  /// would silently drop the `<...>` on re-emission — a round-trip
+  /// violation. Opaque preserves the bytes verbatim.
   CallInfo? tryExtractCall(Expression expr) {
     if (expr is InstanceCreationExpression) {
       final type = expr.constructorName.type;
+      // `Foo<T>(...)` / `Foo<T>.named(...)`: opaque (see above).
+      if (type.typeArguments != null) {
+        return null;
+      }
       final prefixToken = type.importPrefix;
       final localName = type.name.lexeme;
       final explicitNamedCtor = expr.constructorName.name?.name;
@@ -434,6 +480,10 @@ abstract class BaseVisitor {
       );
     }
     if (expr is MethodInvocation) {
+      // `foo<T>(...)` / `Foo.named<T>(...)`: opaque (see above).
+      if (expr.typeArguments != null) {
+        return null;
+      }
       final target = expr.target;
       if (target == null) {
         return CallInfo(

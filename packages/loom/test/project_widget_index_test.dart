@@ -262,6 +262,139 @@ class Helper extends StatelessWidget {
       expect(root.childSlots.containsKey('child'), isFalse);
     });
 
+    test('build() does not crash on files with syntax errors', () {
+      // Regression: parseString defaulted to throwIfDiagnostics: true here,
+      // so any malformed file in the project crashed the index build.
+      // ProjectModel.fromSources already accepts such files; the index should
+      // mirror that posture.
+      final project = ProjectModel.fromSources({
+        'good.dart': '''
+class GoodWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''',
+        'broken.dart': 'this is not Dart at all !!',
+      });
+      // Should not throw.
+      final index = ProjectWidgetIndex.build(project);
+      expect(index.widgetsIn('good.dart').keys, contains('GoodWidget'));
+      // Broken file simply contributes no widgets.
+      expect(index.widgetsIn('broken.dart'), isEmpty);
+    });
+
+    test('diamond re-export: widget visible via either of two paths', () {
+      // Regression: _widgetsExportedBy used to share a mutable visited set
+      // across recursive branches, so when walking export A's chain through
+      // both B and D into C, the second branch hit "visited" and dropped C's
+      // widgets entirely. With a diamond (A -> B -> C and A -> D -> C, both
+      // showing different names), all of C's widgets reachable through any
+      // path must remain visible.
+      final project = ProjectModel.fromSources({
+        'a.dart': "export 'b.dart';\nexport 'd.dart';\n",
+        'b.dart': "export 'c.dart' show First;\n",
+        'd.dart': "export 'c.dart' show Second;\n",
+        'c.dart': '''
+class First extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+
+class Second extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''',
+        'consumer.dart': "import 'a.dart';\n",
+      });
+      final index = ProjectWidgetIndex.build(project);
+      final visible = index.widgetsVisibleFrom('consumer.dart');
+      // BOTH First and Second must be visible. Before the fix, only one of
+      // them survived (the second branch was suppressed by visited-set
+      // sharing).
+      expect(visible.keys, contains('First'));
+      expect(visible.keys, contains('Second'));
+    });
+
+    test('rebuildFile re-parses one file and shares the rest', () {
+      // Set up a project with three files; only two declare widgets.
+      final project = ProjectModel.fromSources({
+        'a.dart': '''
+class WidgetA extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''',
+        'b.dart': '''
+class WidgetB extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''',
+        'c.dart': '// nothing here yet\n',
+      });
+      final index = ProjectWidgetIndex.build(project);
+      expect(index.widgetsIn('a.dart').keys, contains('WidgetA'));
+      expect(index.widgetsIn('b.dart').keys, contains('WidgetB'));
+      expect(index.widgetsIn('c.dart'), isEmpty);
+
+      // Simulate editing c.dart to introduce WidgetC.
+      const newC = '''
+class WidgetC extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''';
+      final rebuilt = index.rebuildFile('c.dart', newC);
+
+      // The rebuilt index sees WidgetC, and still has WidgetA + WidgetB
+      // (those entries are shared, not re-parsed).
+      expect(rebuilt.widgetsIn('a.dart').keys, contains('WidgetA'));
+      expect(rebuilt.widgetsIn('b.dart').keys, contains('WidgetB'));
+      expect(rebuilt.widgetsIn('c.dart').keys, contains('WidgetC'));
+      // Original index is unchanged.
+      expect(index.widgetsIn('c.dart'), isEmpty);
+    });
+
+    test('rebuildFile drops the file entry when new source has no widgets', () {
+      final project = ProjectModel.fromSources({
+        'a.dart': '''
+class WidgetA extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''',
+      });
+      final index = ProjectWidgetIndex.build(project);
+      expect(index.widgetsIn('a.dart').keys, contains('WidgetA'));
+
+      final rebuilt = index.rebuildFile('a.dart', '// emptied out\n');
+      expect(rebuilt.widgetsIn('a.dart'), isEmpty);
+    });
+
+    test('rebuildFile tolerates Windows-style absolute paths', () {
+      // The UI editor on Windows naturally keys files by absolute path
+      // (`C:\repos\app\lib\main.dart`); the index must canonicalize the
+      // lookup to match how ProjectModel stores its keys.
+      final project = ProjectModel.fromSources({
+        r'C:\proj\a.dart': '// nothing yet\n',
+      });
+      final index = ProjectWidgetIndex.build(project);
+      final rebuilt = index.rebuildFile(r'C:\proj\a.dart', '''
+class A extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+''');
+      // Lookup via the same raw path must surface the new widget.
+      expect(rebuilt.widgetsIn(r'C:\proj\a.dart').keys, contains('A'));
+      // And via the canonical form.
+      expect(
+        rebuilt.widgetsIn(canonicalizeFileKey(r'C:\proj\a.dart')).keys,
+        contains('A'),
+      );
+    });
+
     test('round-trip invariant holds on cross-file-recognized widget', () {
       // Empty-edit idempotence must still hold even when projectWidgets
       // adds a cross-file recognition.

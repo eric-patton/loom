@@ -95,5 +95,24 @@ part of my.lib.name;
       expect(unit.directives, isEmpty);
       expect(unit.directiveSectionEnd, equals(0));
     });
+
+    test('raw-string URI decodes cleanly', () {
+      // Regression: _stripQuotes used to fail on raw URIs (`r'...'`)
+      // because the literal starts with `r`, not a quote. The URI on
+      // the model came back as `r'foo.dart'` instead of `foo.dart`.
+      const source = "import r'package:foo/foo.dart';\n";
+      final unit = parseDirectives(source);
+      final imp = unit.directives.single as ImportDirectiveNode;
+      expect(imp.uri, equals('package:foo/foo.dart'));
+    });
+
+    test('triple-quoted URI decodes cleanly', () {
+      // Regression: _stripQuotes stripped only one pair of quotes,
+      // leaving the inner pair. URIs end up unusable for resolution.
+      const source = "import '''package:foo/foo.dart''';\n";
+      final unit = parseDirectives(source);
+      final imp = unit.directives.single as ImportDirectiveNode;
+      expect(imp.uri, equals('package:foo/foo.dart'));
+    });
   });
 }

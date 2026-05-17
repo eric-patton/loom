@@ -25,7 +25,7 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 - **`test/fixtures/**` must be excluded from analyze.** The fixture's `_count` field is intentionally unused (parse-only target). Added `analyzer.exclude: [test/fixtures/**]` to `packages/loom_app/analysis_options.yaml`.
 
 **Verification (this session):**
-- `dart run melos run test:kernel` → 736 passed (kernel side concurrent edits by a parallel session added tests).
+- `dart run melos run test:kernel` → 816 passed (kernel reinforcement work in a concurrent session — see below for the list).
 - `dart run melos run test:app` → 38 passed.
 - `dart run melos run analyze:kernel` / `analyze:app` → clean.
 - `dart run melos run format:check:kernel` / `format:check:app` → clean.
@@ -37,7 +37,7 @@ loom/
 ├── melos.yaml            (orchestrator scripts)
 ├── DEVLOG.md  PROJECT_SPEC.md  README.md
 └── packages/
-    ├── loom/             (kernel — 736 tests)
+    ├── loom/             (kernel — 816 tests)
     └── loom_app/         (Flutter desktop editor — M11)
         ├── lib/main.dart
         ├── lib/src/      (app bootstrap, services, state, shell, surfaces, inspectors)
@@ -45,6 +45,69 @@ loom/
 ```
 
 **Next:** M12 — undo/redo via the `EditHistoryService` (currently a no-op stub), `dart_style` integration as an opt-in formatter, multi-tab polish (dirty-prompt on close, reopen-on-startup).
+
+---
+
+**Kernel reinforcement (concurrent session, 2026-05-16) — 22 fixes / features over two passes, all on the kernel side.**
+
+A deep review of the kernel happened in parallel with M11. Two passes landed:
+
+**Pass 1 — 14 review fixes (all uncommitted, sitting on top of M11 commit):**
+
+| # | Area | Fix |
+|---|------|-----|
+| 1 | `model/node_path.dart` | `_withProperty` / `_modifySlot` were dropping `namedConstructor` on parent rebuild — caught by random-property-edit gauntlet; the `Phase 4` work added the field but not all reconstruction sites. |
+| 2 | `parsing/project_widget_index.dart` | `parseString` defaulted to `throwIfDiagnostics: true`, so a single malformed file in the project crashed the index build. Now passes `false`. |
+| 3 | `model/project.dart` | `_exportedNamesOf` shared a `visited` Set across recursive branches — a diamond re-export through two barrels suppressed one branch's combinators. Copy per-branch. Same fix applied to `_widgetsExportedBy`. |
+| 4 | `parsing/base_visitor.dart` | `tryExtractCall` accepted `InstanceCreationExpression` / `MethodInvocation` with non-null `typeArguments` and silently dropped them on emission. Now rejects type-argumented constructor calls so they fall to `OpaqueNode` (round-trip safe). |
+| 5 | `parsing/route_tree_parser.dart` + `pipeline_tree_parser.dart` | Dead ternary; prefixed-import roots now correctly excluded; `isRouteRootCandidate` split out so sibling root-methods aren't mis-stashed as helpers. |
+| 6 | `parsing/directives_parser.dart` | `_decodeUriLiteral` now uses analyzer's `SimpleStringLiteral.value` instead of hand-stripping quotes — raw (`r'...'`) and triple-quoted URIs no longer corrupted. |
+| 7 | `model/file_symbols.dart` + parser | Added `diagnostics: List<ParseDiagnostic>` field, populated from analyzer's `result.errors`. |
+| 8 | `emission/{class_structure,function_body,directives}_edit_planner.dart` | `_trimLeadingIndentForFullLineRemoval` helper applied to `removeMember` / `removeAnnotation` / `removeStatement` / `removeSwitchMember` / `removeDirective`. Killed the C1 "remove leaves orphan indent" bug. |
+| 9 | `equivalence/model_equivalence.dart` | `_modelNodesEqual` was widget-only — `RouteNode` / `PipelineNode` pairs always compared false. Now uses `runtimeType` pre-check + exhaustive switch via shared `_constructorCallNodesEqual` helper; added `equalRoutes` / `equalPipelines`. |
+| 10 | `emission/constructor_call_serializer.dart` | Throws on unknown slot key with non-empty children; throws on single-shaped slot with >1 child. |
+| 11 | `emission/class_structure_edit_planner.dart` | `appendParameter` throws when adding a `named`/`positionalOptional` section that would conflict with an existing mutually-exclusive one. |
+| 12 | `analysis/resolved_project.dart` | `_disposed` flag for idempotent dispose; `try { ... } on StateError` in `getResolvedUnit`; `_ExpressionAtOffsetVisitor` added subtree pruning via `visitNode` offset bounds check. |
+| 13 | `model/{node,class_structure,function_body}.dart` | Every tree model constructor now wraps `diagnostics` via `List.unmodifiable`. |
+| 14 | tests | 26 regression tests across `named_constructor_catalog_test`, `project_widget_index_test`, `project_model_test`, `parsing_test`, `route_parsing_test`, `directives_parsing_test`, `symbol_resolution_test`, `class_structure_round_trip_test`, `equivalence_test`, `emission_test`, `resolved_project_test`. |
+
+**Pass 2 — 8 follow-ups targeted at the M11+ editor experience:**
+
+| # | Area | Change | Why it matters for the editor |
+|---|------|--------|-------------------------------|
+| A | `model/project.dart` | `canonicalizeFileKey(String)` applied at every entry point (`fromSources`, `operator[]`, `importsFrom`, `exportedNamesOf`, `resolveSymbol`, `resolveImportUri`, `_findFileByUriString`). Stored keys are canonical (`file:///C:/...`). | Silent breakage on Windows — `Uri.parse(r'C:\repos\app\main.dart')` reads `C` as a one-letter URI scheme, so relative imports resolved to nonsense. The editor keys files by `File.path`, so this would have hit immediately. |
+| B | `parsing/project_widget_index.dart` | `rebuildFile(filePath, newSource)` — re-parses one file and returns a new index sharing the other entries' widget maps. Same canonicalization treatment. | Without this, a 500-file project pays O(files × class-declarations) per keystroke. With it, the cost is one file's parse. |
+| C | `analysis/resolved_project.dart` | Wrapped the analyzer's physical resource provider in `OverlayResourceProvider`. New `setOverlay(path, content)` / `removeOverlay(path)` / `hasOverlay(path)` API; `setOverlay` calls `changeFile` + `applyPendingFileChanges` so a subsequent `getResolvedUnit` sees the overlay content. Also catches `ArgumentError` (non-normalized path) on the same code paths as `StateError`. | Type-aware queries during in-memory editing — "what type is this expression?", "does this assign?" — without round-tripping through disk. Both correctness (no half-saved files) and perf (no fsync per query). |
+| D | `catalog/widget_catalog.dart` | Phase 6: +66 entries — Sliver family (`SliverList` / `SliverGrid` / `SliverPadding` / `SliverAppBar` + `.medium` + `.large` / `SliverFillRemaining` / `SliverFillViewport` / `SliverToBoxAdapter` / `SliverPersistentHeader` / `SliverOpacity` / `SliverVisibility` / `SliverSafeArea` / `SliverAnimatedList`), dialogs (`Dialog` + `.fullscreen` / `AlertDialog` / `SimpleDialog` / `SimpleDialogOption` / `BottomSheet` / `CupertinoAlertDialog` / `CupertinoActionSheet`), Material 3 nav (`NavigationBar` / `NavigationDestination` / `NavigationRail` + `Destination` / `NavigationDrawer` + `Destination` / `BottomNavigationBar`(+Item) / `Drawer` + Header / `UserAccountsDrawerHeader`), effects (`BackdropFilter` / `RepaintBoundary` / `RotatedBox` / `Banner` / `PhysicalModel` / `PhysicalShape` / `ColorFiltered` / `ImageFiltered` / `ShaderMask` / `Tooltip` / `Badge` + `.count`), Builder family (`Builder` / `ValueListenableBuilder` / `ListenableBuilder` / `RestorableValueListenableBuilder` / `SelectableText` + `.rich` / `RichText`), Chip family (`Chip` / `ActionChip` / `ChoiceChip` / `FilterChip` / `InputChip` / `RawChip`), and Material list/menu/progress (`ListTile` / `CheckboxListTile` / `RadioListTile` / `SwitchListTile` / `ExpansionTile` / `ExpansionPanelList` + `.radio` / `TextField` / `TextFormField` / `CupertinoTextField` / `PopupMenuButton`(+Item) / `DropdownButton`(+MenuItem) / `SnackBar` / `ButtonBar` / `OverflowBar` / `Divider` / `VerticalDivider` / `Spacer` / `CircularProgressIndicator` / `LinearProgressIndicator` / `RefreshIndicator` / `Scrollbar` / `CupertinoScrollbar`). | Modeled-root rate jumped from **76% → 86% on flutter-packages** and **62% → 66% on Flutter SDK**. Every Sliver inside `CustomScrollView.slivers` used to be opaque — now they're structured tree nodes the outline can render. |
+| E | `model/style_hints.dart` + `parsing/base_visitor.dart` | `StyleHints.isMultiLine` captured at parse time by checking whether the call's `(`...`)` range contains a `\n`. Observational only — no current emit path re-emits a whole widget — so it doesn't change existing edits. | The wrap-with-parent / extract-method ops the editor will eventually need can reflow correctly. |
+| F | `model/node_path.dart` | Extracted `_viewOf(node)` + `_rebuildCall(node, ...)` helpers and added `extension RouteTreeNavigation on RouteTreeModel` + `extension PipelineTreeNavigation on PipelineTreeModel`. `withProperty` / `insertChild` / `removeChild` / `moveChild` / `walk` all work on the non-widget tree types. Rebuild preserves the concrete subtype (a `RouteNode` parent stays a `RouteNode` after a child edit). | GoRouter editing in the outline becomes feasible without a parallel navigation API. |
+| G | `parsing/base_visitor.dart` + `parsing/widget_visitor.dart` | `convertProperty` recognizes `PrefixExpression('-', IntegerLiteral)` / `PrefixExpression('-', DoubleLiteral)` and produces a signed `NumLiteralValue`. The widget visitor's `_edgeInsetsAll` recognizes the same shape so `EdgeInsets.all(-8)` lands as `EdgeInsetsAllValue(amount: -8)`. Other prefix ops (`!`, `~`, `++`) still fall to opaque. | The property inspector can now edit negative-offset values via `withProperty` instead of treating them as opaque blobs. |
+| H | `test/structural_edit_gauntlet_test.dart` | New property-test gauntlet for M7-M10 removes. For every fixture in the class-structure / function-body / directives corpus, removes each removable item, asserts the result re-parses cleanly with zero diagnostics, and runs an orphan-indent check that catches the exact shape of the C1 regression. 50 randomized member-removes per class fixture per run. Includes a self-test that the orphan-indent helper actually flags the bug it's looking for. | M2/M3 had per-edit property-test gauntlets; M7-M10 didn't. The C1 regression (line-collapse leaving orphan indent) would have been caught immediately if this had existed — now it's permanent guard. |
+
+**Real-world scout after Pass 2:** 0 crashes, 0 idempotence failures across 5,186 files (flutter-packages: 2,365 / Flutter SDK packages: 2,821). Modeled-root rate on flutter-packages went from 87% → **86%**; on Flutter SDK from 63% → **66%**. The flutter-packages drop is the rule "type-argumented calls fall to opaque" doing its job (round-trip safety > opaque rate); the SDK rise is the Phase 6 catalog expansion paying out where it matters most.
+
+**Editor-side caller migration:**
+- `ProjectModel` keys are now `file:///` URIs — existing callers passing relative paths still work (canonicalizer round-trips them as relative URI strings); the `KernelAdapter` doesn't need to change.
+- `ProjectWidgetIndex` callers can now call `index.rebuildFile(path, newSrc)` instead of `ProjectWidgetIndex.build(project)` after every edit. Same return type.
+- `ResolvedProject` is opt-in — if `loom_app` doesn't already use it, nothing changes. If it does, type queries during edits are now overlay-aware via `setOverlay`.
+- The new node-path extensions are non-breaking — the existing `NodeNavigation on WidgetTreeModel` extension is unchanged.
+
+**Pass 2 file inventory (16 modified, 1 new):**
+- `lib/src/model/{project,style_hints,node_path}.dart`
+- `lib/src/parsing/{project_widget_index,base_visitor,widget_visitor}.dart`
+- `lib/src/analysis/resolved_project.dart`
+- `lib/src/catalog/widget_catalog.dart`
+- `test/{project_model,project_widget_index,resolved_project,named_constructor_catalog,parsing,route_parsing,pipeline_parsing}_test.dart`
+- `test/structural_edit_gauntlet_test.dart` (new)
+
+**What's deferred (acknowledged, not blockers):**
+- `renameTopLevelDeclaration` shadow detection (use `ResolvedProject.resolveSymbolPrecise` for rename until then).
+- `ConstructorCallSerializer` named-arg insertion order preservation when inserting a property between existing args.
+- Hardcoded 2-space indent in the few synthesis paths that emit fresh source.
+- Comment preservation on emptying-list removals (the bracket span gets emptied; trailing comments inside it are dropped).
+- Cat C / Cat A / Cat D opaque-root long tail beyond catalog expansion — needs data-flow tracking or design call.
+
+---
 
 **Prior summary block (M10.5 — workspace conversion):**
 M10.5 restructured the repo into a melos-orchestrated two-package monorepo. Kernel moved to `packages/loom/` (history preserved via `git mv`); new `packages/loom_app/` scaffolded as a Flutter desktop app. Dart workspaces were tried first but couldn't coexist with Flutter SDK pins (`meta 1.17`, `matcher 0.12.19`, `test_api 0.7.10` clashed with analyzer 13's requirements); dropped to per-package `pubspec.lock` with melos 6.3+ orchestrating. Single `dependency_overrides: meta: ^1.18.0` bridges Flutter SDK → analyzer 13 in the app's pubspec. Melos scripts use `cd packages/<pkg> && <cmd>` form (avoiding `melos exec` which fails when melos isn't on PATH).
@@ -899,6 +962,50 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-16] Kernel reinforcement — 22 fixes/features in two passes (concurrent with M11)
+
+**Worked on:** Two passes of kernel-side work while M11 was building in parallel. Pass 1 was a deep review of every kernel subsystem (parsing / model / emission / equivalence / analysis) by four parallel subagents plus one main-thread audit; pass 2 was a targeted set of follow-ups aimed specifically at the M11+ editor experience. All landed on the kernel side; loom_app surface unchanged.
+
+**Pass 1 (14 review fixes):** see the Current State block at top for the full table. Highlights:
+- `_withProperty` / `_modifySlot` (`node_path.dart`) silently dropped `namedConstructor` on parent rebuild — `MaterialApp.router` edits lost the `.router` part. Random-property-edit gauntlet was already testing this; the failure was already latent.
+- Diamond re-exports through two barrels with different combinators suppressed the second branch's names. Both `_exportedNamesOf` and `_widgetsExportedBy` had the same shared-visited-set bug. Copy per-branch.
+- `tryExtractCall` accepted type-argumented constructor calls and silently dropped the type args on emission. Now rejects them so they fall to OpaqueNode and round-trip safely.
+- `removeMember` / `removeAnnotation` / `removeStatement` / `removeSwitchMember` / `removeDirective` all left the killed line's leading indent behind (C1 — orphan whitespace + double-indented neighbor). Single helper `_trimLeadingIndentForFullLineRemoval` applied across all five.
+- `_modelNodesEqual` was widget-only — `RouteNode` and `PipelineNode` pairs always compared false, so the round-trip property test was effectively skipped for route + pipeline trees. Rewrote with `runtimeType` pre-check + exhaustive switch via a shared `_constructorCallNodesEqual` helper; added `equalRoutes` / `equalPipelines`.
+- `ResolvedProject.getResolvedUnit` could throw `StateError` when the path wasn't in any context, despite the docstring promising null. Guarded.
+
+**Pass 2 (8 follow-ups targeted at M11+):**
+- **`canonicalizeFileKey(String)`** applied at every public boundary of `ProjectModel`. Stored keys are now `file:///` URIs regardless of caller input form. The bug it kills: `Uri.parse(r'C:\repos\app\main.dart')` reads `C` as a one-letter URI scheme, so `Uri.parse(...).resolveUri(Uri.parse('helper.dart'))` produces `c:helper.dart` and cross-file resolution silently breaks. Critical on Windows where the editor keys files by `File.path`.
+- **`ProjectWidgetIndex.rebuildFile(path, source)`** — re-parses one file, shares the rest with the new index. Without this, a 500-file project pays O(files × class-decls) per keystroke.
+- **`OverlayResourceProvider` integration** in `ResolvedProject`. `setOverlay(path, content)` / `removeOverlay(path)` / `hasOverlay(path)`. Calls `changeFile` + `applyPendingFileChanges` so the next `getResolvedUnit` sees the overlay. Type-aware queries during edits without disk round-tripping.
+- **Catalog Phase 6** — +66 entries (Sliver family, dialogs, M3 nav, effects, Builder family, Chip family, common Material list/menu/progress). Modeled-root rate: flutter-packages 87% → 86% (the type-args fix from Pass 1 dropped a few), Flutter SDK 63% → 66%. Every Sliver inside `CustomScrollView.slivers` was opaque before; now they're structured.
+- **`StyleHints.isMultiLine`** — captured at parse time. Observational only; no emit path re-emits whole widgets today. Sets up wrap-with-parent / extract-method ops.
+- **`NodePath` extended to `RouteTreeModel` / `PipelineTreeModel`** — same surface (`withProperty` / `insertChild` / `removeChild` / `moveChild` / `walk`). Refactored the helpers around a `_viewOf(node)` adapter so a single dispatch handles all three constructor-call node types; rebuild preserves the concrete subtype.
+- **Negative numeric literals** — `convertProperty` recognizes `PrefixExpression('-', NumLiteral)` and produces a signed `NumLiteralValue`. Widget visitor's `_edgeInsetsAll` recognizes the same shape so `EdgeInsets.all(-8)` lands as `EdgeInsetsAllValue(amount: -8)`. Other prefix ops still opaque.
+- **`structural_edit_gauntlet_test.dart`** — property-test gauntlet for M7-M10 removes. Per fixture, removes every removable item; asserts re-parse with zero diagnostics + orphan-indent check. 50 randomized member-removes per class fixture per run. Includes a self-test that the orphan-indent helper actually flags the kind of regression it's there to catch.
+
+**Learned:**
+- **Windows paths through `Uri.parse` silently corrupt URI math.** This isn't a "platform-specific quirk to document" — it produces wrong results without any error or diagnostic. The editor would have loaded a Windows project, the UI would have rendered, and cross-file features would have silently failed (rename produces nothing, find-usages returns empty, widget index shows no cross-file widgets). Canonicalizing at every entry point — not just construction — is the only safe pattern because callers eventually pass through the model from many directions.
+- **Sealed switches catch missing variants at the `_` arm only on `default`.** When `_modelNodesEqual` had its `_ => false` catch-all and a new sealed variant (`RouteNode`, `PipelineNode`) was added, the analyzer didn't warn — the catch-all swallowed it. Refactor to `runtimeType` pre-check + exhaustive switch means new variants are now compile errors. Same pattern applied across `node_path.dart`. **Avoid `_ => default` arms on switches over sealed hierarchies.**
+- **`ArgumentError` and `StateError` are both possible from `_collection.contextFor`.** Discovered when an out-of-tree overlay test threw `ArgumentError: Only absolute normalized paths are supported`. Catching only `StateError` (per the docs) wasn't enough. Both `setOverlay` / `removeOverlay` / `getResolvedUnit` now catch both — same silent-treatment they already give for non-included paths.
+- **Phase 6 catalog: knowing where to stop.** Adding 66 entries took a measurable bite out of opaque-root rate on flutter-packages and SDK, but the remaining long tail is increasingly app-specific and adds catalog entries with negative real-world coverage. The right move from here is **cross-file user-widget recognition through ResolvedProject** (Phase 5 was syntax-only) and project-aware diagnostics, not catalog expansion to diminishing returns.
+- **Property tests need a self-test for the assertion itself.** The orphan-indent helper in the structural-edit gauntlet has a self-test that the helper actually flags a bad diff. Without it, a future refactor of the helper could silently disable the very check it's there to make. Belt-and-suspenders.
+
+**Decided:**
+- **`ProjectModel` keys are always canonical `file:///` URIs (or relative URI strings).** Callers can pass any form to public methods; internal storage and comparisons are uniform. Documented in `canonicalizeFileKey`.
+- **`OverlayResourceProvider` is wired in by default, no opt-in flag.** Cost is one indirection per file resource; benefit is the editor never has to write-to-disk for a type query. Callers who don't set overlays pay nothing.
+- **Catalog expansion stops here for now.** Further opaque-root improvement needs cross-file user-widget recognition through resolved analysis (next milestone candidate), not more framework entries.
+- **Property-test gauntlets are the safety floor for every new edit op.** Future structural-edit additions get a gauntlet entry as part of their definition of done. M7-M10 retroactively got theirs.
+- **The kernel surface is editor-ready.** Specifically: Windows-correct, performance-correct (per-file invalidation), overlay-correct (type queries during edits without disk writes), and structurally correct (Sliver / dialog / M3 nav widgets surface in the tree view). Remaining deferred items (`renameTopLevelDeclaration` shadow detection, named-arg insertion order, hardcoded 2-space indent, comment preservation on emptying-list removals) are real but won't block editor integration.
+
+**Verification:**
+- `dart test` → 816 passed (was 736 at M11 ship; +80 across the two passes: ~26 in Pass 1, ~54 in Pass 2 including the gauntlet).
+- `dart analyze` → clean.
+- Scout against flutter-packages (2,365 files) + Flutter SDK packages (2,821 files) — 5,186 total: 0 crashes, 0 idempotence failures, 0 parser diagnostics.
+- Modeled-root rate: flutter-packages 86% (Pass 6 catalog), Flutter SDK 66%.
+
+**Next:** M12 continues on the loom_app side (per the original M11 plan: undo/redo, dart_style, multi-tab polish). The kernel is in a good state to absorb the M12 editor work; the cross-file user-widget recognition through `ResolvedProject` is the natural follow-on kernel milestone but is a "next-month" item, not a blocker.
 
 ### [2026-05-16] M11 — visual editor: shell + project loader + outline + property inspector
 

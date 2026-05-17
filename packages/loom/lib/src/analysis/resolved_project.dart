@@ -2,6 +2,8 @@ import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart' hide ClassMember;
 import 'package:analyzer/dart/ast/visitor.dart';
+import 'package:analyzer/file_system/overlay_file_system.dart';
+import 'package:analyzer/file_system/physical_file_system.dart';
 
 /// Optional resolved-analysis wrapper around analyzer's
 /// `AnalysisContextCollection` (M10.2).
@@ -19,11 +21,17 @@ import 'package:analyzer/dart/ast/visitor.dart';
 ///     SDK on disk; reads `package_config.json` from the project.
 ///   * **Async** — `getResolvedUnit` returns a `Future`.
 ///   * **File-based** — `includedPaths` must be absolute paths on the
-///     real filesystem. Use a temp directory for in-memory workflows.
-///     `OverlayResourceProvider` integration is deferred — most
-///     OutSystems-trajectory consumers will either write to a workspace
-///     directory on disk (visual-editor save), or use the unresolved
-///     path entirely.
+///     real filesystem.
+///
+/// Overlays — editing without disk writes:
+///   The analysis context is built on top of an `OverlayResourceProvider`
+///   that wraps the physical filesystem. Use [setOverlay] to make a file
+///   appear with different contents than what's on disk; use
+///   [removeOverlay] to clear an overlay. The analyzer's resolution
+///   reads through the overlay, so type queries reflect the in-memory
+///   contents WITHOUT writing the file. After each overlay change, the
+///   analyzer's incremental machinery is notified and a new session
+///   is produced — callers don't need to manage that themselves.
 ///
 /// Caller MUST call `dispose()` when done to release resources.
 ///
@@ -31,8 +39,10 @@ import 'package:analyzer/dart/ast/visitor.dart';
 class ResolvedProject {
   ResolvedProject._({
     required AnalysisContextCollection collection,
+    required OverlayResourceProvider overlayProvider,
     required List<String> includedPaths,
   })  : _collection = collection,
+        _overlayProvider = overlayProvider,
         _includedPaths = includedPaths;
 
   /// Opens a `ResolvedProject` rooted at one or more directories or
@@ -46,32 +56,114 @@ class ResolvedProject {
     required List<String> includedPaths,
     String? sdkPath,
   }) {
+    final overlayProvider = OverlayResourceProvider(
+      PhysicalResourceProvider.INSTANCE,
+    );
     final collection = AnalysisContextCollection(
       includedPaths: includedPaths,
+      resourceProvider: overlayProvider,
       sdkPath: sdkPath,
     );
     return ResolvedProject._(
       collection: collection,
+      overlayProvider: overlayProvider,
       includedPaths: includedPaths,
     );
   }
 
   final AnalysisContextCollection _collection;
+  final OverlayResourceProvider _overlayProvider;
   // ignore: unused_field
   final List<String> _includedPaths;
+  bool _disposed = false;
+  // Monotonic counter used as the modification stamp on overlays. The
+  // analyzer treats a strictly-increasing stamp as "file changed" — we
+  // never need wall-clock time.
+  int _overlayStamp = 1;
 
   /// Returns the fully-resolved unit for [filePath] (absolute path),
   /// or null if the file cannot be resolved (not in any context, has
   /// an invalid path, etc.). Diagnostics are available on the result.
+  ///
+  /// Internally guards `_collection.contextFor` which throws
+  /// `StateError` when [filePath] doesn't belong to any included root —
+  /// the docstring promises null for that case. Also catches
+  /// `ArgumentError` for non-absolute/non-normalized paths.
   Future<ResolvedUnitResult?> getResolvedUnit(String filePath) async {
-    final context = _collection.contextFor(filePath);
-    final result = await context.currentSession.getResolvedUnit(filePath);
-    return result is ResolvedUnitResult ? result : null;
+    try {
+      final context = _collection.contextFor(filePath);
+      final result = await context.currentSession.getResolvedUnit(filePath);
+      return result is ResolvedUnitResult ? result : null;
+    } on StateError {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
   }
 
   /// Releases resources held by the underlying analysis context.
-  /// MUST be called when done.
-  Future<void> dispose() => _collection.dispose();
+  /// MUST be called when done. Idempotent — calling twice is a no-op.
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await _collection.dispose();
+  }
+
+  /// Overlays the file at [path] with [content], so subsequent analysis
+  /// reads through the overlay instead of disk.
+  ///
+  /// Used by editors that need type-aware queries on a file that hasn't
+  /// been saved yet (e.g. a visual editor evaluating "is this expression
+  /// a Widget?" mid-edit). Calling [setOverlay] is sufficient — the
+  /// analyzer's incremental machinery is notified, the next call to
+  /// [getResolvedUnit] (or any other resolved-AST query) sees the new
+  /// content, and pending file changes are applied before the call
+  /// returns.
+  ///
+  /// [path] must be an absolute path under one of the [includedPaths]
+  /// the project was opened with. The path's directory does NOT need to
+  /// exist on disk — overlays let you analyze imaginary files in
+  /// already-known directories.
+  ///
+  /// Returns a `Future` that completes after pending file changes are
+  /// applied; awaiting is optional unless you need to query right away.
+  Future<void> setOverlay(String path, String content) async {
+    _overlayStamp++;
+    _overlayProvider.setOverlay(
+      path,
+      content: content,
+      modificationStamp: _overlayStamp,
+    );
+    try {
+      final context = _collection.contextFor(path);
+      context.changeFile(path);
+      await context.applyPendingFileChanges();
+    } on StateError {
+      // Path isn't in any context. Overlay still set; callers that
+      // later widen the included roots will pick it up. Silent — same
+      // pattern as `getResolvedUnit`.
+    } on ArgumentError {
+      // Path isn't absolute/normalized — the analyzer rejects it before
+      // it can route to a context. Treat the same as a no-context path.
+    }
+  }
+
+  /// Clears any overlay for [path]. After this, analysis reads from
+  /// disk again. Idempotent — no-op if no overlay was set.
+  Future<void> removeOverlay(String path) async {
+    final hadOverlay = _overlayProvider.removeOverlay(path);
+    if (!hadOverlay) return;
+    try {
+      final context = _collection.contextFor(path);
+      context.changeFile(path);
+      await context.applyPendingFileChanges();
+    } on StateError {
+      // Same as setOverlay — silent.
+    }
+  }
+
+  /// True iff [path] currently has an overlay set.
+  bool hasOverlay(String path) => _overlayProvider.hasOverlay(path);
 
   // ----------------------- Type queries (M10.2b) -----------------
 
@@ -243,6 +335,18 @@ class _ExpressionAtOffsetVisitor extends GeneralizingAstVisitor<void> {
 
   final int targetOffset;
   Expression? found;
+
+  @override
+  void visitNode(AstNode node) {
+    // Prune subtrees that can't possibly contain a candidate. A candidate
+    // must start exactly at `targetOffset`, so any subtree whose range
+    // doesn't straddle `targetOffset` is uninteresting. This turns a
+    // whole-AST walk into a top-down descent.
+    if (node.offset > targetOffset || node.end <= targetOffset) {
+      return;
+    }
+    super.visitNode(node);
+  }
 
   @override
   void visitExpression(Expression node) {

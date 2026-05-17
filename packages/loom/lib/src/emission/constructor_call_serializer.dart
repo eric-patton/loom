@@ -105,12 +105,37 @@ class ConstructorCallSerializer {
     }
     for (final entry in childSlots.entries) {
       final shape = spec.childSlots[entry.key];
+      if (shape == null) {
+        // An unknown slot key with no entries is harmless; one with
+        // children is a model/catalog mismatch. The visitor never
+        // produces such a shape — it only adds slot entries the
+        // catalog declares — so this can only fire when an external
+        // caller hand-builds a node. Refuse to silently emit whatever
+        // shape we'd guess.
+        if (entry.value.isEmpty) continue;
+        throw ArgumentError(
+          '$className${namedConstructor == null ? '' : '.$namedConstructor'}'
+          '.${entry.key} has ${entry.value.length} child(ren) in the model '
+          'but is not declared in the catalog; the slot shape is unknown',
+        );
+      }
       if (shape == ChildSlotShape.list) {
         final inner = entry.value.map(recurse).join(', ');
         namedParts[entry.key] = '${entry.key}: [$inner]';
       } else {
         if (entry.value.isEmpty) {
           continue;
+        }
+        if (entry.value.length > 1) {
+          // Single-shaped slot somehow holding multiple children. Same
+          // reasoning as the unknown-slot case — visitor never produces
+          // this; only a hand-built node can. Refuse rather than
+          // silently dropping siblings.
+          throw ArgumentError(
+            '$className${namedConstructor == null ? '' : '.$namedConstructor'}'
+            '.${entry.key} is single-shaped but has ${entry.value.length} '
+            'children in the model',
+          );
         }
         namedParts[entry.key] = '${entry.key}: ${recurse(entry.value.first)}';
       }

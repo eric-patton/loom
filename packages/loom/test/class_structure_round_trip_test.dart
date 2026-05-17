@@ -206,6 +206,33 @@ void main() {
         isNot(contains('zero')),
       );
     });
+
+    test('removeMember collapses the indent of the removed line', () {
+      // Regression: removeMember used to leave the leading indent of the
+      // removed declaration behind, so the closing brace (or the next
+      // member) ended up double-indented. Now the indent comes off too.
+      const source = '''
+class A {
+  final int x;
+  final int y;
+}
+''';
+      final model = parseClassStructure(source);
+      final y = model.root.members
+          .whereType<ClassFieldNode>()
+          .firstWhere((f) => f.name == 'y');
+      final edit = ClassStructureEditPlanner.removeMember(
+        member: y,
+        source: source,
+      );
+      final newSource = applySourceEdits(source, [edit]);
+      expect(
+        newSource,
+        equals('class A {\n  final int x;\n}\n'),
+        reason: 'closing brace must stay at column 0, not be pushed in '
+            'by leftover indent from removed `final int y;`',
+      );
+    });
   });
 
   group('addMember (M7.1)', () {
@@ -904,6 +931,56 @@ void main() {
       expect(label.isOptional, isTrue);
       expect(label.isPositional, isTrue);
     });
+  });
+
+  group('appendParameter mutually-exclusive section (M7.4)', () {
+    test('throws when adding named to a list with positionalOptional', () {
+      // Regression: appendParameter used to silently emit `, {newParam}`
+      // INSIDE the existing `[...]` brackets, producing invalid Dart
+      // like `(int a, [int b = 1, {String c}])`.
+      const source = '''
+class Foo {
+  void m(int a, [int b = 1]) {}
+}
+''';
+      final model = parseClassStructure(source);
+      final method = model.root.members
+          .whereType<ClassMethodNode>()
+          .firstWhere((m) => m.name == 'm');
+      expect(
+        () => ClassStructureEditPlanner.appendParameter(
+          parent: method,
+          newParameterSource: 'String c',
+          section: ParameterSection.named,
+          source: source,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test(
+      'throws when adding positionalOptional to a list with named',
+      () {
+        const source = '''
+class Foo {
+  void m(int a, {int b = 1}) {}
+}
+''';
+        final model = parseClassStructure(source);
+        final method = model.root.members
+            .whereType<ClassMethodNode>()
+            .firstWhere((m) => m.name == 'm');
+        expect(
+          () => ClassStructureEditPlanner.appendParameter(
+            parent: method,
+            newParameterSource: 'String c = "x"',
+            section: ParameterSection.positionalOptional,
+            source: source,
+          ),
+          throwsArgumentError,
+        );
+      },
+    );
   });
 
   group('removeParameter section drain (M7.4)', () {
