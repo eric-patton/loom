@@ -8,27 +8,34 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M11 — shell + project loader + widget-tree outline + property editor. First Loom editor surface to consume the kernel in-process.
-**Last touched:** 2026-05-16 — M11 shipped. `packages/loom_app/` boots a three-pane shell (left toolbox / center editor surface / right pane with Interface+Outline tabs above a property inspector), opens a project via a file picker, classifies each `.dart` file (modeled / opaque-root / no-build / parse-error), renders a widget-tree outline for the active document, and edits string / int / double / bool properties on the selected node with byte-minimal diffs that round-trip through `EditPlanner.propertyEdit` + atomic save.
+**Active milestone:** M12 — undo/redo, opt-in `dart_style` integration, multi-tab polish. Second editor milestone; the first to make the kernel's invertibility user-visible.
+**Last touched:** 2026-05-17 — M12 shipped. Every property edit now snapshots into a per-document undo stack; Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z at the shell level pop the stack and re-write the file atomically through the same save pipeline. The acceptance test is the load-bearing one: 10 random property edits + 10 undos restores the fixture file byte-for-byte (with redo and "fresh edit drops redo stack" sub-cases in the same test). `dart_style` is wired through a per-document opt-in toggle that lives in the property inspector header — off by default, because byte-minimal diffs are the editor's product invariant. Session-restore lands too: opening a project re-opens the tabs the user had open last time.
 
-**Shipped surface:**
-- ~30 new files under `packages/loom_app/lib/src/` — services (5), state (8 incl. `WorkspaceController`), shell (8), right pane (4), surfaces/widget_outline (3), inspectors (5), app bootstrap (2).
-- 15 Riverpod providers: `kernelAdapterProvider`, `fileSystemServiceProvider`, `widgetFilterServiceProvider`, `formatServiceProvider` (M12 stub), `editHistoryServiceProvider` (M12 stub), `projectControllerProvider` (Notifier), `projectModelProvider`, `projectWidgetIndexProvider`, `openDocumentsProvider` (Notifier), `activeDocumentUriProvider`, `widgetTreeForDocumentProvider` (autodispose family), `selectedNodePathProvider`, `rightTopTabProvider`, `toolboxItemsProvider`, `workspaceControllerProvider`.
-- One pinned fixture at `packages/loom_app/test/fixtures/m11_counter_app/` — 3 files (`pubspec.yaml`, `lib/main.dart`, `lib/widgets/counter.dart`). Integration tests copy this fixture to a temp dir per test so the repo's pristine copy never gets mutated.
-- 38 new app-side tests (5 unit + 4 widget + 3 integration). The load-bearing one: `multi_property_edits_round_trip_test.dart` drives 100 randomized property edits through `WorkspaceController.applyPropertyEdit` and verifies each result re-parses cleanly. `round_trip_through_ui_test.dart` drives one edit through the full UI stack (outline-selection → inspector TextField → focus-loss commit → atomic save) as the acceptance demo.
+**Shipped surface (M12 delta):**
+- New service: `EditHistoryService` (Riverpod `Notifier<Map<String, DocumentHistory>>`) — per-URI `{undoStack, redoStack}` of `HistoryEntry{label, beforeSource, afterSource}` triples. `record` pushes to undo + clears redo; `popUndo` / `popRedo` move entries between stacks. The `before == after` no-op is a hard guard.
+- New service: `FormatService` (real `package:dart_style ^3.0.0` wrapper). `tryFormat(source) → String?` returns null on parse failure so the caller can fall back to unformatted bytes — losing the edit is never the answer.
+- New service: `SessionPersistenceService` — `.dart_tool/loom/session.json` per project. Stores open tabs + active tab as project-relative posix paths so moving the project keeps the session valid. Failures (corrupted JSON, missing dir, I/O error) silently fall back to "no session" rather than blocking the project open.
+- New providers: `editHistoryProvider`, `formatOnSaveProvider` (per-URI `bool`, default false), `sessionPersistenceServiceProvider`, `canUndoActiveProvider`, `canRedoActiveProvider`.
+- `WorkspaceController` extended: `openProject` clears history and replays the saved session; `openFile` / `closeFile` persist the session asynchronously; `applyPropertyEdit` captures the pre-edit source, runs `_maybeFormat` (off by default), atomic-writes, records the snapshot pair; new `undo(uri?)` / `redo(uri?)` pop the stack and call `_restoreSource`, which goes through the same atomic-write path. `closeFile` also clears the document's history.
+- `MainShellScreen` wraps the Scaffold in `Shortcuts` + `Actions` + `Focus(autofocus: true)`. Three intent bindings — Ctrl+Z → `_UndoWorkspaceIntent`, Ctrl+Y and Ctrl+Shift+Z → `_RedoWorkspaceIntent` — call `WorkspaceController.undo()` / `.redo()`. When the user is typing in a `TextField`, `EditableText`'s own `UndoTextIntent` consumes Ctrl+Z first; once focus leaves the field, the shell-level handlers fire and undo the workspace edit. No conflict.
+- `EditorTabStrip` close button now prompts via `AlertDialog` if the document is dirty (working buffer ahead of disk — only reachable when a save failed mid-edit). Dirty dot now uses the error color so it's visible.
+- `PropertyInspectorPanel` grew a `FormatOnSaveBar` at the top — a slim toolbar with a Switch and tooltips that explain the trade-off. Visible whenever a document is open, independent of selection.
+- 22 new tests (11 EditHistoryService unit + 3 FormatService unit + 7 SessionPersistenceService unit + 1 multi-phase integration). The integration test is the M12 acceptance: 10 random edits → assert disk diverges → 10 undos → assert disk byte-equals original → 10 redos → assert disk byte-equals post-edits → one undo + one fresh edit → assert redo stack is empty. **60 loom_app tests total**, up from 38 at M11 ship.
 
-**Single seam to the kernel:** every file under `packages/loom_app/lib/src/` that needs kernel types imports `services/kernel_adapter.dart`, which re-exports `package:loom/loom.dart` and adds a `KernelAdapter` class wrapping the verbs (`buildProject` / `buildWidgetIndex` / `parseWidgetTreeFor` / `applyPropertyEdit`). Nothing structural enforces this — it's by convention so a future IPC migration is a single-file change.
+**Single seam to the kernel:** unchanged. The new services (`EditHistoryService`, `FormatService`, `SessionPersistenceService`) sit on the editor side of the seam and never touch `package:loom/loom.dart`.
 
-**Hard-won lessons:**
-- **`testWidgets` + real disk I/O = wrap in `tester.runAsync`.** Flutter's `AutomatedTestWidgetsFlutterBinding` runs callbacks inside a FakeAsync zone, and a `Future` returned from `dart:io` (or anything that uses real timers) never completes there. Discovered when a test hung for 10 minutes opening a temp-dir-copied fixture. The fix is a helper `openFixtureSessionForWidgets(tester)` that wraps the initial project-open, plus `runAsync` around every `applyPropertyEdit` call in integration tests, and around the focus-loss step in the UI round-trip test.
-- **`ValueKey(span)` on inspector editors is the cache-invalidation lever.** Each property's editor is keyed by `(typeTag, span.offset, span.length)`. After an edit, source bytes shift and the same property now sits at a different span — the editor remounts, `_lastCommittedText` re-initializes from the post-edit value, and the next edit's diff against `widget.value.value` is correct. Without this, the second edit's TextField holds stale state and `_commit` no-ops.
-- **`test/fixtures/**` must be excluded from analyze.** The fixture's `_count` field is intentionally unused (parse-only target). Added `analyzer.exclude: [test/fixtures/**]` to `packages/loom_app/analysis_options.yaml`.
+**Hard-won lessons (this session):**
+- **Snapshot-based undo over edit-record replay was the right call for M12.** The plan called the trade-off out and the choice held. Storing `{before, after}` source pairs is dumb-simple, independent of any kernel edit type, and crashes against integration testing immediately (the acceptance test is byte-equality, not "edits inverse correctly"). The 100-iteration controller stress test from M11 picks up snapshot edits without modification. The only cost is memory — counter.dart is ~600 bytes; 100 edits is 60 KB. Real projects with longer files might want a max-stack-size cap eventually, not now.
+- **Editor commit-on-focus-loss + workspace Ctrl+Z don't conflict because Flutter resolves intents bottom-up.** `EditableText`'s `UndoTextIntent` only sees Ctrl+Z while the field has focus; once the user clicks anywhere else, the shell-level shortcut wins. No need to manually defocus or guard the workspace undo against the in-text-field case. Verified by manual testing.
+- **`Notifier` for `EditHistoryService` instead of a plain class.** First instinct was a plain stateful class held by a `Provider`. But then `canUndo` / `canRedo` providers couldn't reactively rebuild — they'd need a `ChangeNotifier`-style listener. Notifier `state` reads + rebuild-on-mutation gives both ergonomics. Same pattern for `FormatOnSaveNotifier`.
+- **`dart_style` preserves the existing quote style.** Initial format test asserted single-quotes on `"hi"` source; `dart_style` 3.0 keeps the double quotes. Lesson: formatter is about whitespace + line length, not stylistic rewrites.
+- **Format check in CI is downstream of write order.** `dart format .` modified five files I'd just written; the format check then caught it. Pattern is "format first, check second" — saved a re-commit.
 
 **Verification (this session):**
-- `dart run melos run test:kernel` → 816 passed (kernel reinforcement work in a concurrent session — see below for the list).
-- `dart run melos run test:app` → 38 passed.
-- `dart run melos run analyze:kernel` / `analyze:app` → clean.
-- `dart run melos run format:check:kernel` / `format:check:app` → clean.
+- `flutter test` (loom_app) → 60 passed (was 38 at M11 ship; +22 new).
+- `dart test` (kernel) → 816 passed (no regression — kernel untouched).
+- `flutter analyze` (loom_app) / `dart analyze` (kernel) → clean.
+- `dart format --set-exit-if-changed .` (both packages) → clean.
 
 **Repo shape now:**
 ```
@@ -38,13 +45,13 @@ loom/
 ├── DEVLOG.md  PROJECT_SPEC.md  README.md
 └── packages/
     ├── loom/             (kernel — 816 tests)
-    └── loom_app/         (Flutter desktop editor — M11)
+    └── loom_app/         (Flutter desktop editor — M12)
         ├── lib/main.dart
-        ├── lib/src/      (app bootstrap, services, state, shell, surfaces, inspectors)
-        └── test/         (fixtures/, helpers/, unit/, widget/, integration/)
+        ├── lib/src/      (services 6, state 9, shell 9, right pane 5, inspectors 5, outline 3, app 2)
+        └── test/         (fixtures/, helpers/, unit/, widget/, integration/ — 60 tests)
 ```
 
-**Next:** M12 — undo/redo via the `EditHistoryService` (currently a no-op stub), `dart_style` integration as an opt-in formatter, multi-tab polish (dirty-prompt on close, reopen-on-startup).
+**Next:** M13 — low-fidelity widget canvas. The canvas is a `CustomPainter`-based visual recreation (not a real preview): each `WidgetNode` paints as a labeled rectangle, nested per `childSlots`, mimicking layout from style hints. Click-to-select, hover-highlight, double-click-on-Text to edit `data:` in place. Per the plan, recreation must be polished enough by end of M13 to defer real preview indefinitely.
 
 ---
 
@@ -962,6 +969,32 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-17] M12 — undo/redo + opt-in dart_style + multi-tab polish
+
+**Worked on:** Shipped M12 per the plan. Built a real `EditHistoryService` (Notifier holding `{uri → DocumentHistory}` with undo + redo stacks of `HistoryEntry{label, beforeSource, afterSource}` triples), wired it through `WorkspaceController.applyPropertyEdit`, added `undo()` / `redo()` methods on the controller, bound them to Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z at the shell level via `Shortcuts` + `Actions` + `Focus`. Integrated `package:dart_style ^3.0.0` behind a per-document opt-in toggle (`formatOnSaveProvider` + `FormatOnSaveBar` widget at the top of the property inspector). Added `SessionPersistenceService` writing `.dart_tool/loom/session.json` with project-relative tab paths so reopening a project restores the open-tab set. Tab strip's dirty dot now actually shows (error color); close button prompts via `AlertDialog` if the document has uncommitted state. 22 new tests, 60 total app-side. Kernel untouched.
+
+**Learned:**
+- **Snapshot-based undo is the right shape for M12.** Storing full source pairs is dumb-simple, independent of any kernel edit type, and the integration test (10 edits + 10 undos = byte-equal original) hammers it directly. The 100-iteration controller round-trip stress from M11 picks up snapshot edits without modification. Memory cost is negligible for typical Dart files. If "very long sessions on big files" ever becomes a real concern we can cap stack depth; not now.
+- **`EditableText`'s `UndoTextIntent` and the shell's `_UndoWorkspaceIntent` coexist for free.** Flutter's `Shortcuts` resolution is bottom-up — `EditableText` consumes Ctrl+Z while the field has focus, and the shell-level binding fires only after focus moves elsewhere. No manual unfocus, no guard logic needed.
+- **`Notifier<Map<String, T>>` is the right Riverpod shape for per-URI mutable state with reactive readers.** First pass made `EditHistoryService` a plain class behind a `Provider`, which broke `canUndoActiveProvider` (`Provider` doesn't notify watchers when an internal field changes). `Notifier` solves both halves — methods that mutate `state` get the watcher rebuild for free, and the methods can still return values for the imperative call sites. Same pattern for `FormatOnSaveNotifier`.
+- **`dart_style` 3.0 is whitespace-only, not stylistic.** A test asserting that formatting `print("hi")` produced `print('hi')` failed; `dart_style` preserves the user's quote style. Reframed the test to check whitespace collapse instead.
+- **`dart format` likes to rewrite my files.** Five new/modified files came back as "needs formatting"; the format check in CI would have failed if I'd committed first. Pattern locked in: `dart format .` before `dart format --set-exit-if-changed .`.
+
+**Decided:**
+- **Per-document `formatOnSave` is off by default.** Diff-minimality is the editor's product invariant; turning the formatter on by default would silently break the "git diff shows exactly one line changed" promise. The toggle lives in the property inspector header with tooltips that say so plainly.
+- **Session persistence stores project-relative paths**, not absolute file:// URIs. Otherwise moving the project breaks the saved session. Loading falls back silently to no-session if any file no longer exists.
+- **`closeFile` clears the document's edit history.** Reopening the same file starts fresh. The alternative (per-URI history outliving the tab) leaks memory on long sessions and surprises users who expect "close = reset."
+- **Inspector's `FormatOnSaveBar` lives above the panel content, visible whenever a document is open.** Initially I scoped it to "when a node is selected" but the toggle is a per-document concern, not a per-selection one. Moved it above the no-selection placeholder.
+- **No widget test for the keyboard shortcut wiring** — the `Shortcuts`/`Actions`/`Focus` block is purely structural, and exercising it would mean simulating physical key events plus Focus juggling. The integration test calls `controller.undo()` directly, which is the function the shortcuts call. If the shortcut binding ever regresses it'll be a "Ctrl+Z does nothing in the running app" report — manual surface, not a silent test failure.
+
+**Verification:**
+- `flutter test` (loom_app) → 60 passed (was 38; +22 new across edit_history_service / format_service / session_persistence_service / undo_redo_round_trip).
+- `dart test` (kernel) → 816 passed (no regression — kernel untouched this session).
+- `flutter analyze` (loom_app) + `dart analyze` (kernel) → clean.
+- `dart format --output=none --set-exit-if-changed .` → clean on both packages.
+
+**Next:** M13. Low-fidelity widget canvas — `CustomPainter` rendering nested rectangles labeled per `WidgetNode`, click-to-select, hover-highlight, double-click-Text → inline `data:` edit. Recreation, not preview; per the plan, end of M13 is the decision deadline for whether real preview is permanently deferred.
 
 ### [2026-05-16] Kernel reinforcement — 22 fixes/features in two passes (concurrent with M11)
 

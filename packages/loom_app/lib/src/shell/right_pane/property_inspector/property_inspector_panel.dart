@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../inspectors/property_editor_router.dart';
 import '../../../services/kernel_adapter.dart';
 import '../../../state/providers.dart';
+import 'format_on_save_bar.dart';
 
 /// Bottom of the right pane. Shows one row per editable property on
 /// the currently-selected widget. Empty/idle states explain what's
@@ -17,14 +18,27 @@ class PropertyInspectorPanel extends ConsumerWidget {
     final selectedPath = ref.watch(selectedNodePathProvider);
     final theme = Theme.of(context);
 
+    Widget wrapWithFormatBar(Widget body) {
+      if (active == null) return body;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          FormatOnSaveBar(documentUri: active),
+          Expanded(child: body),
+        ],
+      );
+    }
+
     if (active == null || selectedPath == null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Select a node to edit its properties.',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall,
+      return wrapWithFormatBar(
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Select a node to edit its properties.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall,
+            ),
           ),
         ),
       );
@@ -32,13 +46,15 @@ class PropertyInspectorPanel extends ConsumerWidget {
 
     final parseResult = ref.watch(widgetTreeForDocumentProvider(active));
     if (parseResult is WidgetTreeParseFailure) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Parse failed: ${parseResult.message}',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall,
+      return wrapWithFormatBar(
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Parse failed: ${parseResult.message}',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall,
+            ),
           ),
         ),
       );
@@ -47,13 +63,15 @@ class PropertyInspectorPanel extends ConsumerWidget {
     final model = (parseResult as WidgetTreeParseModeled).model;
     final node = model.nodeAt(selectedPath);
     if (node is! WidgetNode) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Selected node has no editable properties.',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall,
+      return wrapWithFormatBar(
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Selected node has no editable properties.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall,
+            ),
           ),
         ),
       );
@@ -63,51 +81,53 @@ class PropertyInspectorPanel extends ConsumerWidget {
         .where((e) => !e.key.startsWith(kPositionalOpaqueKeyPrefix))
         .toList();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Container(
-          height: 32,
-          alignment: Alignment.centerLeft,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+    return wrapWithFormatBar(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Container(
+            height: 32,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+              ),
+            ),
+            child: Text(
+              node.namedConstructor == null
+                  ? node.className
+                  : '${node.className}.${node.namedConstructor}',
+              style: theme.textTheme.titleSmall,
             ),
           ),
-          child: Text(
-            node.namedConstructor == null
-                ? node.className
-                : '${node.className}.${node.namedConstructor}',
-            style: theme.textTheme.titleSmall,
-          ),
-        ),
-        Expanded(
-          child: entries.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      '${node.className} has no editable properties.',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall,
+          Expanded(
+            child: entries.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        '${node.className} has no editable properties.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall,
+                      ),
                     ),
+                  )
+                : ListView.builder(
+                    itemCount: entries.length,
+                    itemBuilder: (context, i) {
+                      final entry = entries[i];
+                      return PropertyEditorRouter(
+                        documentUri: active,
+                        nodePath: selectedPath,
+                        propertyName: entry.key,
+                        propertyValue: entry.value,
+                      );
+                    },
                   ),
-                )
-              : ListView.builder(
-                  itemCount: entries.length,
-                  itemBuilder: (context, i) {
-                    final entry = entries[i];
-                    return PropertyEditorRouter(
-                      documentUri: active,
-                      nodePath: selectedPath,
-                      propertyName: entry.key,
-                      propertyValue: entry.value,
-                    );
-                  },
-                ),
-        ),
-      ],
+          ),
+        ],
+      ),
     );
   }
 }
