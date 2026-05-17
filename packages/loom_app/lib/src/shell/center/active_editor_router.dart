@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/providers.dart';
-import '../../surfaces/widget_outline/widget_tree_outline_view.dart';
+import '../../surfaces/widget_canvas/widget_canvas_view.dart';
 
-/// Decides which editor to render for the active document. M11 only has
-/// one mode — widget outline — so the routing is trivial. M13's canvas
-/// and M15's flow editor land as additional cases here.
+/// Decides which editor to render for the active document. Since M13
+/// the center pane shows the widget canvas; the outline mirrors in
+/// the right pane. M15's flow editor lands as an additional case
+/// here.
 class ActiveEditorRouter extends ConsumerWidget {
   const ActiveEditorRouter({super.key});
 
@@ -26,6 +27,6 @@ class ActiveEditorRouter extends ConsumerWidget {
         ),
       );
     }
-    return WidgetTreeOutlineView(documentUri: active);
+    return WidgetCanvasView(documentUri: active);
   }
 }

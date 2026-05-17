@@ -8,8 +8,20 @@ Running record of decisions, milestone progress, and lessons learned for the Loo
 
 ## Current State
 
-**Active milestone:** M12 — undo/redo, opt-in `dart_style` integration, multi-tab polish. Second editor milestone; the first to make the kernel's invertibility user-visible.
-**Last touched:** 2026-05-17 — M12 shipped. Every property edit now snapshots into a per-document undo stack; Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z at the shell level pop the stack and re-write the file atomically through the same save pipeline. The acceptance test is the load-bearing one: 10 random property edits + 10 undos restores the fixture file byte-for-byte (with redo and "fresh edit drops redo stack" sub-cases in the same test). `dart_style` is wired through a per-document opt-in toggle that lives in the property inspector header — off by default, because byte-minimal diffs are the editor's product invariant. Session-restore lands too: opening a project re-opens the tabs the user had open last time.
+**Active milestone:** M13 — low-fidelity widget canvas. The center pane now visualizes the widget tree as nested labeled rectangles. Click to select; hover to preview; double-click a `Text` to inline-edit its `data:`.
+**Last touched:** 2026-05-17 — M13 shipped. `WidgetCanvasView` replaces the outline as the center editor; the outline still lives in the right pane's Outline tab. Layout is a deterministic geometry pass over the widget model — no live rendering of user code. Children stack per parent class: `Row` / `Wrap` horizontal, `Column` / `ListView` / `CustomScrollView` vertical, `Stack` overlay, single-child wrappers inset. `Scaffold` gets its own slot-aware layout (appBar at top, body in the middle, bottom nav at the bottom, FAB overlay bottom-right). Hit-testing returns the deepest containing rect; the parent's label band (top 20px) hits the parent rather than its inset child so you can always select a container without zooming in.
+
+**Shipped surface (M13 delta):**
+- New surface directory: `lib/src/surfaces/widget_canvas/` — 6 files.
+  - `canvas_rect.dart` — data record `{path, rect, node}`.
+  - `canvas_layout.dart` — pure layout pass `layoutTree(WidgetTreeModel, Rect) → CanvasLayout`. `CanvasLayout.hitTest(Offset)` returns the deepest containing rect (pre-order, last match wins). Recurses until inner rect drops below 40×28 — the parent still paints, the children are dropped from the layout (still reachable via the outline). Per-class layout modes: `_kHorizontalWidgets` (Row / Flex / Wrap / ButtonBar / OverflowBar), `_kVerticalWidgets` (Column / ListView / GridView / CustomScrollView / SingleChildScrollView / ListBody / Form / ExpansionPanelList), `_kOverlayWidgets` (Stack / IndexedStack / Positioned). Unknown widgets with a single child → inset; with multiple → vertical fallback. `Scaffold` is its own special case.
+  - `canvas_node_label.dart` — short label generator. `Text` shows truncated content, `SizedBox` shows `100×50`, `Padding` shows EdgeInsets.all amount, `Visibility` shows ✓/✗. Falls back to `NodeDisplayLabel.labelFor` for everything else so outline + canvas + inspector header all agree.
+  - `widget_canvas_painter.dart` — `CustomPainter` painting in pre-order. Faint tinted fill by node category (widget / method-ref / opaque / error), label band (slightly darker tint) at the top, border. Selection border = 2.5px primary; hover border = 1.5px tertiary.
+  - `widget_canvas_view.dart` — entry widget. `LayoutBuilder` gives the canvas its size; `MouseRegion` drives hover; `GestureDetector` handles `onTapDown` (select) and `onDoubleTapDown` (inline-edit if Text). `Stack` layers an `InlineTextEditor` overlay on top of the painter.
+  - `inline_text_edit_state.dart` + `inline_text_editor.dart` — `inlineTextEditProvider` (StateProvider<InlineTextEditTarget?>) holds the active edit. The editor is a `Positioned` `TextField` over the Text's rect; commits on Enter or focus-loss via `WorkspaceController.applyPropertyEdit` (same path as the property inspector, so undo/redo + formatOnSave work identically).
+- New providers: `hoveredNodePathProvider` (StateProvider<NodePath?>), `inlineTextEditProvider`.
+- `ActiveEditorRouter` now routes to `WidgetCanvasView` instead of `WidgetTreeOutlineView`. The outline still appears in the right pane's Outline tab.
+- 22 new tests: 11 layout unit tests + 7 label unit tests + 4 canvas widget tests + 1 integration test (canvas tap → inspector populates). **82 loom_app tests total**, up from 60 at M12 ship. Kernel untouched.
 
 **Shipped surface (M12 delta):**
 - New service: `EditHistoryService` (Riverpod `Notifier<Map<String, DocumentHistory>>`) — per-URI `{undoStack, redoStack}` of `HistoryEntry{label, beforeSource, afterSource}` triples. `record` pushes to undo + clears redo; `popUndo` / `popRedo` move entries between stacks. The `before == after` no-op is a hard guard.
@@ -51,7 +63,9 @@ loom/
         └── test/         (fixtures/, helpers/, unit/, widget/, integration/ — 60 tests)
 ```
 
-**Next:** M13 — low-fidelity widget canvas. The canvas is a `CustomPainter`-based visual recreation (not a real preview): each `WidgetNode` paints as a labeled rectangle, nested per `childSlots`, mimicking layout from style hints. Click-to-select, hover-highlight, double-click-on-Text to edit `data:` in place. Per the plan, recreation must be polished enough by end of M13 to defer real preview indefinitely.
+**Next:** M14 — toolbox + drag-drop widget insertion. `LeftRailToolbox` populates from a static catalog (Container, Row, Column, Text, SizedBox, Padding, ElevatedButton, Scaffold, AppBar, ListView.builder, etc.). Drag a tile into a slot in the canvas → `EditPlanner.insertChildEdit`. Named-constructor variants are sub-items per tile.
+
+**M13 recreation-vs-preview decision (per the plan's "end of M13 deadline"):** Real preview stays deferred. The recreation works against any file the kernel can parse — including files that fail to compile — while a real-preview pipeline would need a running `flutter run` subprocess, a VM-service screenshot reader, hot-reload affordance, and an overlay co-ordinate system that maps live render objects back to source spans. None of that buys us anything the current canvas doesn't already let you do for the editor-driven authoring scenarios (select / edit-text / inspect / move) we care about through M16. If a future scenario genuinely needs the actual rendered output, the canvas surface area is small enough (~6 files) that swapping in an isolate-driven preview later is a one-week vertical, not a refactor.
 
 ---
 
@@ -969,6 +983,32 @@ Reverse chronological. Each entry: date, what was worked on, what was learned, w
 **Decided:** Reference Settled Decisions entry if applicable.
 **Next:** Concrete next action for the following session.
 ```
+
+### [2026-05-17] M13 — low-fidelity widget canvas
+
+**Worked on:** Shipped M13 per the plan. Built `lib/src/surfaces/widget_canvas/` (6 files): pure-function layout pass with per-class layout modes + Scaffold-aware slot positioning; `CustomPainter` that paints rects in pre-order with tinted fill / label band / category-colored border / selection + hover highlighting; entry widget with `MouseRegion` for hover and `GestureDetector` for tap (select) + double-tap (inline-edit Text); inline `TextField` overlay that commits through `WorkspaceController.applyPropertyEdit` so undo/redo + formatOnSave work identically to the property inspector. `ActiveEditorRouter` now shows the canvas; the right-pane Outline tab still mirrors the tree. 22 new tests, 82 loom_app tests total. Kernel untouched.
+
+**Learned:**
+- **`GestureDetector` + `onTapDown` + `onDoubleTapDown` deadlocks the test gesture arbiter.** `tester.tapAt(offset)` would never deliver the tap event in this configuration — both callbacks register competing recognizers and the arbiter waits indefinitely for disambiguation. Workaround in tests: drive the gesture explicitly via `tester.startGesture(offset)` + `gesture.up()` + `pumpAndSettle(Duration(ms: 600))` so the double-tap timeout expires and the single-tap commits. Same pattern for double-tap, with the two press/release cycles separated by a 50ms `pump`. Production code is unaffected — only the test driver needs this.
+- **Hit-testing the label band is what makes container selection feel natural.** First version recursed children to fill the parent's entire inner rect; the parent then became unselectable when its child completely covered it. Reserved the top 20px of every rect as a label band (children inset by that amount) and added a "deepest contains" hit-test, so the label-band region of the parent always hits the parent regardless of how deeply nested.
+- **`tester.pumpAndSettle(Duration)` is necessary, not `pump()`, when the gesture arbiter is in flight.** Without it, the test framework just doesn't advance the fake clock past the gesture timeout and the single-tap callback never fires. `pumpAndSettle()` without a duration argument also works for these cases but the explicit duration documents what we're waiting for.
+- **Don't write the layout algorithm in a state class.** First version had `_CanvasInteractive`'s State track layout in instance fields; turned out the layout depends only on the model + canvas size so it cleanly fell out into a top-level `layoutTree(model, rect)` pure function. State stays in the providers (selected / hovered / inline-edit); the layout is recomputed on each rebuild. At 81-node trees the cost is negligible; if it becomes one we'll memoize on `(model.hashCode, size)` — but not before measuring.
+- **Recreation, not preview, was the right call.** The canvas works on any file the kernel can parse, including ones with compile errors. The only thing real preview would buy is "the user sees what flutter run would render" — which they don't actually need for the select / edit / inspect / move workflows we care about through M16. Decision: real preview stays deferred indefinitely.
+
+**Decided:**
+- **Canvas replaces outline in the center pane.** The outline is still useful (e.g., when you want to navigate by name and the canvas is busy) but as a primary navigation surface the canvas wins. Outline lives in the right pane's Outline tab.
+- **Inline text edit commits through the same `WorkspaceController.applyPropertyEdit` path as the inspector.** Undo / redo / formatOnSave / disk save all go through one code path; the only difference is where the user types.
+- **Per-class layout rules are explicit sets, not heuristic.** `_kHorizontalWidgets` / `_kVerticalWidgets` / `_kOverlayWidgets` are small constant sets. Unknown widgets with a single child get the inset treatment; with multiple children, vertical fallback (because we can't know the real layout without running user code, and vertical is the safer default — it groups visibly without overlapping).
+- **Tests drive gestures explicitly, not via `tester.tap`.** The gesture-arbiter deadlock above is a known Flutter testing limitation when you mix `onTapDown` with `onDoubleTapDown`. Explicit `startGesture` + `up` is the documented workaround.
+- **Layout drops sub-rect-size descendants silently.** When `childrenAreaOf(rect) < 40×28` the recursion stops. The outline still surfaces those nodes; the canvas just doesn't try to paint them. Avoids the "everything looks crammed" UX trap at deep nesting.
+
+**Verification:**
+- `flutter test` (loom_app) → 82 passed (was 60 at M12 ship; +22 new across canvas_layout / canvas_node_label / widget_canvas_view / canvas_tap_inspector).
+- `dart test` (kernel) → 816 passed (no regression — kernel untouched this session).
+- `flutter analyze` (loom_app) + `dart analyze` (kernel) → clean.
+- `dart format --output=none --set-exit-if-changed .` → clean on both packages.
+
+**Next:** M14. Left-rail toolbox + drag-drop. Static catalog of common widgets; drag tile → canvas slot → `EditPlanner.insertChildEdit`. Named-constructor variants as sub-items. The kernel already has `EditPlanner.insertChild` from M6 onwards so this is editor-side wiring + a drag-target hit-testing pass on the canvas.
 
 ### [2026-05-17] M12 — undo/redo + opt-in dart_style + multi-tab polish
 

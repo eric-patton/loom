@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:loom_app/src/shell/main_shell_screen.dart';
+import 'package:loom_app/src/state/providers.dart';
+import 'package:loom_app/src/surfaces/widget_canvas/widget_canvas_view.dart';
 
 import '../helpers/test_workspace.dart';
 
 void main() {
   testWidgets(
-    'open project shows files in Interface tab and renders outline on file '
-    'open',
+    'open project shows files in Interface tab, opens canvas on tap, '
+    'and the right-pane Outline tab mirrors the tree',
     (tester) async {
       final session = await openFixtureSessionForWidgets(tester);
       addTearDown(session.dispose);
@@ -29,8 +31,14 @@ void main() {
       await tester.tap(find.textContaining('widgets/counter.dart'));
       await tester.pump();
 
-      // Center pane now shows the widget outline. counter.dart's root is
-      // Scaffold (Center → Column → ...).
+      // Center pane now shows the widget canvas for the opened document.
+      expect(find.byType(WidgetCanvasView), findsOneWidget);
+
+      // Right-pane Outline tab mirrors the tree. Switch to it and look
+      // for known class names.
+      session.container.read(rightTopTabProvider.notifier).state =
+          RightTopTab.outline;
+      await tester.pump();
       expect(find.text('Scaffold'), findsAtLeastNWidgets(1));
       expect(find.text('Column'), findsAtLeastNWidgets(1));
       expect(find.text('Text'), findsAtLeastNWidgets(1));

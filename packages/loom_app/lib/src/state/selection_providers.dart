@@ -4,9 +4,14 @@ import '../services/kernel_adapter.dart';
 
 /// The currently-selected node path in the active document, or null
 /// when nothing is selected. Shared across the outline view, the
-/// property inspector, and (post-M13) the canvas — all three panes
-/// agree on selection through this single provider.
+/// property inspector, and the canvas — all three panes agree on
+/// selection through this single provider.
 final selectedNodePathProvider = StateProvider<NodePath?>((ref) => null);
+
+/// The node path the user is currently hovering over in the canvas,
+/// or null when no hover is active. The outline does not contribute
+/// to or read from this provider — it's a canvas-specific affordance.
+final hoveredNodePathProvider = StateProvider<NodePath?>((ref) => null);
 
 /// Which top-tab the right pane has focus on.
 enum RightTopTab { interface, outline }
