@@ -1,5 +1,5 @@
 # melos_managed_dependency_overrides: loom,meta
 dependency_overrides:
   loom:
-    path: ..\\loom
+    path: ../loom
   meta: ^1.18.0
