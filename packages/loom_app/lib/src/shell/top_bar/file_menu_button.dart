@@ -15,6 +15,13 @@ class FileMenuButton extends ConsumerWidget {
       menuChildren: <Widget>[
         MenuItemButton(
           onPressed: () async {
+            // MenuItemButton fires onPressed inside a frame callback, and
+            // file_picker's getDirectoryPath calls IModalWindow.show, which
+            // runs a nested Win32 message pump. Showing the dialog while the
+            // scheduler is mid-frame trips the
+            // `schedulerPhase == SchedulerPhase.idle` assertion. Wait for the
+            // current frame to finish before opening the dialog.
+            await WidgetsBinding.instance.endOfFrame;
             final selected = await FilePicker.platform.getDirectoryPath(
               dialogTitle: 'Open Loom project',
             );
