@@ -1,6 +1,16 @@
 import 'package:loom/loom.dart';
 import 'package:test/test.dart';
 
+/// `path`-package canonicalization is host-OS-aware. Backslash-as-separator
+/// and drive-letter-as-root semantics only resolve on Windows; on POSIX
+/// hosts `C:\proj\main.dart` looks like a single filename literal. Tests
+/// that depend on that behavior are gated to the Windows host.
+const Map<String, dynamic> _windowsOnly = <String, dynamic>{
+  '!windows': Skip(
+    'Backslash-separator + drive-letter semantics require a Windows host.',
+  ),
+};
+
 void main() {
   group('ProjectModel construction', () {
     test('empty project has no files', () {
@@ -110,6 +120,13 @@ class Second {}
     // one-letter URI scheme, and silently corrupts relative-import math.
     // ProjectModel canonicalizes keys at every entry point so callers can
     // pass raw Windows paths, POSIX paths, or `file:///` URIs interchangeably.
+    //
+    // The canonicalizer uses the host's `path` context, so true Windows-style
+    // canonicalization (recognizing backslashes as separators, drive letters
+    // as roots) only works when the runtime host is Windows. Tests that
+    // assert that behavior run only on Windows; the cross-platform invariants
+    // (file:///, package:, dart:, relative path normalization) sit outside
+    // this group and run everywhere.
 
     test('canonicalizeFileKey: Windows absolute path → file:/// URI', () {
       final canonical = canonicalizeFileKey(r'C:\proj\lib\main.dart');
@@ -117,7 +134,7 @@ class Second {}
       // Same path passed twice — same key.
       final canonical2 = canonicalizeFileKey(r'C:\proj\lib\main.dart');
       expect(canonical2, equals(canonical));
-    });
+    }, onPlatform: _windowsOnly);
 
     test(
         'canonicalizeFileKey: forward and back slashes for same Windows path '
@@ -125,7 +142,7 @@ class Second {}
       final a = canonicalizeFileKey(r'C:\proj\lib\main.dart');
       final b = canonicalizeFileKey('C:/proj/lib/main.dart');
       expect(a, equals(b));
-    });
+    }, onPlatform: _windowsOnly);
 
     test('canonicalizeFileKey: an already-canonical file:/// URI is preserved',
         () {
@@ -159,7 +176,7 @@ class Second {}
       for (final key in project.files.keys) {
         expect(key, startsWith('file:///'));
       }
-    });
+    }, onPlatform: _windowsOnly);
 
     test('cross-file import resolution works with Windows-style keys', () {
       // The bug this guards: Uri.parse(r'C:\proj\main.dart').resolveUri(
@@ -181,7 +198,7 @@ class Second {}
         resolved.toString(),
         equals(canonicalizeFileKey(r'C:\proj\helper.dart')),
       );
-    });
+    }, onPlatform: _windowsOnly);
 
     test('resolveSymbol works across files keyed by Windows-style paths', () {
       final project = ProjectModel.fromSources({
@@ -196,7 +213,7 @@ class Second {}
       expect(
           loc!.filePath, equals(canonicalizeFileKey(r'C:\proj\helper.dart')));
       expect(loc.name, equals('Helper'));
-    });
+    }, onPlatform: _windowsOnly);
 
     test('exportedNamesOf transitively walks barrels keyed by Windows paths',
         () {
@@ -206,7 +223,7 @@ class Second {}
       });
       final names = project.exportedNamesOf(r'C:\proj\barrel.dart');
       expect(names, contains('MyCard'));
-    });
+    }, onPlatform: _windowsOnly);
   });
 
   group('ProjectModel — parse diagnostics surface per file', () {

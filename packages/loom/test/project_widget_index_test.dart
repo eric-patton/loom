@@ -375,7 +375,9 @@ class WidgetA extends StatelessWidget {
     test('rebuildFile tolerates Windows-style absolute paths', () {
       // The UI editor on Windows naturally keys files by absolute path
       // (`C:\repos\app\lib\main.dart`); the index must canonicalize the
-      // lookup to match how ProjectModel stores its keys.
+      // lookup to match how ProjectModel stores its keys. The `path`
+      // package's canonicalize is host-OS-aware, so this test only runs
+      // on Windows — see project_model_test.dart's `_windowsOnly` note.
       final project = ProjectModel.fromSources({
         r'C:\proj\a.dart': '// nothing yet\n',
       });
@@ -393,6 +395,10 @@ class A extends StatelessWidget {
         rebuilt.widgetsIn(canonicalizeFileKey(r'C:\proj\a.dart')).keys,
         contains('A'),
       );
+    }, onPlatform: const <String, dynamic>{
+      '!windows': Skip(
+        'Backslash-separator + drive-letter semantics require a Windows host.',
+      ),
     });
 
     test('round-trip invariant holds on cross-file-recognized widget', () {
