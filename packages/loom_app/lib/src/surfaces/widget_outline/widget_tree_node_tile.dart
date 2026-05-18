@@ -22,11 +22,14 @@ class WidgetTreeNodeTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final selected = ref.watch(selectedNodePathProvider);
-    final isSelected = selected != null && listEquals(selected, path);
+    final selection = ref.watch(selectedNodeProvider);
+    final isSelected = selection != null &&
+        selection.documentUri == documentUri &&
+        listEquals(selection.path, path);
     final theme = Theme.of(context);
     return InkWell(
-      onTap: () => ref.read(selectedNodePathProvider.notifier).state = path,
+      onTap: () => ref.read(selectedNodeProvider.notifier).state =
+          (documentUri: documentUri, path: path),
       child: Container(
         padding: EdgeInsets.fromLTRB(
           12.0 + path.length * 16.0,

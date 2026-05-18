@@ -67,6 +67,34 @@ class KernelAdapter {
     }
   }
 
+  /// Resolves a user-defined widget [className] (visible from [fromFile])
+  /// to its build-body widget tree, so the canvas can recursively render
+  /// what's inside a user widget instead of stopping at a placeholder.
+  /// Returns a `WidgetTreeParseFailure` when the class isn't visible, has
+  /// no build, or the parse fails.
+  WidgetTreeParseResult resolveBuildTreeFor({
+    required ProjectWidgetIndex index,
+    required String className,
+    required String fromFile,
+  }) {
+    try {
+      final model = index.resolveBuildTree(
+        className: className,
+        fromFile: fromFile,
+      );
+      if (model == null) {
+        return WidgetTreeParseResult.failure(
+          'Could not resolve build tree for $className',
+        );
+      }
+      return WidgetTreeParseResult.modeled(model);
+    } on ParseException catch (e) {
+      return WidgetTreeParseResult.failure(e.message);
+    } on Object catch (e) {
+      return WidgetTreeParseResult.failure(e.toString());
+    }
+  }
+
   /// Plans a property edit at [oldValue.span] in [source] and returns the
   /// resulting source. Throws if applying the planned edit fails (e.g.
   /// stale span).

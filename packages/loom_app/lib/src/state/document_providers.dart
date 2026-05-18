@@ -70,7 +70,7 @@ class WorkspaceController {
     await _ref.read(projectControllerProvider.notifier).openProject(rootPath);
     _ref.read(openDocumentsProvider.notifier).reset();
     _ref.read(activeDocumentUriProvider.notifier).state = null;
-    _ref.read(selectedNodePathProvider.notifier).state = null;
+    _ref.read(selectedNodeProvider.notifier).state = null;
     _ref.read(editHistoryProvider.notifier).clearAll();
     await _restoreSession(rootPath);
   }
@@ -94,7 +94,7 @@ class WorkspaceController {
           );
     }
     _ref.read(activeDocumentUriProvider.notifier).state = uri;
-    _ref.read(selectedNodePathProvider.notifier).state = null;
+    _ref.read(selectedNodeProvider.notifier).state = null;
     _persistSession();
   }
 
@@ -109,7 +109,7 @@ class WorkspaceController {
       final remaining = _ref.read(openDocumentsProvider).keys.toList();
       _ref.read(activeDocumentUriProvider.notifier).state =
           remaining.isEmpty ? null : remaining.last;
-      _ref.read(selectedNodePathProvider.notifier).state = null;
+      _ref.read(selectedNodeProvider.notifier).state = null;
     }
     _persistSession();
   }

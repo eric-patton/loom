@@ -3,17 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/kernel_adapter.dart';
 import '../../state/providers.dart';
-import 'canvas_layout.dart';
 import 'inline_text_edit_state.dart';
 import 'inline_text_editor.dart';
-import 'widget_canvas_painter.dart';
+import 'materializer/canvas_interaction_layer.dart';
+import 'materializer/canvas_viewport.dart';
+import 'materializer/materialize_ctx.dart';
+import 'materializer/node_materializer.dart';
+import 'materializer/selection_overlay.dart';
 
-/// Primary editor surface for a Dart document since M13: a low-fidelity
-/// recreation of the widget tree drawn as nested labeled rectangles.
-/// Click to select; hover to preview-highlight; double-click a `Text`
-/// to inline-edit its `data:` literal. The model is the only source —
-/// nothing here runs user code, so the canvas is safe against
-/// `compile-time-error` files.
+/// Primary editor surface for a Dart document. Materializes the
+/// model's widget tree into real Flutter widgets so the canvas paints
+/// a faithful approximation of the rendered page (M13.5), recursing
+/// into user-defined widgets via `userWidgetResolutionProvider`. The
+/// model is still the only source of truth — no user code runs.
 class WidgetCanvasView extends ConsumerWidget {
   const WidgetCanvasView({super.key, required this.documentUri});
 
@@ -37,123 +39,118 @@ class WidgetCanvasView extends ConsumerWidget {
     }
 
     final model = (result as WidgetTreeParseModeled).model;
-    return _CanvasInteractive(documentUri: documentUri, model: model);
+    return _MaterializedCanvas(documentUri: documentUri, model: model);
   }
 }
 
-class _CanvasInteractive extends ConsumerStatefulWidget {
-  const _CanvasInteractive({required this.documentUri, required this.model});
+/// Builds the materialized tree, the interaction layer, and the
+/// selection overlay around a single document's model. Holds the
+/// per-frame probe registry so all three layers share it without
+/// going through global state.
+class _MaterializedCanvas extends ConsumerWidget {
+  const _MaterializedCanvas({required this.documentUri, required this.model});
 
   final String documentUri;
   final WidgetTreeModel model;
 
   @override
-  ConsumerState<_CanvasInteractive> createState() => _CanvasInteractiveState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Fresh probe registry per build. Filled in by NodeMaterializer's
+    // recursion below; read by the interaction layer and the selection
+    // overlay on the same frame.
+    final probes = <String, ProbeEntry>{};
+    final ctx = MaterializeCtx(
+      sourceDocumentUri: documentUri,
+      ref: ref,
+      probes: probes,
+    );
+    final materialized =
+        NodeMaterializer.materialize(model.root, const [], ctx);
 
-class _CanvasInteractiveState extends ConsumerState<_CanvasInteractive> {
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final selected = ref.watch(selectedNodePathProvider);
-    final hovered = ref.watch(hoveredNodePathProvider);
     final inlineEdit = ref.watch(inlineTextEditProvider);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        const padding = 16.0;
-        final canvasRect = Rect.fromLTWH(
-          padding,
-          padding,
-          (constraints.maxWidth - 2 * padding).clamp(0, double.infinity),
-          (constraints.maxHeight - 2 * padding).clamp(0, double.infinity),
-        );
-        final layout = layoutTree(widget.model, canvasRect);
-
-        return MouseRegion(
-          onHover: (event) => _updateHover(event.localPosition, layout),
-          onExit: (_) =>
-              ref.read(hoveredNodePathProvider.notifier).state = null,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => _handleTap(d.localPosition, layout),
-            onDoubleTapDown: (d) => _handleDoubleTap(d.localPosition, layout),
-            child: Stack(
-              children: <Widget>[
-                Positioned.fill(
-                  child: CustomPaint(
-                    painter: WidgetCanvasPainter(
-                      layout: layout,
-                      selectedPath: selected,
-                      hoveredPath: hovered,
-                      colorScheme: theme.colorScheme,
-                      textTheme: theme.textTheme,
-                    ),
-                  ),
-                ),
-                if (inlineEdit != null &&
-                    inlineEdit.documentUri == widget.documentUri)
-                  _maybeInlineEditor(inlineEdit, layout),
-              ],
-            ),
+    return CanvasViewport(
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          // Bottom: the materialized tree itself, hosted in the
+          // interaction layer that translates clicks into selection.
+          CanvasInteractionLayer(
+            probes: probes,
+            child: materialized,
           ),
-        );
-      },
+          // Middle: the selection / hover borders. Pointer-transparent
+          // so clicks land on the interaction layer beneath.
+          Positioned.fill(child: CanvasSelectionOverlay(probes: probes)),
+          // Top: the inline editor, positioned over the editing node's
+          // probe rect.
+          if (inlineEdit != null)
+            _InlineEditorOverlay(target: inlineEdit, probes: probes),
+        ],
+      ),
     );
   }
+}
 
-  Widget _maybeInlineEditor(
-    InlineTextEditTarget target,
-    CanvasLayout layout,
-  ) {
-    for (final r in layout.rects) {
-      if (_pathsEqual(r.path, target.nodePath)) {
-        return InlineTextEditor(target: target, rect: r.rect);
-      }
-    }
-    // The rect for the editing node fell out of the layout (e.g. the
-    // canvas shrank below the min-rect threshold). Drop the edit
-    // silently — the user can reopen it from the outline path.
-    return const SizedBox.shrink();
-  }
+class _InlineEditorOverlay extends StatelessWidget {
+  const _InlineEditorOverlay({required this.target, required this.probes});
 
-  void _updateHover(Offset pos, CanvasLayout layout) {
-    final hit = layout.hitTest(pos);
-    final current = ref.read(hoveredNodePathProvider);
-    final next = hit?.path;
-    if (!_pathsEqual(current, next)) {
-      ref.read(hoveredNodePathProvider.notifier).state = next;
-    }
-  }
+  final InlineTextEditTarget target;
+  final Map<String, ProbeEntry> probes;
 
-  void _handleTap(Offset pos, CanvasLayout layout) {
-    final hit = layout.hitTest(pos);
-    ref.read(selectedNodePathProvider.notifier).state = hit?.path;
-  }
-
-  void _handleDoubleTap(Offset pos, CanvasLayout layout) {
-    final hit = layout.hitTest(pos);
-    if (hit == null) return;
-    final node = hit.node;
-    if (node is! WidgetNode) return;
-    if (node.className != 'Text') return;
-    final data = node.properties['data'];
-    if (data is! StringLiteralValue) return;
-    ref.read(inlineTextEditProvider.notifier).state = InlineTextEditTarget(
-      documentUri: widget.documentUri,
-      nodePath: hit.path,
-      original: data,
+  @override
+  Widget build(BuildContext context) {
+    final key = probes[MaterializeCtx.probeRegistryKey(
+      (documentUri: target.documentUri, path: target.nodePath),
+    )]
+        ?.key;
+    if (key == null) return const SizedBox.shrink();
+    return _PositionedFollowingKey(
+      anchor: key,
+      child: InlineTextEditor(target: target),
     );
-    ref.read(selectedNodePathProvider.notifier).state = hit.path;
   }
+}
 
-  bool _pathsEqual(NodePath? a, NodePath? b) {
-    if (identical(a, b)) return true;
-    if (a == null || b == null) return false;
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].slot != b[i].slot || a[i].index != b[i].index) return false;
+/// Positions [child] over [anchor]'s screen rect each frame. Used so
+/// the inline editor follows reflows when the underlying Text widget
+/// moves (e.g. as its data changes).
+class _PositionedFollowingKey extends StatefulWidget {
+  const _PositionedFollowingKey({required this.anchor, required this.child});
+
+  final GlobalKey anchor;
+  final Widget child;
+
+  @override
+  State<_PositionedFollowingKey> createState() =>
+      _PositionedFollowingKeyState();
+}
+
+class _PositionedFollowingKeyState extends State<_PositionedFollowingKey> {
+  @override
+  Widget build(BuildContext context) {
+    final overlayRO = context.findRenderObject();
+    final overlayOrigin = overlayRO is RenderBox && overlayRO.hasSize
+        ? overlayRO.localToGlobal(Offset.zero)
+        : Offset.zero;
+    final anchorCtx = widget.anchor.currentContext;
+    final ro = anchorCtx?.findRenderObject();
+    if (ro is! RenderBox || !ro.hasSize) {
+      // Anchor not laid out yet — schedule a rebuild after this frame
+      // so we render once the geometry is available.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return const SizedBox.shrink();
     }
-    return true;
+    final topLeft = ro.localToGlobal(Offset.zero) - overlayOrigin;
+    final size = ro.size;
+    return Positioned(
+      left: topLeft.dx,
+      top: topLeft.dy,
+      width: size.width,
+      height: size.height,
+      child: widget.child,
+    );
   }
 }

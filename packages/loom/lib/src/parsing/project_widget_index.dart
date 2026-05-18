@@ -1,9 +1,13 @@
 import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 
 import '../catalog/widget_catalog.dart';
 import '../model/directives.dart';
+import '../model/node.dart';
 import '../model/project.dart';
+import 'base_visitor.dart';
 import 'project_widget_discovery.dart';
+import 'widget_tree_parser.dart';
 
 /// Project-wide index of `extends *Widget` classes across every file in a
 /// `ProjectModel`. Built once per project (eagerly), then consulted by the
@@ -113,6 +117,96 @@ class ProjectWidgetIndex {
   Map<String, WidgetSpec> widgetsIn(String filePath) =>
       _widgetsPerFile[canonicalizeFileKey(filePath)] ??
       const <String, WidgetSpec>{};
+
+  /// The canonical file path that declares [className], or null if the
+  /// class isn't recognized as a widget in any file. The first match wins
+  /// (deterministic only if widget names are project-unique — Dart's import
+  /// rules already require this, so it usually is).
+  String? declaringFileOf(String className) {
+    for (final entry in _widgetsPerFile.entries) {
+      if (entry.value.containsKey(className)) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  /// Resolves a user-defined widget [className] (visible from [fromFile])
+  /// to its build-body widget tree. Returns null if the class isn't
+  /// visible, doesn't have a recoverable build method, or its build body
+  /// can't be parsed.
+  ///
+  /// For `StatefulWidget` subclasses the actual `build()` lives on the
+  /// paired `State<className>` class — `resolveBuildTree` finds that
+  /// class by scanning the declaring file's AST and targets it instead.
+  /// For `StatelessWidget` subclasses the widget class itself is the
+  /// target.
+  ///
+  /// The recursion contract: callers (e.g. the editor's canvas
+  /// materializer) descend into the returned tree, encountering nested
+  /// user widgets that they resolve via further `resolveBuildTree` calls.
+  /// Cycle detection is the caller's responsibility — this method does
+  /// no recursion of its own.
+  WidgetTreeModel? resolveBuildTree({
+    required String className,
+    required String fromFile,
+  }) {
+    final canonicalFrom = canonicalizeFileKey(fromFile);
+    final inFile = widgetsIn(canonicalFrom);
+    final visible = widgetsVisibleFrom(canonicalFrom);
+    if (!inFile.containsKey(className) && !visible.containsKey(className)) {
+      return null;
+    }
+
+    final declaringFile = inFile.containsKey(className)
+        ? canonicalFrom
+        : declaringFileOf(className);
+    if (declaringFile == null) return null;
+
+    final file = _project.files[declaringFile];
+    if (file == null) return null;
+
+    // Scan the declaring file's AST for a paired `State<className>` class.
+    // If found, target it (StatefulWidget); otherwise target the widget
+    // class itself (StatelessWidget).
+    final unit =
+        parseString(content: file.source, throwIfDiagnostics: false).unit;
+    final stateClassName = _findStateClassNameFor(unit, className);
+    final target = stateClassName ?? className;
+
+    try {
+      return parseWidgetTree(
+        file.source,
+        projectWidgets: widgetsVisibleFrom(declaringFile),
+        targetClassName: target,
+      );
+    } on ParseException {
+      return null;
+    }
+  }
+
+  /// Walks [unit] looking for a class declared as
+  /// `class _Foo extends State<className> { ... }` (or with extra type
+  /// parameters). Returns the matching class's name, or null.
+  static String? _findStateClassNameFor(
+    CompilationUnit unit,
+    String widgetClassName,
+  ) {
+    for (final decl in unit.declarations) {
+      if (decl is! ClassDeclaration) continue;
+      final ext = decl.extendsClause;
+      if (ext == null) continue;
+      if (ext.superclass.name.lexeme != 'State') continue;
+      final typeArgs = ext.superclass.typeArguments?.arguments;
+      if (typeArgs == null || typeArgs.isEmpty) continue;
+      final firstArg = typeArgs.first;
+      if (firstArg is! NamedType) continue;
+      if (firstArg.name.lexeme == widgetClassName) {
+        return decl.namePart.typeName.lexeme;
+      }
+    }
+    return null;
+  }
 
   /// Widgets visible from [filePath] via its imports — intended for the
   /// parser's `localCatalog` fallback. Intra-file widgets are NOT

@@ -27,8 +27,11 @@ void main() {
           activeDocumentUriProvider.overrideWith(
             (ref) => 'file:///test/main.dart',
           ),
-          selectedNodePathProvider.overrideWith(
-            (ref) => const <NodePathSegment>[],
+          selectedNodeProvider.overrideWith(
+            (ref) => (
+              documentUri: 'file:///test/main.dart',
+              path: const <NodePathSegment>[],
+            ),
           ),
           widgetTreeForDocumentProvider.overrideWith(
             (ref, uri) => WidgetTreeParseResult.modeled(tree),
@@ -92,8 +95,11 @@ void main() {
           activeDocumentUriProvider.overrideWith(
             (ref) => 'file:///test/main.dart',
           ),
-          selectedNodePathProvider.overrideWith(
-            (ref) => const <NodePathSegment>[],
+          selectedNodeProvider.overrideWith(
+            (ref) => (
+              documentUri: 'file:///test/main.dart',
+              path: const <NodePathSegment>[],
+            ),
           ),
           widgetTreeForDocumentProvider.overrideWith(
             (ref, uri) => WidgetTreeParseResult.modeled(tree),

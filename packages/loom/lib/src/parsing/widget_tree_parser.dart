@@ -18,9 +18,16 @@ import 'widget_visitor.dart';
 /// result of `ProjectWidgetIndex.widgetsVisibleFrom(filePath)`. Intra-file
 /// discoveries always win on name collisions (more specific scope). Pass
 /// an empty map (the default) for single-file parsing.
+///
+/// [targetClassName] restricts the walk to a single `ClassDeclaration` by
+/// name. Used by `ProjectWidgetIndex.resolveBuildTree` to pull the build
+/// body of a specific widget (or its `State<X>`) out of a file that
+/// declares several classes. When null (default), the first class with a
+/// `build()` method wins, preserving pre-M13.5 behavior.
 WidgetTreeModel parseWidgetTree(
   String source, {
   Map<String, WidgetSpec> projectWidgets = const <String, WidgetSpec>{},
+  String? targetClassName,
 }) {
   final result = parseString(content: source, throwIfDiagnostics: false);
   final unit = result.unit;
@@ -44,6 +51,10 @@ WidgetTreeModel parseWidgetTree(
 
   for (final declaration in unit.declarations) {
     if (declaration is! ClassDeclaration) {
+      continue;
+    }
+    if (targetClassName != null &&
+        declaration.namePart.typeName.lexeme != targetClassName) {
       continue;
     }
 
@@ -103,6 +114,11 @@ WidgetTreeModel parseWidgetTree(
     );
   }
 
+  if (targetClassName != null) {
+    throw ParseException(
+      'No build() method found in class $targetClassName',
+    );
+  }
   throw const ParseException(
     'No build() method found in any class declaration',
   );

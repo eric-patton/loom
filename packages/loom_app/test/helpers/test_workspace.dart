@@ -59,6 +59,11 @@ Future<String> copyM11Fixture() async {
   for (final entity in fixture.listSync(recursive: true)) {
     if (entity is! File) continue;
     final rel = p.relative(entity.path, from: fixture.path);
+    // Skip `.dart_tool/` — it's machine-local cache (Loom session,
+    // package config, build artifacts). If a previous in-app run
+    // populated it, copying would pre-open tabs in tests and corrupt
+    // their initial state.
+    if (p.split(rel).contains('.dart_tool')) continue;
     final target = File(p.join(tmp.path, rel));
     target.parent.createSync(recursive: true);
     target.writeAsStringSync(entity.readAsStringSync());

@@ -9,15 +9,14 @@ import 'inline_text_edit_state.dart';
 /// Commits the new literal through the same workspace controller as
 /// the inspector's `StringPropertyEditor` (so undo/redo + format-on-
 /// save behavior is identical), and closes itself afterward.
+///
+/// Since M13.5 the editor is positioned by its parent (a
+/// `Positioned`/`_PositionedFollowingKey` over the materialized Text
+/// node's probe rect); it no longer takes its own `rect` parameter.
 class InlineTextEditor extends ConsumerStatefulWidget {
-  const InlineTextEditor({
-    super.key,
-    required this.target,
-    required this.rect,
-  });
+  const InlineTextEditor({super.key, required this.target});
 
   final InlineTextEditTarget target;
-  final Rect rect;
 
   @override
   ConsumerState<InlineTextEditor> createState() => _InlineTextEditorState();
@@ -80,33 +79,26 @@ class _InlineTextEditorState extends ConsumerState<InlineTextEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return Positioned.fromRect(
-      rect: widget.rect,
-      child: Material(
-        color: Colors.transparent,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(2, 18, 2, 2),
-          child: KeyboardListener(
-            focusNode: FocusNode(skipTraversal: true),
-            onKeyEvent: (event) {
-              if (event.logicalKey.keyLabel == 'Escape') _cancel();
-            },
-            child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              autofocus: true,
-              decoration: const InputDecoration(
-                isDense: true,
-                border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              ),
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              onSubmitted: (_) {
-                _commitAndClose();
-              },
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: KeyboardListener(
+        focusNode: FocusNode(skipTraversal: true),
+        onKeyEvent: (event) {
+          if (event.logicalKey.keyLabel == 'Escape') _cancel();
+        },
+        child: TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          autofocus: true,
+          decoration: const InputDecoration(
+            isDense: true,
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           ),
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          onSubmitted: (_) {
+            _commitAndClose();
+          },
         ),
       ),
     );

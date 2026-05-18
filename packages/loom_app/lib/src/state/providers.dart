@@ -9,3 +9,4 @@ export 'models/open_document.dart';
 export 'notifiers/open_documents_notifier.dart';
 export 'project_providers.dart';
 export 'selection_providers.dart';
+export 'user_widget_resolution_provider.dart';

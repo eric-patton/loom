@@ -59,8 +59,8 @@ void main() {
 
       // Drive selection through the public state slice. The outline-tile
       // tap is exercised separately in `widget_tree_outline_view_test`.
-      session.container.read(selectedNodePathProvider.notifier).state =
-          firstTextData.path;
+      session.container.read(selectedNodeProvider.notifier).state =
+          (documentUri: session.counterUri, path: firstTextData.path);
       await tester.pump();
 
       // The inspector should now render exactly one StringPropertyEditor
