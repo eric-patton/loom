@@ -11,22 +11,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dart-lang/setup-dart@v1
+      # Flutter ships a bundled Dart SDK, so installing flutter gives us
+      # `dart` for the kernel and `flutter` for the editor app from a
+      # single setup step. Pinning to `stable` keeps versions in sync
+      # with what local dev runs.
+      - uses: subosito/flutter-action@v2
         with:
-          sdk: stable
+          channel: stable
 
-      - name: Resolve dependencies
+      # ─── Kernel package (packages/loom) ────────────────────────────────
+
+      - name: Kernel — resolve dependencies
+        working-directory: packages/loom
         run: dart pub get
 
-      - name: Analyze (treat warnings + infos as errors)
+      - name: Kernel — analyze (fatal warnings + infos)
+        working-directory: packages/loom
         run: dart analyze --fatal-infos --fatal-warnings
 
-      - name: Format check
+      - name: Kernel — format check
+        working-directory: packages/loom
         run: dart format --output=none --set-exit-if-changed .
 
-      - name: Test (unit + property tiers)
+      - name: Kernel — test (10,000-iteration property gate)
+        working-directory: packages/loom
         env:
-          # Global gate from PROJECT_SPEC.md Testing Strategy: 10,000 random
-          # edit sequences per fixture per CI run. Local dev defaults to 100.
+          # Global gate from PROJECT_SPEC.md Testing Strategy: 10,000
+          # random edit sequences per fixture per CI run. Local dev
+          # defaults to 100.
           LOOM_PROPERTY_ITERATIONS: "10000"
         run: dart test --concurrency=1
+
+      # ─── Editor app (packages/loom_app) ────────────────────────────────
+
+      - name: App — resolve dependencies
+        working-directory: packages/loom_app
+        run: flutter pub get
+
+      - name: App — analyze (fatal warnings + infos)
+        working-directory: packages/loom_app
+        run: flutter analyze --fatal-infos --fatal-warnings
+
+      - name: App — format check
+        working-directory: packages/loom_app
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: App — test
+        working-directory: packages/loom_app
+        run: flutter test
